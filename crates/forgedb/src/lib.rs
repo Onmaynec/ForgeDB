@@ -3,7 +3,7 @@
 //! Версия добавляет immutable VersionSet, MVCC snapshots, snapshot-aware point reads,
 //! forward range scan, file inventory и deep verification поверх WAL/SSTable/MANIFEST V1.
 
-mod database_v3;
+mod database_v3_fixed;
 mod inventory;
 mod iterator;
 mod mvcc_memtable;
@@ -15,7 +15,7 @@ mod verify;
 mod version_set;
 mod write_options;
 
-pub use database_v3::Database;
+pub use database_v3_fixed::Database;
 pub use forgedb_core::{
     BatchOperation, ColumnFamilyId, DatabaseId, Error, InternalKey, InternalKeyCodec,
     InternalKeyComparator, Limits, Result, SequenceNumber, ValueType, WriteBatch,
