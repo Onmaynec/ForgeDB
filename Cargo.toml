@@ -4,6 +4,7 @@ members = [
     "crates/forgedb-cli",
     "crates/forgedb-core",
     "crates/forgedb-fs",
+    "crates/forgedb-manifest",
     "crates/forgedb-sstable",
     "crates/forgedb-wal",
 ]
