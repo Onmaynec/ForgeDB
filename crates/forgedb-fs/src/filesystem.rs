@@ -3,22 +3,22 @@ use std::path::{Path, PathBuf};
 
 use forgedb_core::Result;
 
-/// Sequential readable file contract.
+/// Контракт последовательного чтения файла.
 pub trait SequentialReader: Read + Send {}
 
 impl<T> SequentialReader for T where T: Read + Send {}
 
-/// Random-access readable file contract used by future table readers.
+/// Контракт произвольного чтения, который позднее будет использовать SSTable reader.
 pub trait RandomAccessReader: Read + Seek + Send + Sync {}
 
 impl<T> RandomAccessReader for T where T: Read + Seek + Send + Sync {}
 
-/// Writable and synchronizable file contract.
+/// Контракт записываемого и синхронизируемого файла.
 pub trait WritableFile: Write + Seek + Send {
-    /// Synchronizes file data and metadata required by the platform.
+    /// Синхронизирует данные и метаданные файла, необходимые платформе.
     fn sync_all(&self) -> std::io::Result<()>;
 
-    /// Synchronizes file data where the platform distinguishes data and metadata.
+    /// Синхронизирует данные файла, когда платформа различает данные и метаданные.
     fn sync_data(&self) -> std::io::Result<()>;
 }
 
@@ -32,39 +32,41 @@ impl WritableFile for std::fs::File {
     }
 }
 
-/// Filesystem operations required by persisted ForgeDB protocols.
+/// Операции файловой системы, необходимые persisted-протоколам ForgeDB.
 pub trait FileSystem: Send + Sync + 'static {
-    /// Sequential reader type.
+    /// Тип последовательного reader.
     type SequentialReader: SequentialReader;
-    /// Random-access reader type.
+    /// Тип random-access reader.
     type RandomAccessReader: RandomAccessReader;
-    /// Writable file type.
+    /// Тип записываемого файла.
     type WritableFile: WritableFile;
-    /// Exclusive database lock guard type.
+    /// Тип guard эксклюзивной блокировки базы.
     type LockGuard: Send + Sync;
 
-    /// Creates a directory and missing parents.
+    /// Создаёт каталог и отсутствующих родителей.
     fn create_dir_all(&self, path: &Path) -> Result<()>;
-    /// Opens a file for sequential reads.
+    /// Открывает файл для последовательного чтения.
     fn open_sequential(&self, path: &Path) -> Result<Self::SequentialReader>;
-    /// Opens a file for random-access reads.
+    /// Открывает файл для произвольного чтения.
     fn open_random_access(&self, path: &Path) -> Result<Self::RandomAccessReader>;
-    /// Creates or truncates a writable file.
+    /// Создаёт или обнуляет записываемый файл.
     fn create_writable(&self, path: &Path) -> Result<Self::WritableFile>;
-    /// Creates a writable file only when it does not already exist.
+    /// Создаёт файл только тогда, когда его ещё нет.
     fn create_new_writable(&self, path: &Path) -> Result<Self::WritableFile>;
-    /// Opens or creates a writable file for append.
+    /// Открывает или создаёт файл для append.
     fn open_appendable(&self, path: &Path) -> Result<Self::WritableFile>;
-    /// Renames one path using the platform's native rename primitive.
+    /// Выполняет native rename одного пути в другой.
     fn rename_atomic(&self, from: &Path, to: &Path) -> Result<()>;
-    /// Removes one regular file.
+    /// Удаляет один обычный файл.
     fn remove_file(&self, path: &Path) -> Result<()>;
-    /// Lists direct children of a directory.
+    /// Возвращает прямых потомков каталога.
     fn list_dir(&self, path: &Path) -> Result<Vec<PathBuf>>;
-    /// Returns the current file size.
+    /// Возвращает текущий размер файла.
     fn file_size(&self, path: &Path) -> Result<u64>;
-    /// Synchronizes directory metadata where supported.
+    /// Усекает файл до проверенной границы и синхронизирует новый размер.
+    fn truncate_file(&self, path: &Path, length: u64) -> Result<()>;
+    /// Синхронизирует метаданные каталога, когда платформа это поддерживает.
     fn sync_directory(&self, path: &Path) -> Result<()>;
-    /// Acquires a non-blocking exclusive process-level lock.
+    /// Получает неблокирующую эксклюзивную process-level блокировку.
     fn lock_exclusive(&self, path: &Path) -> Result<Self::LockGuard>;
 }
