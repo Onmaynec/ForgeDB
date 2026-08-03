@@ -4,6 +4,50 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
+## [0.3.0] — в разработке
+
+### Добавлено
+
+- MVCC memtable, сохраняющая все версии одного user key в canonical internal-key ordering.
+- Дешёвые `Snapshot` handles с registry active sequence horizons.
+- `ReadOptions` с explicit snapshot, checksum policy, cache hint и range limit.
+- Snapshot-aware `Database::get_with_options`.
+- Immutable `Arc<VersionSet>` для reader isolation от writer mutex.
+- L0 lookup от новых file numbers к старым.
+- Модель L1+ со строгим sorted/non-overlap invariant и максимум одним candidate-файлом на уровень.
+- Forward `Database::scan` и binary-heap merge iterator.
+- Скрытие shadowed versions и tombstones в user iterator.
+- Recovery previous WAL в immutable memtable и current WAL в mutable memtable.
+- Неразрушающий `FileInventory` с классификацией live, obsolete, orphan, temporary и unknown objects.
+- Quick и deep verify reports.
+- Повторный bounded SSTable scanner для snapshot reads, range scan и deep verify.
+- Tests snapshot visibility через overwrite/flush, foreign snapshot rejection, merge semantics, L1 overlap и deterministic scan model.
+- Русская документация полного LSM read path, snapshots/MVCC и file inventory/verify.
+
+### Изменено
+
+- Workspace version повышена до `0.3.0`.
+- Mutable memtable больше не схлопывает историю user key до одной версии.
+- Point reads используют единый snapshot sequence для всех sources.
+- Readers удерживают immutable VersionSet вместо чтения изменяемого списка L0.
+- Flush публикует новый VersionSet только после успешной записи installation edit в MANIFEST.
+
+### Persisted-форматы
+
+Новый persisted-формат не добавлен. Версии IDENTITY, Internal Key, WAL, SSTable, MANIFEST и CURRENT остаются равны 1.
+
+MANIFEST V1 текущей реализации сохраняет L0. L1+ моделируются и валидируются в VersionSet, но физически будут заполняться после появления compaction в `v0.4.0`.
+
+### Ограничения
+
+- `v0.3.0` является stacked draft поверх ещё не выпущенной `v0.2.0`.
+- Нет compaction и физически заполненных L1+.
+- Range iterator пока bounded-декодирует выбранные SSTables целиком перед heap merge.
+- Нет block cache и table cache.
+- Snapshot не сериализуется и не переносится между open handles.
+- Нет backward iterator, prefix iterator и transaction snapshot isolation.
+- Inventory не выполняет автоматический cleanup.
+
 ## [0.2.0] — в разработке
 
 ### Добавлено
