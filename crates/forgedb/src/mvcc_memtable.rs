@@ -127,11 +127,6 @@ impl MvccMemTable {
         self.memory_usage
     }
 
-    #[must_use]
-    pub(crate) fn maximum_sequence(&self) -> Option<SequenceNumber> {
-        self.entries.keys().map(InternalKey::sequence).max()
-    }
-
     pub(crate) fn table_entries(&self) -> Vec<TableEntry> {
         self.entries
             .iter()
