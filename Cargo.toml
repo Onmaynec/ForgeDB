@@ -1,16 +1,18 @@
 [workspace]
 members = [
     "crates/forgedb",
+    "crates/forgedb-cli",
     "crates/forgedb-core",
     "crates/forgedb-fs",
+    "crates/forgedb-wal",
 ]
 resolver = "3"
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
-authors = ["ForgeDB contributors"]
+authors = ["Участники ForgeDB"]
 license = "MIT"
 repository = "https://github.com/Onmaynec/ForgeDB"
 homepage = "https://github.com/Onmaynec/ForgeDB"
