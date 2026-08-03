@@ -11,7 +11,7 @@ permissions:
 jobs:
   fix-v010:
     name: одноразовое исправление v0.1.0
-    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'feature/v0.1.0-durable-wal' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]' }}
+    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'feature/v0.1.0-durable-wal' && github.actor != 'github-actions[bot]' }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -24,85 +24,24 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-
           log_path = Path("crates/forgedb-wal/src/log.rs")
           log_text = log_path.read_text(encoding="utf-8")
-          old_sequence = '''        if decoded.sequence_start != expected_sequence {
-              return Err(Error::corruption(
-                  "WAL sequence",
-                  format!(
-                      "ожидалась sequence {}, найдена {}",
-                      expected_sequence.get(),
-                      decoded.sequence_start.get()
-                  ),
-              ));
-          }
-'''
-          new_sequence = '''        if decoded.sequence_start < expected_sequence {
-              return Err(Error::corruption(
-                  "WAL sequence",
-                  format!(
-                      "sequence {} пересекает уже воспроизведённый диапазон до {}",
-                      decoded.sequence_start.get(),
-                      expected_sequence.get().saturating_sub(1)
-                  ),
-              ));
-          }
-'''
-          if old_sequence not in log_text:
-              raise SystemExit("sequence validation block was not found")
-          log_path.write_text(
-              log_text.replace(old_sequence, new_sequence),
-              encoding="utf-8",
-              newline="\n",
-          )
-
+          old = "        if decoded.sequence_start != expected_sequence {"
+          new = "        if decoded.sequence_start < expected_sequence {"
+          if old not in log_text:
+              raise SystemExit("sequence condition was not found")
+          log_path.write_text(log_text.replace(old, new, 1), encoding="utf-8", newline="\n")
           database_path = Path("crates/forgedb/src/database.rs")
           database_text = database_path.read_text(encoding="utf-8")
           replacements = [
-              (
-                  '''    fatal_write_error: Option<String>,
-}''',
-                  '''    fatal_write_error: Option<String>,
-    lock: Option<NativeLockGuard>,
-}''',
-              ),
-              (
-                  '''    closed: AtomicBool,
-    _lock: NativeLockGuard,
-}''',
-                  '''    closed: AtomicBool,
-}''',
-              ),
-              (
-                  '''                fatal_write_error: None,
-            }),
-            closed: AtomicBool::new(false),
-            _lock: lock,
-''',
-                  '''                fatal_write_error: None,
-                lock: Some(lock),
-            }),
-            closed: AtomicBool::new(false),
-''',
-              ),
-              (
-                  '''        if let Some(writer) = state.wal.take() {
-            writer.sync()?;
-        }
-        Ok(())
-''',
-                  '''        if let Some(writer) = state.wal.take() {
-            writer.sync()?;
-        }
-        state.lock.take();
-        Ok(())
-''',
-              ),
+              ("    fatal_write_error: Option<String>,\n}", "    fatal_write_error: Option<String>,\n    lock: Option<NativeLockGuard>,\n}"),
+              ("    closed: AtomicBool,\n    _lock: NativeLockGuard,\n}", "    closed: AtomicBool,\n}"),
+              ("                fatal_write_error: None,\n            }),\n            closed: AtomicBool::new(false),\n            _lock: lock,\n", "                fatal_write_error: None,\n                lock: Some(lock),\n            }),\n            closed: AtomicBool::new(false),\n"),
+              ("        if let Some(writer) = state.wal.take() {\n            writer.sync()?;\n        }\n        Ok(())\n", "        if let Some(writer) = state.wal.take() {\n            writer.sync()?;\n        }\n        state.lock.take();\n        Ok(())\n"),
           ]
           for old, new in replacements:
               if old not in database_text:
-                  raise SystemExit(f"database replacement was not found: {old[:40]!r}")
+                  raise SystemExit("database replacement was not found")
               database_text = database_text.replace(old, new, 1)
           database_path.write_text(database_text, encoding="utf-8", newline="\n")
       - uses: dtolnay/rust-toolchain@stable
