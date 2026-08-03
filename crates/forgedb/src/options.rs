@@ -1,64 +1,64 @@
 use forgedb_core::{Error, Limits, Result};
 
-/// ForgeDB configuration validated before persisted files are opened.
+/// Конфигурация ForgeDB, проверяемая до открытия persisted-файлов.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Options {
-    /// Create a missing database directory in future `Database::open` implementations.
+    /// Создавать отсутствующий каталог базы при read-write открытии.
     pub create_if_missing: bool,
-    /// Reject opening an already existing database.
+    /// Отклонять открытие уже существующей базы.
     pub error_if_exists: bool,
-    /// Open without permitting writes.
+    /// Открывать базу без разрешения операций записи.
     pub read_only: bool,
-    /// Maximum user-key bytes.
+    /// Максимальный размер user key в байтах.
     pub max_key_size: usize,
-    /// Maximum value bytes.
+    /// Максимальный размер value в байтах.
     pub max_value_size: usize,
-    /// Maximum encoded write-batch bytes.
+    /// Максимальный размер закодированного WriteBatch в байтах.
     pub max_batch_size: usize,
-    /// Maximum operations in one write batch.
+    /// Максимальное число операций в одном WriteBatch.
     pub max_batch_operations: usize,
-    /// Mutable memtable flush threshold.
+    /// Максимальный объём mutable memtable до отклонения новых записей.
     pub memtable_size: usize,
-    /// Target WAL file size.
+    /// Целевой размер WAL-файла для будущей rotation policy.
     pub wal_file_size: u64,
-    /// Target SSTable size.
+    /// Целевой размер SSTable.
     pub target_sst_size: u64,
-    /// Target uncompressed data-block size.
+    /// Целевой размер несжатого data block.
     pub data_block_size: usize,
-    /// Prefix-compression restart interval.
+    /// Интервал restart points для prefix compression.
     pub restart_interval: usize,
-    /// Bloom-filter bits per key.
+    /// Число бит Bloom filter на один ключ.
     pub bloom_bits_per_key: u16,
-    /// Maximum resident block-cache bytes.
+    /// Максимальный объём resident block cache в байтах.
     pub block_cache_size: usize,
-    /// Maximum cached table readers.
+    /// Максимальное число cached table readers.
     pub table_cache_capacity: usize,
-    /// Number of LSM levels.
+    /// Число уровней LSM.
     pub level_count: usize,
-    /// L0 file count that schedules compaction.
+    /// Число L0-файлов, запускающее compaction.
     pub l0_compaction_trigger: usize,
-    /// L0 file count that slows writes.
+    /// Число L0-файлов, замедляющее записи.
     pub l0_slowdown_trigger: usize,
-    /// L0 file count that stops writes.
+    /// Число L0-файлов, останавливающее записи.
     pub l0_stop_trigger: usize,
-    /// Target size of level 1.
+    /// Целевой размер уровня 1.
     pub level1_target_size: u64,
-    /// Size multiplier between levels.
+    /// Множитель размера между уровнями.
     pub level_size_multiplier: u64,
-    /// Maximum concurrent background flush jobs.
+    /// Максимальное число одновременных фоновых flush jobs.
     pub max_background_flushes: usize,
-    /// Maximum concurrent background compaction jobs.
+    /// Максимальное число одновременных фоновых compaction jobs.
     pub max_background_compactions: usize,
-    /// Maximum bytes selected by one compaction.
+    /// Максимальный объём данных одной compaction.
     pub max_compaction_bytes: u64,
-    /// Verify checksums during normal reads.
+    /// Проверять checksum при обычном чтении.
     pub verify_checksums: bool,
-    /// Enable additional invariant checks.
+    /// Включать дополнительные проверки инвариантов.
     pub paranoid_checks: bool,
 }
 
 impl Options {
-    /// Validates every option and cross-field invariant without opening files.
+    /// Проверяет каждую опцию и межполевые инварианты без открытия файлов.
     pub fn validate(&self) -> Result<()> {
         self.limits()?.validate()?;
         require_non_zero_usize("memtable_size", self.memtable_size)?;
@@ -74,7 +74,7 @@ impl Options {
         if !(1..=64).contains(&self.bloom_bits_per_key) {
             return Err(Error::invalid_argument(
                 "bloom_bits_per_key",
-                "must be in 1..=64",
+                "значение должно находиться в диапазоне 1..=64",
             ));
         }
         require_non_zero_usize("table_cache_capacity", self.table_cache_capacity)?;
@@ -83,20 +83,20 @@ impl Options {
         if self.l0_slowdown_trigger < self.l0_compaction_trigger {
             return Err(Error::invalid_argument(
                 "l0_slowdown_trigger",
-                "must be at least l0_compaction_trigger",
+                "значение должно быть не меньше l0_compaction_trigger",
             ));
         }
         if self.l0_stop_trigger < self.l0_slowdown_trigger {
             return Err(Error::invalid_argument(
                 "l0_stop_trigger",
-                "must be at least l0_slowdown_trigger",
+                "значение должно быть не меньше l0_slowdown_trigger",
             ));
         }
         require_non_zero_u64("level1_target_size", self.level1_target_size)?;
         if self.level_size_multiplier < 2 {
             return Err(Error::invalid_argument(
                 "level_size_multiplier",
-                "must be at least 2",
+                "значение должно быть не меньше 2",
             ));
         }
         require_non_zero_usize("max_background_flushes", self.max_background_flushes)?;
@@ -107,7 +107,7 @@ impl Options {
         if self.max_compaction_bytes < self.target_sst_size {
             return Err(Error::invalid_argument(
                 "max_compaction_bytes",
-                "must be at least target_sst_size",
+                "значение должно быть не меньше target_sst_size",
             ));
         }
 
@@ -118,14 +118,14 @@ impl Options {
                 .ok_or_else(|| {
                     Error::invalid_argument(
                         "level_size_multiplier",
-                        "configured level targets overflow u64",
+                        "рассчитанные размеры уровней переполняют u64",
                     )
                 })?;
         }
         Ok(())
     }
 
-    /// Returns the bounded core limits after validation.
+    /// Возвращает bounded core limits после проверки их согласованности.
     pub fn limits(&self) -> Result<Limits> {
         Limits::new(
             self.max_key_size,
@@ -171,14 +171,14 @@ impl Default for Options {
 
 fn require_non_zero_usize(field: &'static str, value: usize) -> Result<()> {
     if value == 0 {
-        return Err(Error::invalid_argument(field, "must be greater than zero"));
+        return Err(Error::invalid_argument(field, "значение должно быть больше нуля"));
     }
     Ok(())
 }
 
 fn require_non_zero_u64(field: &'static str, value: u64) -> Result<()> {
     if value == 0 {
-        return Err(Error::invalid_argument(field, "must be greater than zero"));
+        return Err(Error::invalid_argument(field, "значение должно быть больше нуля"));
     }
     Ok(())
 }
@@ -192,7 +192,7 @@ fn require_range_usize(
     if !(minimum..=maximum).contains(&value) {
         return Err(Error::invalid_argument(
             field,
-            format!("must be in {minimum}..={maximum}"),
+            format!("значение должно находиться в диапазоне {minimum}..={maximum}"),
         ));
     }
     Ok(())
