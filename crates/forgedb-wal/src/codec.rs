@@ -138,7 +138,10 @@ impl WalCodec {
     ) -> Result<Vec<u8>> {
         batch.validate_against(limits)?;
         if batch.is_empty() {
-            return Err(Error::invalid_argument("batch", "пустой batch нельзя записать в WAL"));
+            return Err(Error::invalid_argument(
+                "batch",
+                "пустой batch нельзя записать в WAL",
+            ));
         }
         sequence_start.inclusive_end(batch.len())?;
 
@@ -178,13 +181,14 @@ impl WalCodec {
             limit: u64::from(u32::MAX),
             observed: u64::try_from(payload.len()).unwrap_or(u64::MAX),
         })?;
-        let total_length_usize = WAL_FRAME_HEADER_SIZE
-            .checked_add(payload.len())
-            .ok_or(Error::ResourceLimit {
-                resource: "wal_frame_length",
-                limit: u64::from(u32::MAX),
-                observed: u64::MAX,
-            })?;
+        let total_length_usize =
+            WAL_FRAME_HEADER_SIZE
+                .checked_add(payload.len())
+                .ok_or(Error::ResourceLimit {
+                    resource: "wal_frame_length",
+                    limit: u64::from(u32::MAX),
+                    observed: u64::MAX,
+                })?;
         let total_length = u32::try_from(total_length_usize).map_err(|_| Error::ResourceLimit {
             resource: "wal_frame_length",
             limit: u64::from(u32::MAX),
@@ -304,7 +308,8 @@ impl WalCodec {
         for _ in 0..header.operation_count {
             let operation_type = read_byte(payload, &mut cursor, "operation_type")?;
             let column_family = ColumnFamilyId::new(decode_varint32(payload, &mut cursor)?);
-            let key_length = decode_length(payload, &mut cursor, limits.max_key_size, "key_length")?;
+            let key_length =
+                decode_length(payload, &mut cursor, limits.max_key_size, "key_length")?;
             let value_length =
                 decode_length(payload, &mut cursor, limits.max_value_size, "value_length")?;
             let key = take_bytes(payload, &mut cursor, key_length, "key")?;
@@ -323,10 +328,7 @@ impl WalCodec {
                     batch.delete_cf(column_family, key)?;
                 }
                 Err(_) => {
-                    return Err(Error::corruption(
-                        "WAL payload",
-                        "неизвестный тип операции",
-                    ));
+                    return Err(Error::corruption("WAL payload", "неизвестный тип операции"));
                 }
             }
         }
@@ -489,11 +491,8 @@ mod tests {
         let header: [u8; WAL_FRAME_HEADER_SIZE] = frame[..WAL_FRAME_HEADER_SIZE]
             .try_into()
             .map_err(|_| Error::corruption("test", "неверная длина заголовка"))?;
-        let decoded = WalCodec::decode_complete_frame(
-            &header,
-            &frame[WAL_FRAME_HEADER_SIZE..],
-            &limits,
-        )?;
+        let decoded =
+            WalCodec::decode_complete_frame(&header, &frame[WAL_FRAME_HEADER_SIZE..], &limits)?;
         assert_eq!(decoded.sequence_start, SequenceNumber::FIRST);
         assert_eq!(decoded.batch.operations(), batch.operations());
         Ok(())

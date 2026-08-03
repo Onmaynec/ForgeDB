@@ -37,7 +37,10 @@ impl MemTable {
         memory_limit: usize,
     ) -> Result<PreparedBatch> {
         if batch.is_empty() {
-            return Err(Error::invalid_argument("batch", "batch не должен быть пустым"));
+            return Err(Error::invalid_argument(
+                "batch",
+                "batch не должен быть пустым",
+            ));
         }
         sequence_start.inclusive_end(batch.len())?;
 
@@ -74,20 +77,21 @@ impl MemTable {
         let mut projected = self.memory_usage;
         for (key, entry) in &staged {
             if let Some(existing) = self.entries.get(key) {
-                projected = projected
-                    .checked_sub(entry_size(key, existing)?)
-                    .ok_or(Error::InternalInvariant {
+                projected = projected.checked_sub(entry_size(key, existing)?).ok_or(
+                    Error::InternalInvariant {
                         invariant: "I-MEMTABLE-ACCOUNTING",
                         reason: "memory accounting стал отрицательным".to_owned(),
-                    })?;
+                    },
+                )?;
             }
-            projected = projected
-                .checked_add(entry_size(key, entry)?)
-                .ok_or(Error::ResourceLimit {
-                    resource: "memtable_memory",
-                    limit: u64::try_from(memory_limit).unwrap_or(u64::MAX),
-                    observed: u64::MAX,
-                })?;
+            projected =
+                projected
+                    .checked_add(entry_size(key, entry)?)
+                    .ok_or(Error::ResourceLimit {
+                        resource: "memtable_memory",
+                        limit: u64::try_from(memory_limit).unwrap_or(u64::MAX),
+                        observed: u64::MAX,
+                    })?;
             if projected > memory_limit {
                 return Err(Error::ResourceLimit {
                     resource: "memtable_memory",

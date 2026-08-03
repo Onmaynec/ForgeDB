@@ -50,8 +50,7 @@ fn temporary_directory(name: &str) -> Result<PathBuf> {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let path =
-        std::env::temp_dir().join(format!("forgedb-{name}-{}-{unique}", std::process::id()));
+    let path = std::env::temp_dir().join(format!("forgedb-{name}-{}-{unique}", std::process::id()));
     fs::create_dir_all(&path)
         .map_err(|source| Error::io("create_test_directory", Some(path.clone()), source))?;
     Ok(path)

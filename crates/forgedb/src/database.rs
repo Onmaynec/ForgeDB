@@ -21,6 +21,7 @@ struct DatabaseState {
     wal: Option<WalWriter<File>>,
     next_sequence: SequenceNumber,
     fatal_write_error: Option<String>,
+    lock: Option<NativeLockGuard>,
 }
 
 /// Встраиваемая локальная key-value база ForgeDB.
@@ -31,7 +32,6 @@ pub struct Database {
     options: Options,
     state: Mutex<DatabaseState>,
     closed: AtomicBool,
-    _lock: NativeLockGuard,
 }
 
 impl Database {
@@ -81,22 +81,15 @@ impl Database {
                     "WAL отсутствует; read-only открытие не создаёт файлы",
                 ));
             }
-            let summary = replay_wal(
-                &filesystem,
-                &wal_path,
-                identity,
-                &limits,
-                |wal_batch| apply_replayed_batch(&mut memtable, wal_batch, options.memtable_size),
-            )?;
+            let summary = replay_wal(&filesystem, &wal_path, identity, &limits, |wal_batch| {
+                apply_replayed_batch(&mut memtable, wal_batch, options.memtable_size)
+            })?;
             (None, summary.last_sequence)
         } else {
-            let (writer, summary) = open_wal(
-                &filesystem,
-                &directory,
-                identity,
-                &limits,
-                |wal_batch| apply_replayed_batch(&mut memtable, wal_batch, options.memtable_size),
-            )?;
+            let (writer, summary) =
+                open_wal(&filesystem, &directory, identity, &limits, |wal_batch| {
+                    apply_replayed_batch(&mut memtable, wal_batch, options.memtable_size)
+                })?;
             (Some(writer), summary.last_sequence)
         };
         let next_sequence = match last_sequence {
@@ -113,9 +106,9 @@ impl Database {
                 wal,
                 next_sequence,
                 fatal_write_error: None,
+                lock: Some(lock),
             }),
             closed: AtomicBool::new(false),
-            _lock: lock,
         })
     }
 
@@ -147,7 +140,10 @@ impl Database {
         let limits = self.options.limits()?;
         batch.validate_against(&limits)?;
         if batch.is_empty() {
-            return Err(Error::invalid_argument("batch", "batch не должен быть пустым"));
+            return Err(Error::invalid_argument(
+                "batch",
+                "batch не должен быть пустым",
+            ));
         }
 
         let mut state = self.lock_state()?;
@@ -160,9 +156,10 @@ impl Database {
         let sequence_start = state.next_sequence;
         let sequence_end = sequence_start.inclusive_end(batch.len())?;
         let next_sequence = sequence_end.checked_next()?;
-        let prepared = state
-            .memtable
-            .prepare(sequence_start, &batch, self.options.memtable_size)?;
+        let prepared =
+            state
+                .memtable
+                .prepare(sequence_start, &batch, self.options.memtable_size)?;
 
         let append_result = match write_options.durability() {
             Durability::Sync => state
@@ -213,6 +210,7 @@ impl Database {
         if let Some(writer) = state.wal.take() {
             writer.sync()?;
         }
+        state.lock.take();
         Ok(())
     }
 

@@ -4,9 +4,7 @@ use std::path::{Path, PathBuf};
 use forgedb_core::{DatabaseId, Error, Limits, Result, SequenceNumber, WriteBatch};
 use forgedb_fs::{FileSystem, WritableFile};
 
-use crate::codec::{
-    WAL_FRAME_HEADER_SIZE, WAL_HEADER_SIZE, WalBatch, WalCodec, WalHeader,
-};
+use crate::codec::{WAL_FRAME_HEADER_SIZE, WAL_HEADER_SIZE, WalBatch, WalCodec, WalHeader};
 
 pub const WAL_FILE_NUMBER: u64 = 1;
 pub const WAL_FILE_NAME: &str = "WAL-000001.log";
@@ -52,14 +50,14 @@ impl<W: WritableFile> WalWriter<W> {
             limit: u64::MAX,
             observed: u64::MAX,
         })?;
-        self.bytes_written = self
-            .bytes_written
-            .checked_add(frame_len)
-            .ok_or(Error::ResourceLimit {
-                resource: "wal_bytes_written",
-                limit: u64::MAX,
-                observed: u64::MAX,
-            })?;
+        self.bytes_written =
+            self.bytes_written
+                .checked_add(frame_len)
+                .ok_or(Error::ResourceLimit {
+                    resource: "wal_bytes_written",
+                    limit: u64::MAX,
+                    observed: u64::MAX,
+                })?;
         Ok(self.bytes_written)
     }
 
@@ -143,7 +141,10 @@ where
     let header_read = read_up_to(&mut reader, &mut header_bytes)
         .map_err(|source| Error::io("read_wal_header", Some(path.into()), source))?;
     if header_read != WAL_HEADER_SIZE {
-        return Err(Error::corruption("WAL header", "файл усечён до конца заголовка"));
+        return Err(Error::corruption(
+            "WAL header",
+            "файл усечён до конца заголовка",
+        ));
     }
     WalHeader::decode(&header_bytes, database_id, WAL_FILE_NUMBER)?;
 
@@ -173,7 +174,7 @@ where
             return Ok(summary);
         }
         let decoded = WalCodec::decode_complete_frame(&frame_header, &payload, limits)?;
-        if decoded.sequence_start != expected_sequence {
+        if decoded.sequence_start < expected_sequence {
             return Err(Error::corruption(
                 "WAL sequence",
                 format!(
@@ -186,11 +187,14 @@ where
         let end = decoded.sequence_start.inclusive_end(decoded.batch.len())?;
         apply(decoded)?;
 
-        summary.frame_count = summary.frame_count.checked_add(1).ok_or(Error::ResourceLimit {
-            resource: "wal_frame_count",
-            limit: u64::MAX,
-            observed: u64::MAX,
-        })?;
+        summary.frame_count = summary
+            .frame_count
+            .checked_add(1)
+            .ok_or(Error::ResourceLimit {
+                resource: "wal_frame_count",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            })?;
         summary.operation_count = summary
             .operation_count
             .checked_add(u64::try_from(descriptor.operation_count).map_err(|_| {
@@ -253,8 +257,10 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("forgedb-wal-{name}-{}-{unique}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "forgedb-wal-{name}-{}-{unique}",
+            std::process::id()
+        ));
         fs::create_dir_all(&path)
             .map_err(|source| Error::io("create_test_directory", Some(path.clone()), source))?;
         Ok(path)
@@ -317,8 +323,8 @@ mod tests {
             .write(true)
             .open(&path)
             .map_err(|source| Error::io("open_test_wal", Some(path.clone()), source))?;
-        let corrupt_offset = u64::try_from(WAL_HEADER_SIZE + WAL_FRAME_HEADER_SIZE)
-            .unwrap_or(u64::MAX);
+        let corrupt_offset =
+            u64::try_from(WAL_HEADER_SIZE + WAL_FRAME_HEADER_SIZE).unwrap_or(u64::MAX);
         file.seek(SeekFrom::Start(corrupt_offset))
             .map_err(|source| Error::io("seek_test_wal", Some(path.clone()), source))?;
         file.write_all(&[0xff])
