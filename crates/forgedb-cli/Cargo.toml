@@ -1,0 +1,19 @@
+[package]
+name = "forgedb-cli"
+description = "Командная строка ForgeDB"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "forgedb"
+path = "src/main.rs"
+
+[dependencies]
+forgedb = { path = "../forgedb" }
+
+[lints]
+workspace = true
