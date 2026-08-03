@@ -171,14 +171,20 @@ impl Default for Options {
 
 fn require_non_zero_usize(field: &'static str, value: usize) -> Result<()> {
     if value == 0 {
-        return Err(Error::invalid_argument(field, "значение должно быть больше нуля"));
+        return Err(Error::invalid_argument(
+            field,
+            "значение должно быть больше нуля",
+        ));
     }
     Ok(())
 }
 
 fn require_non_zero_u64(field: &'static str, value: u64) -> Result<()> {
     if value == 0 {
-        return Err(Error::invalid_argument(field, "значение должно быть больше нуля"));
+        return Err(Error::invalid_argument(
+            field,
+            "значение должно быть больше нуля",
+        ));
     }
     Ok(())
 }
