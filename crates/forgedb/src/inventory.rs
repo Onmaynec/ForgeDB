@@ -46,11 +46,12 @@ impl FileInventory {
             let name = file_name.to_string_lossy().into_owned();
             seen.insert(name.clone());
 
-            if matches!(
-                name.as_str(),
-                IDENTITY_FILE_NAME | CURRENT_FILE_NAME | LOCK_FILE_NAME | ORPHAN_DIRECTORY_NAME
-            ) || name == active_manifest
-            {
+            let is_live_metadata = name == IDENTITY_FILE_NAME
+                || name == CURRENT_FILE_NAME
+                || name == LOCK_FILE_NAME
+                || name == ORPHAN_DIRECTORY_NAME
+                || name == active_manifest;
+            if is_live_metadata {
                 inventory.live_metadata.push(name);
                 continue;
             }
