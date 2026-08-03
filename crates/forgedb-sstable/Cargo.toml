@@ -13,5 +13,16 @@ homepage.workspace = true
 forgedb-core = { path = "../forgedb-core" }
 forgedb-fs = { path = "../forgedb-fs" }
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[lints.clippy]
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+# Временные локальные исключения раннего SSTable V1. Не распространяются на workspace.
+clone_on_copy = "allow"
+too_many_arguments = "allow"
