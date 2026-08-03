@@ -4,34 +4,56 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 явные гарантии durability, ограниченное использование ресурсов, версионируемые persisted-форматы
 и обнаружение повреждений выше преждевременной оптимизации производительности.
 
-## Текущий этап: v0.1.0 — Durable WAL Core
+## Текущий этап: v0.3.0 — Full LSM Read Path
 
-Версия реализует первый рабочий путь записи и восстановления:
+`v0.3.0` разрабатывается как stacked draft поверх ещё не выпущенной `v0.2.0`. Ветка и PR не должны
+считаться релизом до успешной Linux/Windows/Rust 1.89 матрицы.
 
-- Rust 2024 workspace с минимальной поддерживаемой версией Rust 1.89;
-- бинарные ключи и значения в библиотечном API;
-- `Database::open`, `put`, `get`, `delete`, `write` и `close`;
-- атомарный `WriteBatch`;
-- возрастающие `SequenceNumber` с допустимыми пропусками после `DisableWal`;
-- WAL V1 с фиксированными заголовками, CRC32C и строгими лимитами до allocation;
-- mutable memtable на `BTreeMap` с preflight-проверкой памяти;
-- режимы записи `Sync`, `NoSync` и `DisableWal`;
-- replay всех полных кадров после повторного открытия;
-- безопасное игнорирование и усечение только последнего физически неполного кадра;
-- отказ от открытия при checksum mismatch, неизвестной версии, неверном identity или повреждении полного кадра;
-- process-level эксклюзивная блокировка каталога базы;
-- CLI-команды `put`, `get` и `delete`.
+В текущем draft реализованы:
+
+- Rust 2024 workspace с MSRV Rust 1.89;
+- бинарные ключи и значения;
+- WAL V1, numbered WAL generations и strict replay;
+- SSTable V1 с CRC32C, index, Bloom filter, properties и restart points;
+- MANIFEST V1 и crash-safe CURRENT;
+- mutable/immutable MVCC memtables;
+- двухфазный flush в L0;
+- immutable `Arc<VersionSet>`;
+- L0 newest-first lookup;
+- модель L1+ со строгим non-overlap invariant;
+- cheap snapshot handles;
+- snapshot-aware point reads;
+- forward range scan и binary-heap merge iterator;
+- file inventory без destructive cleanup;
+- quick и deep verification;
+- process-level эксклюзивная блокировка каталога базы.
 
 ## Пример библиотеки
 
 ```rust
-use forgedb::{Database, Options, Result, WriteOptions};
+use forgedb::{Database, Options, ReadOptions, Result, WriteOptions};
 
 fn main() -> Result<()> {
     let database = Database::open("./data", Options::default())?;
+
     database.put(b"user:42", b"Alice", WriteOptions::sync())?;
-    assert_eq!(database.get(b"user:42")?, Some(b"Alice".to_vec()));
-    database.delete(b"user:42", WriteOptions::sync())?;
+    let snapshot = database.snapshot()?;
+    database.put(b"user:42", b"Alice v2", WriteOptions::sync())?;
+    database.flush()?;
+
+    assert_eq!(
+        database.get_with_options(
+            b"user:42",
+            ReadOptions::from_snapshot(&snapshot),
+        )?,
+        Some(b"Alice".to_vec()),
+    );
+
+    for row in database.scan(b"user:".to_vec()..b"user;".to_vec(), ReadOptions::default())? {
+        let (key, value) = row?;
+        println!("{} = {}", String::from_utf8_lossy(&key), String::from_utf8_lossy(&value));
+    }
+
     database.close()?;
     Ok(())
 }
@@ -43,27 +65,48 @@ fn main() -> Result<()> {
 cargo run -p forgedb-cli -- put ./data key value --sync
 cargo run -p forgedb-cli -- get ./data key
 cargo run -p forgedb-cli -- delete ./data key --sync
+cargo run -p forgedb-cli -- scan ./data [start] [end-exclusive]
+cargo run -p forgedb-cli -- inventory ./data
+cargo run -p forgedb-cli -- verify ./data --deep
 ```
 
-CLI v0.1.0 принимает ключи и значения как UTF-8 аргументы командной строки. Библиотечный API
-не имеет этого ограничения и работает с произвольными байтами.
+CLI принимает ключи и границы как UTF-8 аргументы. Библиотечный API работает с произвольными байтами.
+Вывод `scan` использует raw key, TAB и raw value, поэтому формат предназначен для диагностики, а не для
+надёжного обмена произвольными бинарными записями.
 
-## Режимы durability
+## Порядок чтения
 
-- `Sync`: успех возвращается только после append кадра, `sync_all` WAL и атомарного применения batch к memtable.
-- `NoSync`: batch записывается в WAL и становится видимым без обязательного физического sync перед возвратом.
-- `DisableWal`: batch применяется только к memtable и может исчезнуть при process crash.
+Point lookup использует один зафиксированный sequence и проверяет:
 
-Точные границы гарантий описаны в [`docs/DURABILITY.md`](docs/DURABILITY.md).
+1. mutable memtable;
+2. immutable memtable незавершённого flush;
+3. L0 от новых file numbers к старым;
+4. L1+ по возрастанию уровня.
+
+`Value` и `Tombstone` завершают поиск. Только `Missing` разрешает перейти к следующему источнику.
+
+Range scan объединяет sorted MVCC sources через binary heap, скрывает версии выше snapshot,
+shadowed versions и tombstones.
+
+## Durability
+
+- `Sync`: WAL frame синхронизируется до публикации batch в mutable memtable.
+- `NoSync`: WAL frame записывается без обязательного физического sync перед возвратом.
+- `DisableWal`: batch существует только в памяти до flush и может исчезнуть при process crash.
+
+Flush сначала публикует WAL rotation в MANIFEST, затем строит и синхронизирует SSTable, после чего
+отдельным VersionEdit устанавливает таблицу и только потом делает старый WAL obsolete.
 
 ## Структура workspace
 
 ```text
-crates/forgedb       Публичный API, Database и mutable memtable
-crates/forgedb-cli   Командная строка put/get/delete
-crates/forgedb-core  Storage-neutral типы, лимиты, internal keys и WriteBatch
-crates/forgedb-fs    Файловая абстракция, native lock и database identity
-crates/forgedb-wal   Формат WAL V1, writer, replay и CRC32C
+crates/forgedb           Public API, MVCC memtables, VersionSet, snapshots, iterators, verify
+crates/forgedb-cli       put/get/delete/scan/inventory/verify
+crates/forgedb-core      Типы, лимиты, internal keys и WriteBatch
+crates/forgedb-fs        FileSystem abstraction, native lock и IDENTITY
+crates/forgedb-wal       WAL V1, generations, writer и replay
+crates/forgedb-sstable   SSTable V1, block codecs, Bloom filter и reader
+crates/forgedb-manifest  MANIFEST V1, VersionEdit и CURRENT
 ```
 
 ## Проверка
@@ -76,22 +119,30 @@ cargo test --workspace --doc
 cargo build --workspace --release
 ```
 
-CI выполняет проверки на Ubuntu stable, Windows stable и Rust 1.89.
+Release gate требует Ubuntu stable, Windows stable и Rust 1.89. Текущий stacked draft ещё не имеет
+подтверждённого зелёного результата: GitHub-hosted jobs завершаются до checkout.
 
-## Ограничения v0.1.0
+## Ограничения v0.3.0
 
-В версии ещё нет SSTable, MANIFEST, flush, compaction, snapshots, transactions, column-family API,
-WAL rotation и фоновых worker. Memtable имеет жёсткий предел: запись отклоняется до изменения WAL,
-если projected memory превышает `Options::memtable_size`.
+- `v0.2.0` и `v0.3.0` ещё не выпущены.
+- Нет compaction и физически заполненных L1+.
+- SSTable scan bounded-декодирует выбранные таблицы целиком перед merge.
+- Нет block cache, table cache и background workers.
+- Snapshot не сериализуется и действует только в создавшем его open handle.
+- Нет backward iterator, transactions и column-family API.
+- Inventory не удаляет orphan/obsolete/unknown файлы автоматически.
 
 ## Документация
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — границы компонентов;
-- [`docs/WRITE_PATH.md`](docs/WRITE_PATH.md) — порядок записи;
-- [`docs/RECOVERY.md`](docs/RECOVERY.md) — replay и corruption policy;
-- [`docs/formats/WAL_V1.md`](docs/formats/WAL_V1.md) — нормативный бинарный формат;
+- [`docs/LSM_READ_PATH_V1.md`](docs/LSM_READ_PATH_V1.md) — порядок source lookup и range merge;
+- [`docs/SNAPSHOTS_AND_MVCC.md`](docs/SNAPSHOTS_AND_MVCC.md) — snapshot visibility;
+- [`docs/FILE_INVENTORY_AND_VERIFY.md`](docs/FILE_INVENTORY_AND_VERIFY.md) — recovery inventory и verify;
+- [`docs/formats/SSTABLE_V1.md`](docs/formats/SSTABLE_V1.md) — SSTable V1;
+- [`docs/formats/MANIFEST_V1.md`](docs/formats/MANIFEST_V1.md) — MANIFEST V1;
+- [`docs/formats/WAL_V1.md`](docs/formats/WAL_V1.md) — WAL V1;
 - [`docs/INVARIANTS.md`](docs/INVARIANTS.md) — проверяемые инварианты;
-- [`docs/adr`](docs/adr) — принятые архитектурные решения.
+- [`docs/adr`](docs/adr) — архитектурные решения.
 
 ## Лицензия
 
