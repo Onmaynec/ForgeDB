@@ -1,7 +1,8 @@
-name: One-shot v0.1.0 normalization
+name: Одноразовая нормализация v0.1.0
 
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches: [feature/v0.1.0-durable-wal]
 
 permissions:
@@ -9,20 +10,21 @@ permissions:
 
 jobs:
   normalize-and-validate:
-    if: github.actor != 'github-actions[bot]'
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.title, 'normalize v0.1.0')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: feature/v0.1.0-durable-wal
           fetch-depth: 0
-      - name: Allow sequence gaps created by DisableWal
+      - name: Исправить recovery и освобождение lock
         shell: python
         run: |
           from pathlib import Path
-          path = Path("crates/forgedb-wal/src/log.rs")
-          text = path.read_text(encoding="utf-8")
-          old = '''        if decoded.sequence_start != expected_sequence {
+
+          log_path = Path("crates/forgedb-wal/src/log.rs")
+          log_text = log_path.read_text(encoding="utf-8")
+          old_sequence = '''        if decoded.sequence_start != expected_sequence {
               return Err(Error::corruption(
                   "WAL sequence",
                   format!(
@@ -33,7 +35,7 @@ jobs:
               ));
           }
 '''
-          new = '''        if decoded.sequence_start < expected_sequence {
+          new_sequence = '''        if decoded.sequence_start < expected_sequence {
               return Err(Error::corruption(
                   "WAL sequence",
                   format!(
@@ -44,9 +46,62 @@ jobs:
               ));
           }
 '''
-          if old not in text:
-              raise SystemExit("expected sequence validation block was not found")
-          path.write_text(text.replace(old, new), encoding="utf-8", newline="\n")
+          if old_sequence not in log_text:
+              raise SystemExit("sequence validation block was not found")
+          log_path.write_text(
+              log_text.replace(old_sequence, new_sequence),
+              encoding="utf-8",
+              newline="\n",
+          )
+
+          database_path = Path("crates/forgedb/src/database.rs")
+          database_text = database_path.read_text(encoding="utf-8")
+          replacements = [
+              (
+                  '''    fatal_write_error: Option<String>,
+}''',
+                  '''    fatal_write_error: Option<String>,
+    lock: Option<NativeLockGuard>,
+}''',
+              ),
+              (
+                  '''    closed: AtomicBool,
+    _lock: NativeLockGuard,
+}''',
+                  '''    closed: AtomicBool,
+}''',
+              ),
+              (
+                  '''                fatal_write_error: None,
+            }),
+            closed: AtomicBool::new(false),
+            _lock: lock,
+''',
+                  '''                fatal_write_error: None,
+                lock: Some(lock),
+            }),
+            closed: AtomicBool::new(false),
+''',
+              ),
+              (
+                  '''        if let Some(writer) = state.wal.take() {
+            writer.sync()?;
+        }
+        Ok(())
+''',
+                  '''        if let Some(writer) = state.wal.take() {
+            writer.sync()?;
+        }
+        state.lock.take();
+        Ok(())
+''',
+              ),
+          ]
+          for old, new in replacements:
+              if old not in database_text:
+                  raise SystemExit(f"database replacement was not found: {old[:40]!r}")
+              database_text = database_text.replace(old, new, 1)
+          database_path.write_text(database_text, encoding="utf-8", newline="\n")
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -56,12 +111,12 @@ jobs:
       - run: cargo test --workspace --all-features
       - run: cargo test --workspace --doc
       - run: cargo build --workspace --release
-      - name: Publish validated normalization
+      - name: Опубликовать проверенные исправления
         shell: bash
         run: |
           rm .github/workflows/v010-normalize.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "style: normalize v0.1.0 implementation"
+          git commit -m "fix: normalize WAL recovery and close semantics"
           git push origin HEAD:feature/v0.1.0-durable-wal
