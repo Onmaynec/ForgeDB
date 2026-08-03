@@ -208,26 +208,36 @@ impl InternalKeyCodec {
 }
 
 fn read_u32(input: &[u8], offset: usize, field: &'static str) -> Result<u32> {
-    let end = offset
-        .checked_add(4)
-        .ok_or_else(|| Error::corruption("internal key", format!("offset поля {field} переполнен")))?;
+    let end = offset.checked_add(4).ok_or_else(|| {
+        Error::corruption("internal key", format!("offset поля {field} переполнен"))
+    })?;
     let bytes: [u8; 4] = input
         .get(offset..end)
         .ok_or_else(|| Error::corruption("internal key", format!("поле {field} усечено")))?
         .try_into()
-        .map_err(|_| Error::corruption("internal key", format!("поле {field} имеет неверную ширину")))?;
+        .map_err(|_| {
+            Error::corruption(
+                "internal key",
+                format!("поле {field} имеет неверную ширину"),
+            )
+        })?;
     Ok(u32::from_le_bytes(bytes))
 }
 
 fn read_u64(input: &[u8], offset: usize, field: &'static str) -> Result<u64> {
-    let end = offset
-        .checked_add(8)
-        .ok_or_else(|| Error::corruption("internal key", format!("offset поля {field} переполнен")))?;
+    let end = offset.checked_add(8).ok_or_else(|| {
+        Error::corruption("internal key", format!("offset поля {field} переполнен"))
+    })?;
     let bytes: [u8; 8] = input
         .get(offset..end)
         .ok_or_else(|| Error::corruption("internal key", format!("поле {field} усечено")))?
         .try_into()
-        .map_err(|_| Error::corruption("internal key", format!("поле {field} имеет неверную ширину")))?;
+        .map_err(|_| {
+            Error::corruption(
+                "internal key",
+                format!("поле {field} имеет неверную ширину"),
+            )
+        })?;
     Ok(u64::from_le_bytes(bytes))
 }
 
