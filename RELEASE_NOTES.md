@@ -49,14 +49,12 @@ Power-loss гарантия всё ещё зависит от ОС, файлов
 
 ## Проверка
 
-Release candidate проходит обязательную матрицу:
+Финальный release candidate проверен GitHub Actions run `30802178049`:
 
 - Ubuntu stable: rustfmt, Clippy с `-D warnings`, workspace tests, doctests, release build;
 - Windows stable: те же проверки;
 - Ubuntu Rust 1.89: Clippy с `-D warnings` и workspace tests;
 - отдельный release job повторяет полный Linux gate до создания tag и Pre-release.
-
-Идентификатор финального CI run фиксируется в release PR перед публикацией.
 
 ## Ограничения
 
