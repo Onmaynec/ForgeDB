@@ -1,6 +1,6 @@
 [package]
 name = "forgedb-fs"
-description = "Filesystem abstraction and native filesystem support for ForgeDB"
+description = "Файловая абстракция и native I/O для ForgeDB"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
