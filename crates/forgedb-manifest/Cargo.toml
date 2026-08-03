@@ -1,0 +1,18 @@
+[package]
+name = "forgedb-manifest"
+description = "Версионируемый MANIFEST и VersionSet ForgeDB"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+forgedb-core = { path = "../forgedb-core" }
+forgedb-fs = { path = "../forgedb-fs" }
+forgedb-sstable = { path = "../forgedb-sstable" }
+
+[lints]
+workspace = true
