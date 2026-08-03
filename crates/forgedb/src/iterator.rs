@@ -32,13 +32,6 @@ impl OwnedRange {
         Ok(owned)
     }
 
-    pub(crate) fn all() -> Self {
-        Self {
-            start: Bound::Unbounded,
-            end: Bound::Unbounded,
-        }
-    }
-
     pub(crate) fn contains(&self, key: &[u8]) -> bool {
         let after_start = match &self.start {
             Bound::Included(start) => key >= start.as_slice(),
@@ -339,7 +332,7 @@ mod tests {
         let iterator = DbIterator::new(
             vec![(0, newest), (1, older)],
             Some(SequenceNumber::new(5)?),
-            OwnedRange::all(),
+            OwnedRange::from_range(&(..))?,
             None,
         )?;
         let rows = iterator.collect::<Result<Vec<_>>>()?;
@@ -359,7 +352,7 @@ mod tests {
         let iterator = DbIterator::new(
             vec![(0, source)],
             Some(SequenceNumber::new(3)?),
-            OwnedRange::all(),
+            OwnedRange::from_range(&(..))?,
             None,
         )?;
         let rows = iterator.collect::<Result<Vec<_>>>()?;
