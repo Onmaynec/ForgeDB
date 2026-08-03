@@ -25,7 +25,7 @@ impl ReadOptions {
 
     /// Задаёт bounded limit range scan.
     #[must_use]
-    pub const fn with_limit(mut self, limit: usize) -> Self {
+    pub fn with_limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);
         self
     }
