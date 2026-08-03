@@ -7,8 +7,9 @@ use forgedb_core::{DatabaseId, Error, Result, SequenceNumber};
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     identity: DatabaseId,
+    handle_id: DatabaseId,
     sequence: Option<SequenceNumber>,
-    lease: Arc<SnapshotLease>,
+    _lease: Arc<SnapshotLease>,
 }
 
 impl Snapshot {
@@ -24,8 +25,8 @@ impl Snapshot {
         self.identity
     }
 
-    pub(crate) fn belongs_to(&self, identity: DatabaseId) -> bool {
-        self.identity == identity
+    pub(crate) fn belongs_to(&self, identity: DatabaseId, handle_id: DatabaseId) -> bool {
+        self.identity == identity && self.handle_id == handle_id
     }
 }
 
@@ -64,6 +65,7 @@ impl SnapshotRegistry {
     pub(crate) fn register(
         self: &Arc<Self>,
         identity: DatabaseId,
+        handle_id: DatabaseId,
         sequence: Option<SequenceNumber>,
     ) -> Result<Snapshot> {
         let key = sequence.map_or(0, SequenceNumber::get);
@@ -80,8 +82,9 @@ impl SnapshotRegistry {
         drop(active);
         Ok(Snapshot {
             identity,
+            handle_id,
             sequence,
-            lease: Arc::new(SnapshotLease {
+            _lease: Arc::new(SnapshotLease {
                 registry: Arc::downgrade(self),
                 key,
             }),
@@ -122,7 +125,9 @@ mod tests {
     #[test]
     fn cloned_snapshot_uses_one_registry_lease() -> Result<()> {
         let registry = Arc::new(SnapshotRegistry::default());
-        let snapshot = registry.register(DatabaseId::random(), Some(SequenceNumber::FIRST))?;
+        let identity = DatabaseId::random();
+        let handle_id = DatabaseId::random();
+        let snapshot = registry.register(identity, handle_id, Some(SequenceNumber::FIRST))?;
         let clone = snapshot.clone();
         assert_eq!(registry.active_handle_count()?, 1);
         drop(snapshot);
@@ -136,8 +141,9 @@ mod tests {
     fn oldest_snapshot_is_reported() -> Result<()> {
         let registry = Arc::new(SnapshotRegistry::default());
         let identity = DatabaseId::random();
-        let newer = registry.register(identity, Some(SequenceNumber::new(9)?))?;
-        let older = registry.register(identity, Some(SequenceNumber::new(3)?))?;
+        let handle_id = DatabaseId::random();
+        let newer = registry.register(identity, handle_id, Some(SequenceNumber::new(9)?))?;
+        let older = registry.register(identity, handle_id, Some(SequenceNumber::new(3)?))?;
         assert_eq!(registry.oldest_active_sequence()?, Some(SequenceNumber::new(3)?));
         drop(older);
         assert_eq!(registry.oldest_active_sequence()?, Some(SequenceNumber::new(9)?));
