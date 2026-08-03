@@ -1,17 +1,29 @@
-//! Публичный API ForgeDB v0.1.0.
+//! Публичный API ForgeDB v0.3.0.
 //!
-//! Версия предоставляет durable WAL V1, mutable memtable, point get/put/delete,
-//! атомарный WriteBatch и восстановление после повторного открытия.
+//! Версия добавляет immutable VersionSet, MVCC snapshots, snapshot-aware point reads,
+//! forward range scan, file inventory и deep verification поверх WAL/SSTable/MANIFEST V1.
 
-mod database;
-mod memtable;
+mod database_v3;
+mod inventory;
+mod iterator;
+mod mvcc_memtable;
 mod options;
+mod read_options;
+mod snapshot;
+mod table_scan;
+mod verify;
+mod version_set;
 mod write_options;
 
-pub use database::Database;
+pub use database_v3::Database;
 pub use forgedb_core::{
     BatchOperation, ColumnFamilyId, DatabaseId, Error, InternalKey, InternalKeyCodec,
     InternalKeyComparator, Limits, Result, SequenceNumber, ValueType, WriteBatch,
 };
+pub use inventory::FileInventory;
+pub use iterator::DbIterator;
 pub use options::Options;
+pub use read_options::ReadOptions;
+pub use snapshot::Snapshot;
+pub use verify::{VerifyOptions, VerifyReport};
 pub use write_options::{Durability, WriteOptions};
