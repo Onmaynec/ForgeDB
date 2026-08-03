@@ -3,88 +3,88 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
-/// The public ForgeDB error model.
+/// Публичная модель ошибок ForgeDB.
 #[derive(Debug)]
 pub enum Error {
-    /// An operating-system I/O operation failed.
+    /// Системная операция ввода-вывода завершилась ошибкой.
     Io {
-        /// Stable operation name.
+        /// Стабильное имя операции.
         operation: &'static str,
-        /// Path involved in the operation, when safe and available.
+        /// Путь операции, когда его безопасно и возможно предоставить.
         path: Option<PathBuf>,
-        /// Original I/O error.
+        /// Исходная ошибка ввода-вывода.
         source: io::Error,
     },
-    /// Persisted or encoded data violated its format contract.
+    /// Persisted или encoded данные нарушили контракт формата.
     Corruption {
-        /// File containing the problem, when applicable.
+        /// Файл с проблемой, когда применимо.
         file: Option<PathBuf>,
-        /// Byte offset containing the problem, when applicable.
+        /// Byte offset проблемы, когда применимо.
         offset: Option<u64>,
-        /// Stable component name.
+        /// Стабильное имя компонента.
         component: &'static str,
-        /// Human-readable reason without raw values.
+        /// Читаемая причина без raw values.
         reason: String,
     },
-    /// A persisted format version is outside the supported range.
+    /// Версия persisted-формата находится вне поддерживаемого диапазона.
     UnsupportedFormat {
-        /// Stable format component name.
+        /// Стабильное имя компонента формата.
         component: &'static str,
-        /// Version found in the input.
+        /// Версия, найденная во входных данных.
         found: u32,
-        /// Oldest supported version.
+        /// Самая старая поддерживаемая версия.
         minimum_supported: u32,
-        /// Newest supported version.
+        /// Самая новая поддерживаемая версия.
         maximum_supported: u32,
     },
-    /// A caller supplied an invalid argument or configuration value.
+    /// Caller передал неверный аргумент или значение конфигурации.
     InvalidArgument {
-        /// Stable field name.
+        /// Стабильное имя поля.
         field: &'static str,
-        /// Human-readable reason.
+        /// Читаемая причина.
         reason: String,
     },
-    /// A database or resource is currently busy.
+    /// База или ресурс сейчас заняты.
     Busy {
-        /// Human-readable reason.
+        /// Читаемая причина.
         reason: String,
     },
-    /// An optimistic transaction detected conflicts.
+    /// Optimistic transaction обнаружила конфликты.
     Conflict {
-        /// Conflicting binary keys. Callers should avoid logging them verbatim.
+        /// Конфликтующие бинарные ключи; caller не должен безусловно писать их в log.
         keys: Vec<Vec<u8>>,
     },
-    /// A configured or structural resource limit was exceeded.
+    /// Настроенный или структурный resource limit превышен.
     ResourceLimit {
-        /// Stable resource name.
+        /// Стабильное имя ресурса.
         resource: &'static str,
-        /// Configured or structural limit.
+        /// Настроенная или структурная граница.
         limit: u64,
-        /// Observed value.
+        /// Наблюдаемое значение.
         observed: u64,
     },
-    /// The database is read-only.
+    /// База открыта только для чтения.
     ReadOnly,
-    /// The database has been closed.
+    /// База закрыта.
     Closed,
-    /// A background storage component entered a fatal state.
+    /// Фоновый storage-компонент перешёл в fatal state.
     BackgroundFailure {
-        /// Stable component name.
+        /// Стабильное имя компонента.
         component: &'static str,
-        /// Human-readable reason.
+        /// Читаемая причина.
         reason: String,
     },
-    /// An internal invariant was violated.
+    /// Внутренний инвариант нарушен.
     InternalInvariant {
-        /// Stable invariant identifier.
+        /// Стабильный идентификатор инварианта.
         invariant: &'static str,
-        /// Human-readable reason.
+        /// Читаемая причина.
         reason: String,
     },
 }
 
 impl Error {
-    /// Creates an I/O error with operation and path context.
+    /// Создаёт I/O error с контекстом операции и пути.
     #[must_use]
     pub fn io(
         operation: &'static str,
@@ -98,7 +98,7 @@ impl Error {
         }
     }
 
-    /// Creates a corruption error without file context.
+    /// Создаёт corruption error без контекста файла.
     #[must_use]
     pub fn corruption(component: &'static str, reason: impl Into<String>) -> Self {
         Self::Corruption {
@@ -109,7 +109,7 @@ impl Error {
         }
     }
 
-    /// Creates an invalid-argument error.
+    /// Создаёт invalid-argument error.
     #[must_use]
     pub fn invalid_argument(field: &'static str, reason: impl Into<String>) -> Self {
         Self::InvalidArgument {
@@ -130,11 +130,11 @@ impl fmt::Display for Error {
                 if let Some(path) = path {
                     write!(
                         formatter,
-                        "I/O error during {operation} at {}: {source}",
+                        "ошибка I/O во время {operation} по пути {}: {source}",
                         path.display()
                     )
                 } else {
-                    write!(formatter, "I/O error during {operation}: {source}")
+                    write!(formatter, "ошибка I/O во время {operation}: {source}")
                 }
             }
             Self::Corruption {
@@ -143,12 +143,12 @@ impl fmt::Display for Error {
                 component,
                 reason,
             } => {
-                write!(formatter, "corruption in {component}")?;
+                write!(formatter, "повреждение данных в {component}")?;
                 if let Some(file) = file {
-                    write!(formatter, " at {}", file.display())?;
+                    write!(formatter, " в файле {}", file.display())?;
                 }
                 if let Some(offset) = offset {
-                    write!(formatter, " offset {offset}")?;
+                    write!(formatter, " по смещению {offset}")?;
                 }
                 write!(formatter, ": {reason}")
             }
@@ -159,14 +159,14 @@ impl fmt::Display for Error {
                 maximum_supported,
             } => write!(
                 formatter,
-                "unsupported {component} format version {found}; supported range is {minimum_supported}..={maximum_supported}"
+                "неподдерживаемая версия формата {component}: {found}; поддерживается диапазон {minimum_supported}..={maximum_supported}"
             ),
             Self::InvalidArgument { field, reason } => {
-                write!(formatter, "invalid argument {field}: {reason}")
+                write!(formatter, "неверный аргумент {field}: {reason}")
             }
-            Self::Busy { reason } => write!(formatter, "resource is busy: {reason}"),
+            Self::Busy { reason } => write!(formatter, "ресурс занят: {reason}"),
             Self::Conflict { keys } => {
-                write!(formatter, "transaction conflict on {} key(s)", keys.len())
+                write!(formatter, "конфликт transaction для {} ключей", keys.len())
             }
             Self::ResourceLimit {
                 resource,
@@ -174,15 +174,21 @@ impl fmt::Display for Error {
                 observed,
             } => write!(
                 formatter,
-                "resource limit exceeded for {resource}: observed {observed}, limit {limit}"
+                "превышен resource limit для {resource}: наблюдается {observed}, предел {limit}"
             ),
-            Self::ReadOnly => formatter.write_str("database is read-only"),
-            Self::Closed => formatter.write_str("database is closed"),
+            Self::ReadOnly => formatter.write_str("база открыта только для чтения"),
+            Self::Closed => formatter.write_str("база закрыта"),
             Self::BackgroundFailure { component, reason } => {
-                write!(formatter, "background failure in {component}: {reason}")
+                write!(
+                    formatter,
+                    "фатальная ошибка компонента {component}: {reason}"
+                )
             }
             Self::InternalInvariant { invariant, reason } => {
-                write!(formatter, "internal invariant {invariant} failed: {reason}")
+                write!(
+                    formatter,
+                    "нарушен внутренний инвариант {invariant}: {reason}"
+                )
             }
         }
     }
@@ -197,5 +203,5 @@ impl StdError for Error {
     }
 }
 
-/// ForgeDB result alias.
+/// Alias результата ForgeDB.
 pub type Result<T> = std::result::Result<T, Error>;

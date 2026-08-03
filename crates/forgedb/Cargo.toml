@@ -1,6 +1,6 @@
 [package]
 name = "forgedb"
-description = "Public API foundation for the ForgeDB embedded storage engine"
+description = "Публичный API встраиваемого storage engine ForgeDB"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 forgedb-core = { path = "../forgedb-core" }
 forgedb-fs = { path = "../forgedb-fs" }
+forgedb-wal = { path = "../forgedb-wal" }
 
 [lints]
 workspace = true

@@ -1,4 +1,7 @@
-//! ForgeDB filesystem abstraction, native implementation, locking, and identity.
+//! Файловая абстракция ForgeDB, native-реализация, блокировка и database identity.
+//!
+//! Crate изолирует platform-specific I/O, синхронизацию каталогов,
+//! усечение файлов и process-level lock от WAL и публичного API.
 
 mod filesystem;
 mod identity;

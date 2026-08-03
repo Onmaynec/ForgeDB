@@ -1,36 +1,72 @@
 # ForgeDB
 
-ForgeDB is a production-oriented embedded key-value storage engine being built in Rust.
-The project prioritizes correctness, explicit durability contracts, bounded resource use,
-versioned persisted formats, and corruption detection before performance optimization.
+ForgeDB — встраиваемый key-value storage engine на Rust. Проект ставит корректность,
+явные гарантии durability, ограниченное использование ресурсов, версионируемые persisted-форматы
+и обнаружение повреждений выше преждевременной оптимизации производительности.
 
-## Current milestone: v0.0.1 — Foundation
+## Текущий этап: v0.1.0 — Durable WAL Core
 
-This release contains the non-storage foundation only:
+Версия реализует первый рабочий путь записи и восстановления:
 
-- a Rust 2024 Cargo workspace with a Rust 1.89 MSRV;
-- the public error model and validated database options;
-- `DatabaseId`, `SequenceNumber`, `ColumnFamilyId`, and `ValueType`;
-- logical internal-key ordering plus a bounded versioned codec;
-- atomic in-memory `WriteBatch` construction with checked size accounting;
-- a filesystem abstraction and native implementation;
-- process-level exclusive database locking using operating-system file locks;
-- a versioned `IDENTITY` file with file and directory synchronization;
-- Linux and Windows CI, architecture decisions, and invariant documentation.
+- Rust 2024 workspace с минимальной поддерживаемой версией Rust 1.89;
+- бинарные ключи и значения в библиотечном API;
+- `Database::open`, `put`, `get`, `delete`, `write` и `close`;
+- атомарный `WriteBatch`;
+- возрастающие `SequenceNumber` с допустимыми пропусками после `DisableWal`;
+- WAL V1 с фиксированными заголовками, CRC32C и строгими лимитами до allocation;
+- mutable memtable на `BTreeMap` с preflight-проверкой памяти;
+- режимы записи `Sync`, `NoSync` и `DisableWal`;
+- replay всех полных кадров после повторного открытия;
+- безопасное игнорирование и усечение только последнего физически неполного кадра;
+- отказ от открытия при checksum mismatch, неизвестной версии, неверном identity или повреждении полного кадра;
+- process-level эксклюзивная блокировка каталога базы;
+- CLI-команды `put`, `get` и `delete`.
 
-ForgeDB **does not yet provide a database open, put, get, WAL, memtable, SSTable, recovery,
-or durability implementation**. Those claims begin only when the corresponding milestones are
-implemented and tested.
+## Пример библиотеки
 
-## Workspace
+```rust
+use forgedb::{Database, Options, Result, WriteOptions};
 
-```text
-crates/forgedb       Public API types and configuration
-crates/forgedb-core  Storage-neutral primitives, codecs, limits, and batches
-crates/forgedb-fs    Filesystem abstraction, native locking, and database identity
+fn main() -> Result<()> {
+    let database = Database::open("./data", Options::default())?;
+    database.put(b"user:42", b"Alice", WriteOptions::sync())?;
+    assert_eq!(database.get(b"user:42")?, Some(b"Alice".to_vec()));
+    database.delete(b"user:42", WriteOptions::sync())?;
+    database.close()?;
+    Ok(())
+}
 ```
 
-## Development
+## CLI
+
+```bash
+cargo run -p forgedb-cli -- put ./data key value --sync
+cargo run -p forgedb-cli -- get ./data key
+cargo run -p forgedb-cli -- delete ./data key --sync
+```
+
+CLI v0.1.0 принимает ключи и значения как UTF-8 аргументы командной строки. Библиотечный API
+не имеет этого ограничения и работает с произвольными байтами.
+
+## Режимы durability
+
+- `Sync`: успех возвращается только после append кадра, `sync_all` WAL и атомарного применения batch к memtable.
+- `NoSync`: batch записывается в WAL и становится видимым без обязательного физического sync перед возвратом.
+- `DisableWal`: batch применяется только к memtable и может исчезнуть при process crash.
+
+Точные границы гарантий описаны в [`docs/DURABILITY.md`](docs/DURABILITY.md).
+
+## Структура workspace
+
+```text
+crates/forgedb       Публичный API, Database и mutable memtable
+crates/forgedb-cli   Командная строка put/get/delete
+crates/forgedb-core  Storage-neutral типы, лимиты, internal keys и WriteBatch
+crates/forgedb-fs    Файловая абстракция, native lock и database identity
+crates/forgedb-wal   Формат WAL V1, writer, replay и CRC32C
+```
+
+## Проверка
 
 ```bash
 cargo fmt --all --check
@@ -40,14 +76,23 @@ cargo test --workspace --doc
 cargo build --workspace --release
 ```
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
-[`docs/INVARIANTS.md`](docs/INVARIANTS.md), and the ADRs under [`docs/adr`](docs/adr).
+CI выполняет проверки на Ubuntu stable, Windows stable и Rust 1.89.
 
-## Roadmap
+## Ограничения v0.1.0
 
-The next milestone is `v0.1.0 — Durable WAL Core`: WAL V1, mutable memtable, ordered writes,
-atomic write batches, sync/no-sync durability, recovery, and corruption handling.
+В версии ещё нет SSTable, MANIFEST, flush, compaction, snapshots, transactions, column-family API,
+WAL rotation и фоновых worker. Memtable имеет жёсткий предел: запись отклоняется до изменения WAL,
+если projected memory превышает `Options::memtable_size`.
 
-## License
+## Документация
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — границы компонентов;
+- [`docs/WRITE_PATH.md`](docs/WRITE_PATH.md) — порядок записи;
+- [`docs/RECOVERY.md`](docs/RECOVERY.md) — replay и corruption policy;
+- [`docs/formats/WAL_V1.md`](docs/formats/WAL_V1.md) — нормативный бинарный формат;
+- [`docs/INVARIANTS.md`](docs/INVARIANTS.md) — проверяемые инварианты;
+- [`docs/adr`](docs/adr) — принятые архитектурные решения.
+
+## Лицензия
 
 MIT.

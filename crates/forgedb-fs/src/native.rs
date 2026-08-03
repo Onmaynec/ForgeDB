@@ -5,11 +5,11 @@ use forgedb_core::{Error, Result};
 
 use crate::FileSystem;
 
-/// Safe native filesystem implementation.
+/// Безопасная native-реализация файловой системы.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NativeFileSystem;
 
-/// Guard that keeps an operating-system exclusive file lock alive.
+/// Guard, удерживающий эксклюзивную системную блокировку файла.
 #[derive(Debug)]
 pub struct NativeLockGuard {
     file: File,
@@ -17,13 +17,13 @@ pub struct NativeLockGuard {
 }
 
 impl NativeLockGuard {
-    /// Returns the lock-file path.
+    /// Возвращает путь lock-файла.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// Returns the locked file handle for diagnostics.
+    /// Возвращает заблокированный handle для диагностики.
     #[must_use]
     pub fn file(&self) -> &File {
         &self.file
@@ -109,6 +109,18 @@ impl FileSystem for NativeFileSystem {
             .map_err(|source| Error::io("file_size", Some(path.into()), source))
     }
 
+    fn truncate_file(&self, path: &Path, length: u64) -> Result<()> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|source| Error::io("open_for_truncate", Some(path.into()), source))?;
+        file.set_len(length)
+            .map_err(|source| Error::io("truncate_file", Some(path.into()), source))?;
+        file.sync_all()
+            .map_err(|source| Error::io("sync_truncated_file", Some(path.into()), source))
+    }
+
     fn sync_directory(&self, path: &Path) -> Result<()> {
         sync_directory_native(path)
             .map_err(|source| Error::io("sync_directory", Some(path.into()), source))
@@ -128,7 +140,7 @@ impl FileSystem for NativeFileSystem {
                 path: path.to_path_buf(),
             }),
             Err(TryLockError::WouldBlock) => Err(Error::Busy {
-                reason: format!("database lock is already held at {}", path.display()),
+                reason: format!("блокировка базы уже удерживается: {}", path.display()),
             }),
             Err(TryLockError::Error(source)) => {
                 Err(Error::io("lock_exclusive", Some(path.into()), source))
@@ -162,6 +174,7 @@ fn sync_directory_native(path: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
@@ -191,6 +204,24 @@ mod tests {
         drop(first);
         let second = filesystem.lock_exclusive(&path)?;
         drop(second);
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
+    #[test]
+    fn truncate_file_persists_new_length() -> Result<()> {
+        let directory = temporary_directory("truncate")?;
+        let path = directory.join("test.bin");
+        let mut file = File::create(&path)
+            .map_err(|source| Error::io("create_test_file", Some(path.clone()), source))?;
+        file.write_all(b"123456")
+            .map_err(|source| Error::io("write_test_file", Some(path.clone()), source))?;
+        file.sync_all()
+            .map_err(|source| Error::io("sync_test_file", Some(path.clone()), source))?;
+        drop(file);
+        NativeFileSystem.truncate_file(&path, 3)?;
+        assert_eq!(NativeFileSystem.file_size(&path)?, 3);
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
         Ok(())

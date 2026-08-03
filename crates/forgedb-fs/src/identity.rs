@@ -5,14 +5,14 @@ use forgedb_core::{DatabaseId, Error, Result};
 
 use crate::{FileSystem, WritableFile};
 
-/// Stable database identity filename.
+/// Стабильное имя файла database identity.
 pub const IDENTITY_FILE_NAME: &str = "IDENTITY";
 const IDENTITY_PREFIX: &str = "FORGEDB-IDENTITY-V1\n";
 const MAX_IDENTITY_BYTES: u64 = 128;
 
-/// Loads an existing database identity or installs a newly generated identity.
+/// Загружает существующий database identity или устанавливает новый случайный identity.
 ///
-/// Callers must hold the database `LOCK` before invoking this operation.
+/// Caller обязан удерживать `LOCK` базы до вызова этой операции.
 pub fn load_or_create_identity<F: FileSystem>(
     filesystem: &F,
     directory: &Path,
@@ -28,7 +28,7 @@ pub fn load_or_create_identity<F: FileSystem>(
     }
 }
 
-/// Reads and validates an existing identity file.
+/// Читает и полностью проверяет существующий файл identity.
 pub fn read_identity<F: FileSystem>(filesystem: &F, directory: &Path) -> Result<DatabaseId> {
     let path = directory.join(IDENTITY_FILE_NAME);
     let reader = filesystem.open_sequential(&path)?;
@@ -73,7 +73,7 @@ fn read_identity_from_reader<R: Read>(reader: R) -> Result<DatabaseId> {
         });
     }
     let text = std::str::from_utf8(&bytes)
-        .map_err(|_| Error::corruption("database identity", "file is not valid UTF-8"))?;
+        .map_err(|_| Error::corruption("database identity", "файл не является корректным UTF-8"))?;
     let identifier = text
         .strip_prefix(IDENTITY_PREFIX)
         .and_then(|rest| rest.strip_suffix('\n'))
@@ -86,7 +86,10 @@ fn read_identity_from_reader<R: Read>(reader: R) -> Result<DatabaseId> {
                     maximum_supported: 1,
                 }
             } else {
-                Error::corruption("database identity", "header or final newline is invalid")
+                Error::corruption(
+                    "database identity",
+                    "заголовок или завершающий перевод строки неверны",
+                )
             }
         })?;
     DatabaseId::parse(identifier)

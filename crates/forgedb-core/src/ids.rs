@@ -9,14 +9,14 @@ use crate::{Error, Result};
 
 static DATABASE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-/// Stable 128-bit database identity stored in `IDENTITY`.
+/// Стабильный 128-битный идентификатор базы, хранимый в `IDENTITY`.
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct DatabaseId([u8; 16]);
 
 impl DatabaseId {
-    /// Generates a version-4-shaped identifier from independently seeded standard-library hashers.
+    /// Создаёт version-4-shaped идентификатор из независимо seeded hashers стандартной библиотеки.
     ///
-    /// The identifier is used for accidental file-mixing detection, not cryptographic security.
+    /// Идентификатор обнаруживает случайное смешивание файлов и не является криптографической защитой.
     #[must_use]
     pub fn random() -> Self {
         let elapsed = SystemTime::now()
@@ -47,24 +47,24 @@ impl DatabaseId {
         Self(bytes)
     }
 
-    /// Creates an identity from its raw bytes.
+    /// Создаёт identity из исходных 16 байт.
     #[must_use]
     pub const fn from_bytes(bytes: [u8; 16]) -> Self {
         Self(bytes)
     }
 
-    /// Returns the raw identity bytes.
+    /// Возвращает исходные байты identity.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 16] {
         &self.0
     }
 
-    /// Parses a canonical hyphenated identifier.
+    /// Разбирает canonical идентификатор с дефисами.
     pub fn parse(input: &str) -> Result<Self> {
         if input.len() != 36 {
             return Err(Error::corruption(
                 "database identity",
-                "identifier must contain exactly 36 ASCII bytes",
+                "идентификатор должен содержать ровно 36 ASCII-байт",
             ));
         }
 
@@ -76,7 +76,7 @@ impl DatabaseId {
                 if byte != b'-' {
                     return Err(Error::corruption(
                         "database identity",
-                        "identifier separators are invalid",
+                        "разделители идентификатора расположены неверно",
                     ));
                 }
                 continue;
@@ -84,7 +84,7 @@ impl DatabaseId {
             if byte == b'-' || compact_len >= compact.len() {
                 return Err(Error::corruption(
                     "database identity",
-                    "identifier contains an unexpected separator",
+                    "идентификатор содержит неожиданный разделитель",
                 ));
             }
             compact[compact_len] = byte;
@@ -94,7 +94,7 @@ impl DatabaseId {
         if compact_len != compact.len() {
             return Err(Error::corruption(
                 "database identity",
-                "identifier has the wrong number of hexadecimal digits",
+                "идентификатор содержит неверное число hexadecimal digits",
             ));
         }
 
@@ -115,7 +115,7 @@ fn decode_hex(byte: u8) -> Result<u8> {
         b'A'..=b'F' => Ok(byte - b'A' + 10),
         _ => Err(Error::corruption(
             "database identity",
-            "identifier contains a non-hexadecimal byte",
+            "идентификатор содержит не-hexadecimal байт",
         )),
     }
 }
@@ -138,58 +138,58 @@ impl fmt::Debug for DatabaseId {
     }
 }
 
-/// Column-family identifier embedded in every internal key.
+/// Идентификатор column family, встроенный в каждый internal key.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ColumnFamilyId(u32);
 
 impl ColumnFamilyId {
-    /// The default and only supported column family in early milestones.
+    /// Default и единственная поддерживаемая column family ранних milestone.
     pub const DEFAULT: Self = Self(0);
 
-    /// Creates a column-family identifier.
+    /// Создаёт идентификатор column family.
     #[must_use]
     pub const fn new(value: u32) -> Self {
         Self(value)
     }
 
-    /// Returns the underlying numeric identifier.
+    /// Возвращает underlying числовой идентификатор.
     #[must_use]
     pub const fn get(self) -> u32 {
         self.0
     }
 }
 
-/// Global non-zero MVCC sequence number.
+/// Глобальный ненулевой MVCC sequence number.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SequenceNumber(u64);
 
 impl SequenceNumber {
-    /// The first valid sequence number.
+    /// Первый допустимый sequence number.
     pub const FIRST: Self = Self(1);
 
-    /// Creates a sequence number, rejecting reserved zero.
+    /// Создаёт sequence number и отклоняет зарезервированный ноль.
     pub fn new(value: u64) -> Result<Self> {
         if value == 0 {
             return Err(Error::invalid_argument(
                 "sequence_number",
-                "zero is reserved",
+                "ноль зарезервирован",
             ));
         }
         Ok(Self(value))
     }
 
-    /// Returns the underlying number.
+    /// Возвращает underlying число.
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
 
-    /// Returns the next sequence number without wrapping.
+    /// Возвращает следующий sequence number без wraparound.
     pub fn checked_next(self) -> Result<Self> {
         self.checked_add(1)
     }
 
-    /// Adds a positive offset without wrapping or producing zero.
+    /// Добавляет положительный offset без wraparound и появления нуля.
     pub fn checked_add(self, offset: u64) -> Result<Self> {
         let value = self.0.checked_add(offset).ok_or(Error::ResourceLimit {
             resource: "sequence_number",
@@ -199,12 +199,12 @@ impl SequenceNumber {
         Self::new(value)
     }
 
-    /// Returns the inclusive final sequence for a non-empty mutation range.
+    /// Возвращает последний включённый sequence непустого диапазона mutations.
     pub fn inclusive_end(self, operation_count: usize) -> Result<Self> {
         if operation_count == 0 {
             return Err(Error::invalid_argument(
                 "operation_count",
-                "a sequence range must contain at least one operation",
+                "sequence range должен содержать хотя бы одну операцию",
             ));
         }
         let offset = u64::try_from(operation_count - 1).map_err(|_| Error::ResourceLimit {
@@ -216,13 +216,13 @@ impl SequenceNumber {
     }
 }
 
-/// Kind of internal-key record.
+/// Тип записи internal key.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ValueType {
-    /// A deletion tombstone.
+    /// Tombstone удаления.
     Deletion = 0,
-    /// A stored value.
+    /// Сохранённое значение.
     Value = 1,
 }
 
@@ -233,7 +233,7 @@ impl TryFrom<u8> for ValueType {
         match value {
             0 => Ok(Self::Deletion),
             1 => Ok(Self::Value),
-            _ => Err(Error::corruption("internal key", "unknown value type")),
+            _ => Err(Error::corruption("internal key", "неизвестный value type")),
         }
     }
 }

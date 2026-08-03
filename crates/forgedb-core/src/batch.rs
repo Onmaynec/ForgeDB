@@ -1,30 +1,30 @@
 use crate::{ColumnFamilyId, Error, Limits, Result};
 
-/// One operation in a write batch.
+/// Одна операция внутри WriteBatch.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BatchOperation {
-    /// Store or replace one value.
+    /// Сохранить новое или заменить существующее значение.
     Put {
-        /// Target column family.
+        /// Целевая column family.
         column_family: ColumnFamilyId,
-        /// Binary user key.
+        /// Бинарный user key.
         key: Vec<u8>,
-        /// Binary value.
+        /// Бинарное значение.
         value: Vec<u8>,
     },
-    /// Add a deletion tombstone.
+    /// Добавить tombstone удаления.
     Delete {
-        /// Target column family.
+        /// Целевая column family.
         column_family: ColumnFamilyId,
-        /// Binary user key.
+        /// Бинарный user key.
         key: Vec<u8>,
     },
 }
 
-/// Atomically constructed collection of mutations.
+/// Атомарно формируемая коллекция mutations.
 ///
-/// The batch mutates only after an operation and its resulting aggregate size have passed all
-/// configured limits.
+/// Batch изменяется только после того, как новая операция и итоговый агрегированный размер
+/// прошли все настроенные лимиты.
 #[derive(Clone, Debug)]
 pub struct WriteBatch {
     operations: Vec<BatchOperation>,
@@ -33,13 +33,13 @@ pub struct WriteBatch {
 }
 
 impl WriteBatch {
-    /// Creates a batch with default limits.
+    /// Создаёт batch с лимитами по умолчанию.
     #[must_use]
     pub fn new() -> Self {
         Self::with_limits(Limits::default())
     }
 
-    /// Creates a batch with caller-provided limits.
+    /// Создаёт batch с лимитами caller.
     #[must_use]
     pub fn with_limits(limits: Limits) -> Self {
         Self {
@@ -49,12 +49,12 @@ impl WriteBatch {
         }
     }
 
-    /// Adds a put in the default column family.
+    /// Добавляет Put в default column family.
     pub fn put(&mut self, key: impl AsRef<[u8]>, value: impl AsRef<[u8]>) -> Result<()> {
         self.put_cf(ColumnFamilyId::DEFAULT, key, value)
     }
 
-    /// Adds a put in a column family.
+    /// Добавляет Put в указанную column family.
     pub fn put_cf(
         &mut self,
         column_family: ColumnFamilyId,
@@ -77,12 +77,12 @@ impl WriteBatch {
         Ok(())
     }
 
-    /// Adds a deletion in the default column family.
+    /// Добавляет Delete в default column family.
     pub fn delete(&mut self, key: impl AsRef<[u8]>) -> Result<()> {
         self.delete_cf(ColumnFamilyId::DEFAULT, key)
     }
 
-    /// Adds a deletion in a column family.
+    /// Добавляет Delete в указанную column family.
     pub fn delete_cf(
         &mut self,
         column_family: ColumnFamilyId,
@@ -101,31 +101,31 @@ impl WriteBatch {
         Ok(())
     }
 
-    /// Returns queued operations.
+    /// Возвращает очередь операций.
     #[must_use]
     pub fn operations(&self) -> &[BatchOperation] {
         &self.operations
     }
 
-    /// Returns the exact future WAL payload size for the current V1 operation encoding.
+    /// Возвращает точный размер будущего WAL payload для текущего operation encoding V1.
     #[must_use]
     pub const fn encoded_size(&self) -> usize {
         self.encoded_size
     }
 
-    /// Returns the number of operations.
+    /// Возвращает число операций.
     #[must_use]
     pub fn len(&self) -> usize {
         self.operations.len()
     }
 
-    /// Returns whether the batch contains no operations.
+    /// Возвращает `true`, когда batch не содержит операций.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.operations.is_empty()
     }
 
-    /// Revalidates the complete batch against a different set of database limits.
+    /// Повторно проверяет полный batch относительно другого набора database limits.
     pub fn validate_against(&self, limits: &Limits) -> Result<()> {
         limits.validate()?;
         if self.operations.len() > limits.max_batch_operations {
@@ -218,7 +218,7 @@ fn ensure_supported_column_family(column_family: ColumnFamilyId) -> Result<()> {
     if column_family != ColumnFamilyId::DEFAULT {
         return Err(Error::invalid_argument(
             "column_family",
-            "only the default column family is supported before v0.7.0",
+            "до v0.7.0 поддерживается только default column family",
         ));
     }
     Ok(())

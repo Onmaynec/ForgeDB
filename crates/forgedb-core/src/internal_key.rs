@@ -7,7 +7,7 @@ const FORMAT_VERSION: u8 = 1;
 const FIXED_PREFIX_SIZE: usize = 16;
 const FIXED_SUFFIX_SIZE: usize = 9;
 
-/// One MVCC internal key.
+/// Один MVCC internal key.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InternalKey {
     column_family: ColumnFamilyId,
@@ -17,7 +17,7 @@ pub struct InternalKey {
 }
 
 impl InternalKey {
-    /// Creates a bounded internal key.
+    /// Создаёт bounded internal key.
     pub fn new(
         column_family: ColumnFamilyId,
         user_key: impl Into<Vec<u8>>,
@@ -35,25 +35,25 @@ impl InternalKey {
         })
     }
 
-    /// Returns the column-family identifier.
+    /// Возвращает идентификатор column family.
     #[must_use]
     pub const fn column_family(&self) -> ColumnFamilyId {
         self.column_family
     }
 
-    /// Returns the user-key bytes.
+    /// Возвращает байты user key.
     #[must_use]
     pub fn user_key(&self) -> &[u8] {
         &self.user_key
     }
 
-    /// Returns the sequence number.
+    /// Возвращает sequence number.
     #[must_use]
     pub const fn sequence(&self) -> SequenceNumber {
         self.sequence
     }
 
-    /// Returns the value type.
+    /// Возвращает value type.
     #[must_use]
     pub const fn value_type(&self) -> ValueType {
         self.value_type
@@ -72,16 +72,15 @@ impl PartialOrd for InternalKey {
     }
 }
 
-/// Logical internal-key comparator.
+/// Логический comparator internal keys.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InternalKeyComparator;
 
 impl InternalKeyComparator {
-    /// Stable comparator identity persisted by later MANIFEST versions.
+    /// Стабильное имя comparator, которое будут сохранять будущие версии MANIFEST.
     pub const NAME: &'static str = "forgedb.internal-key.bytewise.v1";
 
-    /// Compares by column family ascending, user key ascending, sequence descending, then type
-    /// descending.
+    /// Сравнивает column family и user key по возрастанию, затем sequence и type по убыванию.
     #[must_use]
     pub fn compare(self, left: &InternalKey, right: &InternalKey) -> Ordering {
         left.column_family
@@ -92,15 +91,15 @@ impl InternalKeyComparator {
     }
 }
 
-/// Bounded Internal Key V1 encoder and decoder.
+/// Bounded encoder и decoder формата Internal Key V1.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InternalKeyCodec;
 
 impl InternalKeyCodec {
-    /// Current supported format version.
+    /// Текущая поддерживаемая версия формата.
     pub const VERSION: u8 = FORMAT_VERSION;
 
-    /// Encodes an internal key using the canonical V1 layout.
+    /// Кодирует internal key в canonical layout V1.
     pub fn encode(key: &InternalKey, limits: &Limits) -> Result<Vec<u8>> {
         limits.validate_key(key.user_key())?;
         let total = FIXED_PREFIX_SIZE
@@ -128,17 +127,17 @@ impl InternalKeyCodec {
         Ok(encoded)
     }
 
-    /// Decodes exactly one Internal Key V1 value.
+    /// Декодирует ровно одно значение Internal Key V1.
     pub fn decode(encoded: &[u8], limits: &Limits) -> Result<InternalKey> {
         if encoded.len() < FIXED_PREFIX_SIZE + FIXED_SUFFIX_SIZE {
-            return Err(Error::corruption("internal key", "input is truncated"));
+            return Err(Error::corruption("internal key", "input усечён"));
         }
         if encoded.get(..4) != Some(MAGIC.as_slice()) {
-            return Err(Error::corruption("internal key", "magic mismatch"));
+            return Err(Error::corruption("internal key", "magic не совпадает"));
         }
         let version = *encoded
             .get(4)
-            .ok_or_else(|| Error::corruption("internal key", "missing version"))?;
+            .ok_or_else(|| Error::corruption("internal key", "отсутствует version"))?;
         if version != FORMAT_VERSION {
             return Err(Error::UnsupportedFormat {
                 component: "internal key",
@@ -150,12 +149,12 @@ impl InternalKeyCodec {
         if encoded.get(5..8) != Some([0_u8; 3].as_slice()) {
             return Err(Error::corruption(
                 "internal key",
-                "reserved header bytes are non-zero",
+                "reserved bytes заголовка не равны нулю",
             ));
         }
 
         let column_family = read_u32(encoded, 8, "column family")?;
-        let key_length_u32 = read_u32(encoded, 12, "user-key length")?;
+        let key_length_u32 = read_u32(encoded, 12, "длина user key")?;
         let key_length = usize::try_from(key_length_u32).map_err(|_| Error::ResourceLimit {
             resource: "internal_key_user_key_length",
             limit: u64::try_from(limits.max_key_size).unwrap_or(u64::MAX),
@@ -172,36 +171,36 @@ impl InternalKeyCodec {
         let key_start = FIXED_PREFIX_SIZE;
         let key_end = key_start
             .checked_add(key_length)
-            .ok_or_else(|| Error::corruption("internal key", "user-key range overflows"))?;
+            .ok_or_else(|| Error::corruption("internal key", "диапазон user key переполнен"))?;
         let expected_length = key_end
             .checked_add(FIXED_SUFFIX_SIZE)
-            .ok_or_else(|| Error::corruption("internal key", "encoded length overflows"))?;
+            .ok_or_else(|| Error::corruption("internal key", "encoded length переполнена"))?;
         if encoded.len() != expected_length {
             return Err(Error::corruption(
                 "internal key",
-                "encoded length does not match user-key length",
+                "encoded length не совпадает с длиной user key",
             ));
         }
 
         let user_key = encoded
             .get(key_start..key_end)
-            .ok_or_else(|| Error::corruption("internal key", "user key is truncated"))?
+            .ok_or_else(|| Error::corruption("internal key", "user key усечён"))?
             .to_vec();
         let sequence = read_u64(encoded, key_end, "sequence")?;
         let value_type_offset = key_end
             .checked_add(8)
-            .ok_or_else(|| Error::corruption("internal key", "value-type offset overflows"))?;
+            .ok_or_else(|| Error::corruption("internal key", "offset value type переполнен"))?;
         let value_type = ValueType::try_from(
             *encoded
                 .get(value_type_offset)
-                .ok_or_else(|| Error::corruption("internal key", "value type is truncated"))?,
+                .ok_or_else(|| Error::corruption("internal key", "value type усечён"))?,
         )?;
 
         InternalKey::new(
             ColumnFamilyId::new(column_family),
             user_key,
             SequenceNumber::new(sequence)
-                .map_err(|_| Error::corruption("internal key", "sequence zero is reserved"))?,
+                .map_err(|_| Error::corruption("internal key", "sequence zero зарезервирован"))?,
             value_type,
             limits,
         )
@@ -209,26 +208,36 @@ impl InternalKeyCodec {
 }
 
 fn read_u32(input: &[u8], offset: usize, field: &'static str) -> Result<u32> {
-    let end = offset
-        .checked_add(4)
-        .ok_or_else(|| Error::corruption("internal key", format!("{field} offset overflows")))?;
+    let end = offset.checked_add(4).ok_or_else(|| {
+        Error::corruption("internal key", format!("offset поля {field} переполнен"))
+    })?;
     let bytes: [u8; 4] = input
         .get(offset..end)
-        .ok_or_else(|| Error::corruption("internal key", format!("{field} is truncated")))?
+        .ok_or_else(|| Error::corruption("internal key", format!("поле {field} усечено")))?
         .try_into()
-        .map_err(|_| Error::corruption("internal key", format!("{field} has wrong width")))?;
+        .map_err(|_| {
+            Error::corruption(
+                "internal key",
+                format!("поле {field} имеет неверную ширину"),
+            )
+        })?;
     Ok(u32::from_le_bytes(bytes))
 }
 
 fn read_u64(input: &[u8], offset: usize, field: &'static str) -> Result<u64> {
-    let end = offset
-        .checked_add(8)
-        .ok_or_else(|| Error::corruption("internal key", format!("{field} offset overflows")))?;
+    let end = offset.checked_add(8).ok_or_else(|| {
+        Error::corruption("internal key", format!("offset поля {field} переполнен"))
+    })?;
     let bytes: [u8; 8] = input
         .get(offset..end)
-        .ok_or_else(|| Error::corruption("internal key", format!("{field} is truncated")))?
+        .ok_or_else(|| Error::corruption("internal key", format!("поле {field} усечено")))?
         .try_into()
-        .map_err(|_| Error::corruption("internal key", format!("{field} has wrong width")))?;
+        .map_err(|_| {
+            Error::corruption(
+                "internal key",
+                format!("поле {field} имеет неверную ширину"),
+            )
+        })?;
     Ok(u64::from_le_bytes(bytes))
 }
 

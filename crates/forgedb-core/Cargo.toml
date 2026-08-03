@@ -1,6 +1,6 @@
 [package]
 name = "forgedb-core"
-description = "Storage-neutral primitives for ForgeDB"
+description = "Storage-neutral примитивы ForgeDB"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

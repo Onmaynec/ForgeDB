@@ -1,25 +1,26 @@
-name: Foundation Release
+name: ForgeDB v0.1.0 Pre-release
 
 on:
   push:
     branches: [main]
   pull_request:
     types: [closed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: foundation-release-v0.0.1
+  group: release-v0.1.0
   cancel-in-progress: false
 
 jobs:
   release:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && contains(github.event.head_commit.message, 'release: v0.0.1')) ||
-      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && contains(github.event.pull_request.title, 'release: v0.0.1'))
+      (github.event_name == 'push' && contains(github.event.head_commit.message, 'release: v0.1.0')) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.title == 'release: v0.1.0')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,31 +29,37 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-features
-      - run: cargo test --workspace --doc
-      - run: cargo build --workspace --release
-      - name: Create tag
+      - name: Проверить форматирование
+        run: cargo fmt --all --check
+      - name: Выполнить Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Выполнить тесты
+        run: cargo test --workspace --all-features
+      - name: Выполнить doctests
+        run: cargo test --workspace --doc
+      - name: Собрать release profile
+        run: cargo build --workspace --release
+      - name: Создать аннотированный tag
         shell: bash
         run: |
-          if git rev-parse "v0.0.1" >/dev/null 2>&1; then
-            echo "Tag v0.0.1 already exists"
+          if git rev-parse "v0.1.0" >/dev/null 2>&1; then
+            echo "Tag v0.1.0 уже существует"
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a v0.0.1 -m "ForgeDB v0.0.1 — Foundation"
-            git push origin v0.0.1
+            git tag -a v0.1.0 -m "ForgeDB v0.1.0 — Durable WAL Core"
+            git push origin v0.1.0
           fi
-      - name: Create GitHub release
+      - name: Создать GitHub Pre-release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          if gh release view v0.0.1 >/dev/null 2>&1; then
-            echo "Release v0.0.1 already exists"
+          if gh release view v0.1.0 >/dev/null 2>&1; then
+            echo "Release v0.1.0 уже существует"
           else
-            gh release create v0.0.1 \
-              --title "ForgeDB v0.0.1 — Foundation" \
+            gh release create v0.1.0 \
+              --prerelease \
+              --title "ForgeDB v0.1.0 — Durable WAL Core" \
               --notes-file RELEASE_NOTES.md
           fi
