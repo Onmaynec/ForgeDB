@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   normalize-and-validate:
-    if: github.event.pull_request.merged == true && contains(github.event.pull_request.title, 'maintenance: format v0.1.0')
+    if: ${{ github.event.pull_request.merged == true && contains(github.event.pull_request.title, 'format v0.1.0') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
