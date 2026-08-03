@@ -1,7 +1,9 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use forgedb_core::{BatchOperation, Error, InternalKey, Limits, Result, SequenceNumber, ValueType, WriteBatch};
+use forgedb_core::{
+    BatchOperation, Error, InternalKey, Limits, Result, SequenceNumber, ValueType, WriteBatch,
+};
 use forgedb_sstable::TableEntry;
 
 const ENTRY_OVERHEAD_BYTES: usize = 72;
@@ -119,6 +121,7 @@ impl MvccMemTable {
         self.entries.is_empty()
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn memory_usage(&self) -> usize {
         self.memory_usage
