@@ -1,8 +1,48 @@
-# Validation
+# Контракт проверки
 
-Every milestone commit must pass the repository's Linux, Windows, and minimum-supported-Rust jobs.
-The canonical local command sequence is maintained in `scripts/check.sh` and `scripts/check.ps1`.
+Каждый milestone commit обязан проходить Linux, Windows и minimum-supported-Rust jobs.
 
-A release is created only after formatting, Clippy, unit and property tests, doctests, and a release
-build complete successfully. Windows and minimum-supported-Rust results are treated as release
-requirements, not optional signals.
+## Канонические команды
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+cargo test --workspace --doc
+cargo build --workspace --release
+```
+
+Для MSRV:
+
+```bash
+cargo +1.89 clippy --workspace --all-targets --all-features -- -D warnings
+cargo +1.89 test --workspace --all-features
+```
+
+Локальные последовательности также находятся в `scripts/check.sh` и `scripts/check.ps1`.
+
+## Обязательные классы тестов v0.1.0
+
+- unit tests кодеков, limits, batch и memtable;
+- malformed input и future-version rejection;
+- trailing partial WAL frame;
+- checksum mismatch полного кадра;
+- atomic batch replay;
+- deterministic model put/delete/reopen;
+- process abort после успешной `Sync`-записи;
+- `DisableWal` sequence gap перед durable записью;
+- повторное открытие после `Database::close`;
+- Windows lock, directory sync и truncation.
+
+## Правило выпуска
+
+Tag и GitHub Pre-release создаются только после успешных:
+
+- rustfmt;
+- Clippy без warnings;
+- unit/integration/model/crash tests;
+- doctests;
+- release build;
+- Windows и Rust 1.89 jobs.
+
+Пропуск platform-specific failure, отключение теста или ослабление lint не считается исправлением.
