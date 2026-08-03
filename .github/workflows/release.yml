@@ -3,6 +3,8 @@ name: Foundation Release
 on:
   push:
     branches: [main]
+  pull_request:
+    types: [closed]
   workflow_dispatch:
 
 permissions:
@@ -14,7 +16,10 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'release: v0.0.1')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && contains(github.event.head_commit.message, 'release: v0.0.1')) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && contains(github.event.pull_request.title, 'release: v0.0.1'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
