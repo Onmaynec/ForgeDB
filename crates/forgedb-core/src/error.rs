@@ -179,10 +179,16 @@ impl fmt::Display for Error {
             Self::ReadOnly => formatter.write_str("база открыта только для чтения"),
             Self::Closed => formatter.write_str("база закрыта"),
             Self::BackgroundFailure { component, reason } => {
-                write!(formatter, "фатальная ошибка компонента {component}: {reason}")
+                write!(
+                    formatter,
+                    "фатальная ошибка компонента {component}: {reason}"
+                )
             }
             Self::InternalInvariant { invariant, reason } => {
-                write!(formatter, "нарушен внутренний инвариант {invariant}: {reason}")
+                write!(
+                    formatter,
+                    "нарушен внутренний инвариант {invariant}: {reason}"
+                )
             }
         }
     }
