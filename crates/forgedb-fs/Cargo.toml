@@ -1,0 +1,15 @@
+[package]
+name = "forgedb-fs"
+description = "Filesystem abstraction and native filesystem support for ForgeDB"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+forgedb-core = { path = "../forgedb-core" }
+
+[lints]
+workspace = true
