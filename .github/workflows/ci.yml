@@ -9,46 +9,6 @@ permissions:
   contents: read
 
 jobs:
-  fix-v020:
-    if: github.event_name == 'pull_request' && github.event.pull_request.number == 10 && github.event.action == 'reopened'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - name: Исправить подтверждённые замечания CI
-        shell: python {0}
-        run: |
-          from pathlib import Path
-          path = Path('crates/forgedb-sstable/src/lib.rs')
-          text = path.read_text(encoding='utf-8')
-          text = text.replace('limits: limits.clone(),', 'limits: *limits,')
-          needle = '/// Строит, синхронизирует и атомарно устанавливает один SSTable V1.\npub fn build_table<F: FileSystem>('
-          replacement = '/// Строит, синхронизирует и атомарно устанавливает один SSTable V1.\n#[allow(clippy::too_many_arguments)]\npub fn build_table<F: FileSystem>('
-          if needle not in text:
-              raise SystemExit('build_table marker not found')
-          text = text.replace(needle, replacement, 1)
-          path.write_text(text, encoding='utf-8', newline='\n')
-      - run: cargo fmt --all
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-features
-      - name: Опубликовать исправление
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/forgedb-sstable/src/lib.rs crates/forgedb-manifest crates/forgedb-wal crates/forgedb/src/memtable.rs
-          if git diff --cached --quiet; then
-            exit 0
-          fi
-          git commit -m "fix: нормализовать SSTable и MANIFEST"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
-
   test:
     name: ${{ matrix.os }} / stable
     strategy:
