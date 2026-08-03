@@ -4,19 +4,35 @@ version = 4
 
 [[package]]
 name = "forgedb"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "forgedb-core",
  "forgedb-fs",
+ "forgedb-wal",
+]
+
+[[package]]
+name = "forgedb-cli"
+version = "0.1.0"
+dependencies = [
+ "forgedb",
 ]
 
 [[package]]
 name = "forgedb-core"
-version = "0.0.1"
+version = "0.1.0"
 
 [[package]]
 name = "forgedb-fs"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "forgedb-core",
+]
+
+[[package]]
+name = "forgedb-wal"
+version = "0.1.0"
+dependencies = [
+ "forgedb-core",
+ "forgedb-fs",
 ]
