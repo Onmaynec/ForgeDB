@@ -1,4 +1,8 @@
-//! Storage-neutral ForgeDB primitives.
+//! Storage-neutral примитивы ForgeDB.
+//!
+//! Crate содержит модель ошибок, bounded limits, идентификаторы, sequence numbers,
+//! internal keys и атомарный `WriteBatch`. Он не зависит от файловой системы,
+//! WAL или публичной orchestration базы.
 
 mod batch;
 mod error;
