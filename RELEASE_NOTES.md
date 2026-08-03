@@ -1,26 +1,75 @@
-# ForgeDB v0.0.1 — Foundation
+# ForgeDB v0.1.0 — Durable WAL Core
 
-ForgeDB now has a small, tested foundation for the future storage engine.
+Статус выпуска: GitHub Pre-release.
 
-## Highlights
+ForgeDB получила первый рабочий storage path: атомарные batch записываются в versioned WAL, становятся видимыми
+в bounded mutable memtable и восстанавливаются после повторного открытия.
 
-- Rust 2024 workspace with a Rust 1.89 MSRV;
-- bounded core primitives and Internal Key V1 codec;
-- checked atomic `WriteBatch` construction;
-- validated database configuration;
-- filesystem abstraction, native OS file locking, and versioned database identity;
-- architecture, invariant, durability, validation, and ADR documentation.
+## Основные изменения
 
-## Validation
+- публичный `Database` API: `open`, `put`, `get`, `delete`, `write`, `close`;
+- бинарные ключи и значения;
+- атомарный `WriteBatch`;
+- WAL V1 с CRC32C Castagnoli;
+- строгий bounded decoder и отказ от resync после corruption;
+- mutable memtable с preflight memory accounting;
+- `Sync`, `NoSync` и `DisableWal`;
+- replay полных кадров и безопасное truncation последнего partial frame;
+- sequence numbers с запретом пересечений и допустимыми gaps после `DisableWal`;
+- read-only open с полным replay;
+- CLI `put/get/delete`;
+- process-abort, model, corruption и cross-platform tests.
 
-The release candidate passed GitHub Actions run `30794747746`:
+## Контракт Sync
 
-- Ubuntu stable: rustfmt, Clippy with warnings denied, workspace tests, doctests, and release build;
-- Windows stable: rustfmt, Clippy with warnings denied, workspace tests, doctests, and release build;
-- Ubuntu Rust 1.89: Clippy with warnings denied and workspace tests.
+Успешный `Sync` означает следующий порядок:
 
-## Scope boundary
+```text
+WAL write_all
+→ WAL sync_all
+→ атомарное применение batch к memtable
+→ возврат успеха
+```
 
-This release intentionally contains no WAL, SSTable, memtable, MANIFEST, database read/write path,
-or crash recovery. It makes no data-durability claim beyond the explicitly documented identity-file
-installation and process-level lock behavior.
+Process-abort test подтверждает восстановление такой записи после немедленного аварийного завершения процесса.
+Power-loss гарантия всё ещё зависит от ОС, файловой системы, накопителя и контроллера.
+
+## Recovery policy
+
+- Заголовок WAL и каждый полный кадр проверяются по структуре, версии, identity, лимитам и CRC32C.
+- Batch полностью декодируется до применения.
+- Только последний физически неполный кадр может быть отброшен.
+- При read-write открытии partial tail усекается до последней проверенной границы и синхронизируется.
+- Mid-file corruption и checksum mismatch полного кадра блокируют открытие.
+
+## Совместимость
+
+Добавлен persisted-формат `WAL V1`. `IDENTITY V1` и `Internal Key V1` сохранены без несовместимых изменений.
+Неизвестные будущие версии отклоняются.
+
+## Проверка
+
+Release candidate проходит обязательную матрицу:
+
+- Ubuntu stable: rustfmt, Clippy с `-D warnings`, workspace tests, doctests, release build;
+- Windows stable: те же проверки;
+- Ubuntu Rust 1.89: Clippy с `-D warnings` и workspace tests;
+- отдельный release job повторяет полный Linux gate до создания tag и Pre-release.
+
+Идентификатор финального CI run фиксируется в release PR перед публикацией.
+
+## Ограничения
+
+Версия намеренно не содержит:
+
+- SSTable;
+- MANIFEST;
+- memtable flush;
+- compaction;
+- snapshots и transactions;
+- iterators и range scans;
+- WAL rotation;
+- background workers.
+
+Все пользовательские данные v0.1.0 восстанавливаются из одного `WAL-000001.log` в mutable memtable при каждом открытии.
+При достижении `Options::memtable_size` новая запись отклоняется до изменения WAL.
