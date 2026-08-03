@@ -66,11 +66,7 @@ impl Limits {
             return Err(Error::invalid_argument("key", "must not be empty"));
         }
         if key.len() > self.max_key_size {
-            return Err(resource_limit(
-                "key_size",
-                self.max_key_size,
-                key.len(),
-            ));
+            return Err(resource_limit("key_size", self.max_key_size, key.len()));
         }
         Ok(())
     }

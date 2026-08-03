@@ -233,10 +233,7 @@ impl TryFrom<u8> for ValueType {
         match value {
             0 => Ok(Self::Deletion),
             1 => Ok(Self::Value),
-            _ => Err(Error::corruption(
-                "internal key",
-                "unknown value type",
-            )),
+            _ => Err(Error::corruption("internal key", "unknown value type")),
         }
     }
 }

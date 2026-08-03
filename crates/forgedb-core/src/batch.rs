@@ -154,11 +154,13 @@ impl WriteBatch {
                     delete_encoded_size(*column_family, key.len())?
                 }
             };
-            total = total.checked_add(operation_size).ok_or(Error::ResourceLimit {
-                resource: "batch_encoded_size",
-                limit: u64::try_from(limits.max_batch_size).unwrap_or(u64::MAX),
-                observed: u64::MAX,
-            })?;
+            total = total
+                .checked_add(operation_size)
+                .ok_or(Error::ResourceLimit {
+                    resource: "batch_encoded_size",
+                    limit: u64::try_from(limits.max_batch_size).unwrap_or(u64::MAX),
+                    observed: u64::MAX,
+                })?;
             if total > limits.max_batch_size {
                 return Err(resource_limit(
                     "batch_encoded_size",
@@ -171,11 +173,15 @@ impl WriteBatch {
     }
 
     fn reserve_operation(&self, operation_size: usize) -> Result<()> {
-        let next_count = self.operations.len().checked_add(1).ok_or(Error::ResourceLimit {
-            resource: "batch_operations",
-            limit: u64::try_from(self.limits.max_batch_operations).unwrap_or(u64::MAX),
-            observed: u64::MAX,
-        })?;
+        let next_count = self
+            .operations
+            .len()
+            .checked_add(1)
+            .ok_or(Error::ResourceLimit {
+                resource: "batch_operations",
+                limit: u64::try_from(self.limits.max_batch_operations).unwrap_or(u64::MAX),
+                observed: u64::MAX,
+            })?;
         if next_count > self.limits.max_batch_operations {
             return Err(resource_limit(
                 "batch_operations",
@@ -183,14 +189,14 @@ impl WriteBatch {
                 next_count,
             ));
         }
-        let next_size = self
-            .encoded_size
-            .checked_add(operation_size)
-            .ok_or(Error::ResourceLimit {
-                resource: "batch_encoded_size",
-                limit: u64::try_from(self.limits.max_batch_size).unwrap_or(u64::MAX),
-                observed: u64::MAX,
-            })?;
+        let next_size =
+            self.encoded_size
+                .checked_add(operation_size)
+                .ok_or(Error::ResourceLimit {
+                    resource: "batch_encoded_size",
+                    limit: u64::try_from(self.limits.max_batch_size).unwrap_or(u64::MAX),
+                    observed: u64::MAX,
+                })?;
         if next_size > self.limits.max_batch_size {
             return Err(resource_limit(
                 "batch_encoded_size",

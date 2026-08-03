@@ -37,7 +37,8 @@ impl FileSystem for NativeFileSystem {
     type LockGuard = NativeLockGuard;
 
     fn create_dir_all(&self, path: &Path) -> Result<()> {
-        fs::create_dir_all(path).map_err(|source| Error::io("create_dir_all", Some(path.into()), source))
+        fs::create_dir_all(path)
+            .map_err(|source| Error::io("create_dir_all", Some(path.into()), source))
     }
 
     fn open_sequential(&self, path: &Path) -> Result<Self::SequentialReader> {
@@ -75,7 +76,11 @@ impl FileSystem for NativeFileSystem {
         fs::rename(from, to).map_err(|source| {
             Error::io(
                 "rename_atomic",
-                Some(PathBuf::from(format!("{} -> {}", from.display(), to.display()))),
+                Some(PathBuf::from(format!(
+                    "{} -> {}",
+                    from.display(),
+                    to.display()
+                ))),
                 source,
             )
         })
@@ -90,7 +95,8 @@ impl FileSystem for NativeFileSystem {
             .map_err(|source| Error::io("list_dir", Some(path.into()), source))?;
         let mut paths = Vec::new();
         for entry in entries {
-            let entry = entry.map_err(|source| Error::io("list_dir_entry", Some(path.into()), source))?;
+            let entry =
+                entry.map_err(|source| Error::io("list_dir_entry", Some(path.into()), source))?;
             paths.push(entry.path());
         }
         paths.sort();
@@ -111,6 +117,7 @@ impl FileSystem for NativeFileSystem {
     fn lock_exclusive(&self, path: &Path) -> Result<Self::LockGuard> {
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(path)
@@ -163,10 +170,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "forgedb-{name}-{}-{unique}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("forgedb-{name}-{}-{unique}", std::process::id()));
         fs::create_dir_all(&path)
             .map_err(|source| Error::io("create_test_directory", Some(path.clone()), source))?;
         Ok(path)

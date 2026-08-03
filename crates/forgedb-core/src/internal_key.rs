@@ -191,16 +191,17 @@ impl InternalKeyCodec {
         let value_type_offset = key_end
             .checked_add(8)
             .ok_or_else(|| Error::corruption("internal key", "value-type offset overflows"))?;
-        let value_type = ValueType::try_from(*encoded.get(value_type_offset).ok_or_else(|| {
-            Error::corruption("internal key", "value type is truncated")
-        })?)?;
+        let value_type = ValueType::try_from(
+            *encoded
+                .get(value_type_offset)
+                .ok_or_else(|| Error::corruption("internal key", "value type is truncated"))?,
+        )?;
 
         InternalKey::new(
             ColumnFamilyId::new(column_family),
             user_key,
-            SequenceNumber::new(sequence).map_err(|_| {
-                Error::corruption("internal key", "sequence zero is reserved")
-            })?,
+            SequenceNumber::new(sequence)
+                .map_err(|_| Error::corruption("internal key", "sequence zero is reserved"))?,
             value_type,
             limits,
         )

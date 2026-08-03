@@ -13,7 +13,10 @@ const MAX_IDENTITY_BYTES: u64 = 128;
 /// Loads an existing database identity or installs a newly generated identity.
 ///
 /// Callers must hold the database `LOCK` before invoking this operation.
-pub fn load_or_create_identity<F: FileSystem>(filesystem: &F, directory: &Path) -> Result<DatabaseId> {
+pub fn load_or_create_identity<F: FileSystem>(
+    filesystem: &F,
+    directory: &Path,
+) -> Result<DatabaseId> {
     filesystem.create_dir_all(directory)?;
     let path = directory.join(IDENTITY_FILE_NAME);
     match filesystem.open_sequential(&path) {
@@ -110,10 +113,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "forgedb-{name}-{}-{unique}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("forgedb-{name}-{}-{unique}", std::process::id()));
         fs::create_dir_all(&path)
             .map_err(|source| Error::io("create_test_directory", Some(path.clone()), source))?;
         Ok(path)
