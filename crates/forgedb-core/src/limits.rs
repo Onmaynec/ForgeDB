@@ -1,20 +1,20 @@
 use crate::{Error, Result};
 
-/// Bounds applied to user keys, values, and write batches.
+/// Границы размеров user keys, values и WriteBatch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Limits {
-    /// Maximum user-key size in bytes.
+    /// Максимальный размер user key в байтах.
     pub max_key_size: usize,
-    /// Maximum value size in bytes.
+    /// Максимальный размер value в байтах.
     pub max_value_size: usize,
-    /// Maximum encoded write-batch payload size in bytes.
+    /// Максимальный размер закодированного payload WriteBatch в байтах.
     pub max_batch_size: usize,
-    /// Maximum number of operations in one batch.
+    /// Максимальное число операций в одном batch.
     pub max_batch_operations: usize,
 }
 
 impl Limits {
-    /// Creates and validates limits.
+    /// Создаёт и проверяет limits.
     pub fn new(
         max_key_size: usize,
         max_value_size: usize,
@@ -31,39 +31,39 @@ impl Limits {
         Ok(limits)
     }
 
-    /// Validates all individual and cross-field limits.
+    /// Проверяет отдельные и межполевые ограничения.
     pub fn validate(&self) -> Result<()> {
         if self.max_key_size == 0 {
             return Err(Error::invalid_argument(
                 "max_key_size",
-                "must be greater than zero",
+                "значение должно быть больше нуля",
             ));
         }
         if self.max_value_size == 0 {
             return Err(Error::invalid_argument(
                 "max_value_size",
-                "must be greater than zero",
+                "значение должно быть больше нуля",
             ));
         }
         if self.max_batch_size < self.max_value_size {
             return Err(Error::invalid_argument(
                 "max_batch_size",
-                "must be at least max_value_size",
+                "значение должно быть не меньше max_value_size",
             ));
         }
         if self.max_batch_operations == 0 {
             return Err(Error::invalid_argument(
                 "max_batch_operations",
-                "must be greater than zero",
+                "значение должно быть больше нуля",
             ));
         }
         Ok(())
     }
 
-    /// Validates a user key.
+    /// Проверяет user key.
     pub fn validate_key(&self, key: &[u8]) -> Result<()> {
         if key.is_empty() {
-            return Err(Error::invalid_argument("key", "must not be empty"));
+            return Err(Error::invalid_argument("key", "ключ не должен быть пустым"));
         }
         if key.len() > self.max_key_size {
             return Err(resource_limit("key_size", self.max_key_size, key.len()));
@@ -71,7 +71,7 @@ impl Limits {
         Ok(())
     }
 
-    /// Validates a value.
+    /// Проверяет value.
     pub fn validate_value(&self, value: &[u8]) -> Result<()> {
         if value.len() > self.max_value_size {
             return Err(resource_limit(
