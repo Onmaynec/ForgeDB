@@ -44,13 +44,16 @@ impl Drop for SnapshotLease {
         let Ok(mut active) = registry.active.lock() else {
             return;
         };
-        let Some(count) = active.get_mut(&self.key) else {
-            return;
+        let should_remove = match active.get_mut(&self.key) {
+            Some(count) if *count > 1 => {
+                *count -= 1;
+                false
+            }
+            Some(_) => true,
+            None => false,
         };
-        if *count <= 1 {
+        if should_remove {
             active.remove(&self.key);
-        } else {
-            *count -= 1;
         }
     }
 }
