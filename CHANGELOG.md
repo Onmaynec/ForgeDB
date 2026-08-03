@@ -2,8 +2,53 @@
 
 В этом файле перечисляются заметные изменения ForgeDB.
 
-До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через
-явную новую версию, ADR, compatibility tests и документированную migration policy.
+До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
+
+## [0.2.0] — в разработке
+
+### Добавлено
+
+- Crate `forgedb-sstable` с версионируемым форматом SSTable V1.
+- Фиксированные header/footer, checksummed data/index/filter/properties blocks.
+- Prefix compression с restart points и строгим bounded decoder.
+- Versioned Bloom filter без false negatives для добавленных ключей.
+- Полная проверка database UUID, file number, sequence range, offsets, lengths и CRC32C.
+- Crate `forgedb-manifest` с MANIFEST V1, VersionEdit и crash-safe CURRENT.
+- Единая монотонная нумерация WAL, SSTable и MANIFEST metadata.
+- Mutable/immutable memtable lifecycle для синхронного flush.
+- Двухфазный WAL rotation и SSTable installation protocol.
+- `Database::flush()` и point reads в порядке mutable → immutable → L0 от новых к старым.
+- Recovery текущего и previous WAL поколения через authoritative MANIFEST.
+- Безопасное игнорирование unreferenced SSTable: orphan не включается в live state автоматически.
+- Удаление obsolete WAL только после успешного sync MANIFEST installation edit.
+- Integration tests reopen-after-flush, SST checksum corruption, orphan SST и deterministic model.
+- Русские нормативные документы SSTable V1, MANIFEST V1 и CURRENT V1.
+
+### Изменено
+
+- Workspace version повышена до `0.2.0`.
+- WAL получил canonical numbered generations.
+- Memtable различает `Missing`, `Value` и `Tombstone`.
+- Открытие базы проверяет все SSTables, на которые ссылается MANIFEST.
+
+### Persisted-форматы
+
+| Формат | Текущая версия | Чтение | Запись |
+|---|---:|---:|---:|
+| IDENTITY | 1 | 1 | 1 |
+| Internal Key | 1 | 1 | 1 |
+| WAL | 1 | 1 | 1 |
+| SSTable | 1 | 1 | 1 |
+| MANIFEST | 1 | 1 | 1 |
+| CURRENT | 1 | 1 | 1 |
+
+### Ограничения
+
+- Только L0; leveled compaction ещё отсутствует.
+- Range scan, snapshots и transactions ещё отсутствуют.
+- Flush синхронный; background worker и write stalls появятся позже.
+- SSTable reader версии 0.2 bounded-загружает файл в память.
+- Orphan-файлы не удаляются автоматически и пока не имеют отдельного CLI inventory report.
 
 ## [0.1.0] — 2026-08-03
 
