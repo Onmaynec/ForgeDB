@@ -9,60 +9,6 @@ permissions:
   contents: read
 
 jobs:
-  fix-v010:
-    name: одноразовое исправление v0.1.0
-    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'feature/v0.1.0-durable-wal' && github.actor != 'github-actions[bot]' }}
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: feature/v0.1.0-durable-wal
-          fetch-depth: 0
-      - name: Исправить recovery и освобождение lock
-        shell: python
-        run: |
-          from pathlib import Path
-          log_path = Path("crates/forgedb-wal/src/log.rs")
-          log_text = log_path.read_text(encoding="utf-8")
-          old = "        if decoded.sequence_start != expected_sequence {"
-          new = "        if decoded.sequence_start < expected_sequence {"
-          if old not in log_text:
-              raise SystemExit("sequence condition was not found")
-          log_path.write_text(log_text.replace(old, new, 1), encoding="utf-8", newline="\n")
-          database_path = Path("crates/forgedb/src/database.rs")
-          database_text = database_path.read_text(encoding="utf-8")
-          replacements = [
-              ("    fatal_write_error: Option<String>,\n}", "    fatal_write_error: Option<String>,\n    lock: Option<NativeLockGuard>,\n}"),
-              ("    closed: AtomicBool,\n    _lock: NativeLockGuard,\n}", "    closed: AtomicBool,\n}"),
-              ("                fatal_write_error: None,\n            }),\n            closed: AtomicBool::new(false),\n            _lock: lock,\n", "                fatal_write_error: None,\n                lock: Some(lock),\n            }),\n            closed: AtomicBool::new(false),\n"),
-              ("        if let Some(writer) = state.wal.take() {\n            writer.sync()?;\n        }\n        Ok(())\n", "        if let Some(writer) = state.wal.take() {\n            writer.sync()?;\n        }\n        state.lock.take();\n        Ok(())\n"),
-          ]
-          for old, new in replacements:
-              if old not in database_text:
-                  raise SystemExit("database replacement was not found")
-              database_text = database_text.replace(old, new, 1)
-          database_path.write_text(database_text, encoding="utf-8", newline="\n")
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - run: cargo fmt --all
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-features
-      - run: cargo test --workspace --doc
-      - run: cargo build --workspace --release
-      - name: Опубликовать проверенный bot-коммит
-        shell: bash
-        run: |
-          rm -f .github/workflows/v010-normalize.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "fix: normalize WAL recovery and close semantics"
-          git push origin HEAD:feature/v0.1.0-durable-wal
-
   test:
     name: ${{ matrix.os }} / stable
     strategy:
