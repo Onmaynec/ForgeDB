@@ -86,7 +86,11 @@ pub enum Error {
 impl Error {
     /// Creates an I/O error with operation and path context.
     #[must_use]
-    pub fn io(operation: &'static str, path: impl Into<Option<PathBuf>>, source: io::Error) -> Self {
+    pub fn io(
+        operation: &'static str,
+        path: impl Into<Option<PathBuf>>,
+        source: io::Error,
+    ) -> Self {
         Self::Io {
             operation,
             path: path.into(),
@@ -124,7 +128,11 @@ impl fmt::Display for Error {
                 source,
             } => {
                 if let Some(path) = path {
-                    write!(formatter, "I/O error during {operation} at {}: {source}", path.display())
+                    write!(
+                        formatter,
+                        "I/O error during {operation} at {}: {source}",
+                        path.display()
+                    )
                 } else {
                     write!(formatter, "I/O error during {operation}: {source}")
                 }

@@ -64,7 +64,12 @@ impl Options {
         require_non_zero_usize("memtable_size", self.memtable_size)?;
         require_non_zero_u64("wal_file_size", self.wal_file_size)?;
         require_non_zero_u64("target_sst_size", self.target_sst_size)?;
-        require_range_usize("data_block_size", self.data_block_size, 1024, 16 * 1024 * 1024)?;
+        require_range_usize(
+            "data_block_size",
+            self.data_block_size,
+            1024,
+            16 * 1024 * 1024,
+        )?;
         require_non_zero_usize("restart_interval", self.restart_interval)?;
         if !(1..=64).contains(&self.bloom_bits_per_key) {
             return Err(Error::invalid_argument(
@@ -178,7 +183,12 @@ fn require_non_zero_u64(field: &'static str, value: u64) -> Result<()> {
     Ok(())
 }
 
-fn require_range_usize(field: &'static str, value: usize, minimum: usize, maximum: usize) -> Result<()> {
+fn require_range_usize(
+    field: &'static str,
+    value: usize,
+    minimum: usize,
+    maximum: usize,
+) -> Result<()> {
     if !(minimum..=maximum).contains(&value) {
         return Err(Error::invalid_argument(
             field,
