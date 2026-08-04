@@ -68,13 +68,42 @@ MANIFEST V1 текущей stacked-реализации сохраняет то�
 
 User output строго отсортирован по байтам user key и не содержит дубликатов.
 
-## Текущая граница реализации
+## Cursor model
 
-В `v0.3.0` scanner bounded-загружает и декодирует выбранный SSTable в память перед merge. Верхняя граница задаётся `max_compaction_bytes` и metadata limits. Настоящий block-streaming iterator и cache появятся в следующих milestones.
+Merge iterator работает через object-safe `EntryCursor`:
+
+- mutable и immutable memtables используют `VecEntryCursor` над frozen sorted entries;
+- каждый SSTable использует отдельный `SstEntryCursor`;
+- range filtering и source-order validation выполняются при продвижении cursor;
+- heap хранит только текущий internal key каждого source.
+
+`SstEntryCursor::open` выполняет bounded preflight:
+
+1. сверяет physical size и MANIFEST metadata;
+2. читает и проверяет header;
+3. читает footer;
+4. проверяет filter, index и properties block trailers;
+5. декодирует index и проверяет block handles;
+6. загружает первый data block.
+
+После исчерпания текущего data block cursor выполняет `seek + read_exact` следующего handle, проверяет trailer/CRC32C, декодирует entries и освобождает предыдущий block.
+
+## Граница памяти
+
+Для выбранного SSTable source одновременно удерживаются:
+
+- metadata и file handle;
+- полностью декодированный index;
+- entries одного текущего data block;
+- небольшое состояние metadata aggregation.
+
+Полное содержимое SSTable не материализуется. Для range с несколькими SSTables resident data memory ограничена одним block на каждый активный source плюс heap и memtable sources. Index пока загружается целиком; block/table cache отсутствуют.
+
+Unit test строит SSTable из нескольких data blocks и подтверждает, что cursor проходит все entries при `blocks_loaded > 1`, а максимальное число resident entries меньше общего числа записей. Integration test выполняет один range scan через три установленных L0 SSTables.
 
 ## Corruption policy
 
-До выдачи данных scanner проверяет:
+До или во время выдачи данных scanner проверяет:
 
 - UUID и file number;
 - format versions;
@@ -84,6 +113,8 @@ User output строго отсортирован по байтам user key и 
 - restart array bounds и ordering;
 - internal-key ordering внутри и между blocks;
 - tombstone payload;
-- entry count, key range и sequence range из MANIFEST.
+- entry count, key range и sequence range из MANIFEST при полном достижении конца таблицы.
 
-При нарушении контракта чтение завершается `Error::Corruption` или `Error::UnsupportedFormat`. Resynchronization и угадывание структуры не допускаются.
+Unread data blocks не читаются заранее. Поэтому corruption в block, который range/limit не затронул, обнаруживается deep verify или чтением соответствующего диапазона, а не коротким lazy scan.
+
+При нарушении контракта чтение завершается `Error::Corruption`, `Error::UnsupportedFormat` или contextual I/O error. Resynchronization и угадывание структуры не допускаются.
