@@ -5,6 +5,15 @@ use std::ops::{Bound, RangeBounds};
 use forgedb_core::{Error, InternalKey, Result, SequenceNumber, ValueType};
 use forgedb_sstable::{TableEntry, TableMeta};
 
+use crate::entry_cursor::{EntryCursor, VecEntryCursor};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RangePosition {
+    Before,
+    Inside,
+    After,
+}
+
 /// Owned границы одного forward range scan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct OwnedRange {
@@ -32,18 +41,32 @@ impl OwnedRange {
         Ok(owned)
     }
 
-    pub(crate) fn contains(&self, key: &[u8]) -> bool {
-        let after_start = match &self.start {
-            Bound::Included(start) => key >= start.as_slice(),
-            Bound::Excluded(start) => key > start.as_slice(),
-            Bound::Unbounded => true,
+    pub(crate) fn all() -> Self {
+        Self {
+            start: Bound::Unbounded,
+            end: Bound::Unbounded,
+        }
+    }
+
+    fn position(&self, key: &[u8]) -> RangePosition {
+        let before_start = match &self.start {
+            Bound::Included(start) => key < start.as_slice(),
+            Bound::Excluded(start) => key <= start.as_slice(),
+            Bound::Unbounded => false,
         };
-        let before_end = match &self.end {
-            Bound::Included(end) => key <= end.as_slice(),
-            Bound::Excluded(end) => key < end.as_slice(),
-            Bound::Unbounded => true,
+        if before_start {
+            return RangePosition::Before;
+        }
+        let after_end = match &self.end {
+            Bound::Included(end) => key > end.as_slice(),
+            Bound::Excluded(end) => key >= end.as_slice(),
+            Bound::Unbounded => false,
         };
-        after_start && before_end
+        if after_end {
+            RangePosition::After
+        } else {
+            RangePosition::Inside
+        }
     }
 
     pub(crate) fn overlaps(&self, metadata: &TableMeta) -> bool {
@@ -79,11 +102,11 @@ impl OwnedRange {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct SourceCursor {
-    entries: Vec<TableEntry>,
-    position: usize,
+    cursor: Box<dyn EntryCursor>,
     priority: usize,
+    previous: Option<InternalKey>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -109,12 +132,13 @@ impl PartialOrd for HeapItem {
     }
 }
 
-/// Forward user-key iterator, объединяющий sorted MVCC sources через binary heap.
+/// Forward user-key iterator, объединяющий sorted MVCC cursors через binary heap.
 #[derive(Debug)]
 pub struct DbIterator {
     sources: Vec<SourceCursor>,
     heap: BinaryHeap<HeapItem>,
     snapshot: Option<SequenceNumber>,
+    range: OwnedRange,
     limit: Option<usize>,
     emitted: usize,
     failed: bool,
@@ -127,39 +151,45 @@ impl DbIterator {
         range: OwnedRange,
         limit: Option<usize>,
     ) -> Result<Self> {
+        let cursors = sources
+            .into_iter()
+            .map(|(priority, entries)| {
+                (
+                    priority,
+                    Box::new(VecEntryCursor::new(entries)) as Box<dyn EntryCursor>,
+                )
+            })
+            .collect();
+        Self::new_cursors(cursors, snapshot, range, limit)
+    }
+
+    pub(crate) fn new_cursors(
+        sources: Vec<(usize, Box<dyn EntryCursor>)>,
+        snapshot: Option<SequenceNumber>,
+        range: OwnedRange,
+        limit: Option<usize>,
+    ) -> Result<Self> {
         if limit == Some(0) {
             return Ok(Self::empty(snapshot, limit));
         }
-        let mut cursors = Vec::with_capacity(sources.len());
-        for (priority, mut entries) in sources {
-            entries.retain(|entry| range.contains(entry.internal_key.user_key()));
-            if entries
-                .windows(2)
-                .any(|pair| pair.first().zip(pair.get(1)).is_some_and(|(left, right)| {
-                    left.internal_key >= right.internal_key
-                }))
-            {
-                return Err(Error::corruption(
-                    "merge iterator source",
-                    "source internal keys не строго возрастают",
-                ));
-            }
-            cursors.push(SourceCursor {
-                entries,
-                position: 0,
-                priority,
-            });
-        }
         let mut iterator = Self {
-            sources: cursors,
+            sources: sources
+                .into_iter()
+                .map(|(priority, cursor)| SourceCursor {
+                    cursor,
+                    priority,
+                    previous: None,
+                })
+                .collect(),
             heap: BinaryHeap::new(),
             snapshot,
+            range,
             limit,
             emitted: 0,
             failed: false,
         };
         for source_index in 0..iterator.sources.len() {
-            iterator.push_current(source_index)?;
+            iterator.queue_current(source_index)?;
         }
         Ok(iterator)
     }
@@ -169,42 +199,82 @@ impl DbIterator {
             sources: Vec::new(),
             heap: BinaryHeap::new(),
             snapshot,
+            range: OwnedRange::all(),
             limit,
             emitted: 0,
             failed: false,
         }
     }
 
-    fn push_current(&mut self, source_index: usize) -> Result<()> {
+    fn queue_current(&mut self, source_index: usize) -> Result<()> {
+        loop {
+            let (position, key, priority) = {
+                let source = self
+                    .sources
+                    .get(source_index)
+                    .ok_or(Error::InternalInvariant {
+                        invariant: "I-MERGE-SOURCE-INDEX",
+                        reason: "source index выходит за границы".to_owned(),
+                    })?;
+                let Some(entry) = source.cursor.current() else {
+                    return Ok(());
+                };
+                (
+                    self.range.position(entry.internal_key.user_key()),
+                    entry.internal_key.clone(),
+                    source.priority,
+                )
+            };
+            match position {
+                RangePosition::Before => self.advance_source(source_index)?,
+                RangePosition::Inside => {
+                    self.heap.push(HeapItem {
+                        key,
+                        source_index,
+                        priority,
+                    });
+                    return Ok(());
+                }
+                RangePosition::After => return Ok(()),
+            }
+        }
+    }
+
+    fn advance_source(&mut self, source_index: usize) -> Result<()> {
         let source = self
             .sources
-            .get(source_index)
+            .get_mut(source_index)
             .ok_or(Error::InternalInvariant {
                 invariant: "I-MERGE-SOURCE-INDEX",
                 reason: "source index выходит за границы".to_owned(),
             })?;
-        let Some(entry) = source.entries.get(source.position) else {
-            return Ok(());
-        };
-        self.heap.push(HeapItem {
-            key: entry.internal_key.clone(),
-            source_index,
-            priority: source.priority,
-        });
-        Ok(())
+        let current = source
+            .cursor
+            .current()
+            .cloned()
+            .ok_or(Error::InternalInvariant {
+                invariant: "I-MERGE-SOURCE-POSITION",
+                reason: "advance вызван для завершённого source".to_owned(),
+            })?;
+        if source
+            .previous
+            .as_ref()
+            .is_some_and(|previous| previous >= &current.internal_key)
+        {
+            return Err(Error::corruption(
+                "merge iterator source",
+                "source internal keys не строго возрастают",
+            ));
+        }
+        source.previous = Some(current.internal_key);
+        source.cursor.advance()
     }
 
     fn consume_item(&mut self, item: HeapItem) -> Result<TableEntry> {
-        let source = self
+        let entry = self
             .sources
-            .get_mut(item.source_index)
-            .ok_or(Error::InternalInvariant {
-                invariant: "I-MERGE-SOURCE-INDEX",
-                reason: "heap source index выходит за границы".to_owned(),
-            })?;
-        let entry = source
-            .entries
-            .get(source.position)
+            .get(item.source_index)
+            .and_then(|source| source.cursor.current())
             .cloned()
             .ok_or(Error::InternalInvariant {
                 invariant: "I-MERGE-SOURCE-POSITION",
@@ -216,12 +286,8 @@ impl DbIterator {
                 reason: "heap key не совпадает с source cursor".to_owned(),
             });
         }
-        source.position = source.position.checked_add(1).ok_or(Error::ResourceLimit {
-            resource: "merge_source_position",
-            limit: u64::MAX,
-            observed: u64::MAX,
-        })?;
-        self.push_current(item.source_index)?;
+        self.advance_source(item.source_index)?;
+        self.queue_current(item.source_index)?;
         Ok(entry)
     }
 }
@@ -332,7 +398,7 @@ mod tests {
         let iterator = DbIterator::new(
             vec![(0, newest), (1, older)],
             Some(SequenceNumber::new(5)?),
-            OwnedRange::from_range(&(..))?,
+            OwnedRange::all(),
             None,
         )?;
         let rows = iterator.collect::<Result<Vec<_>>>()?;
@@ -352,11 +418,43 @@ mod tests {
         let iterator = DbIterator::new(
             vec![(0, source)],
             Some(SequenceNumber::new(3)?),
-            OwnedRange::from_range(&(..))?,
+            OwnedRange::all(),
             None,
         )?;
         let rows = iterator.collect::<Result<Vec<_>>>()?;
         assert_eq!(rows, vec![(b"key".to_vec(), b"old".to_vec())]);
+        Ok(())
+    }
+
+    #[test]
+    fn range_filtering_is_incremental() -> Result<()> {
+        let source = vec![
+            value(b"a", 1, b"one")?,
+            value(b"b", 2, b"two")?,
+            value(b"c", 3, b"three")?,
+        ];
+        let range = OwnedRange::from_range(&(b"b".to_vec()..b"c".to_vec()))?;
+        let iterator = DbIterator::new(
+            vec![(0, source)],
+            Some(SequenceNumber::new(3)?),
+            range,
+            None,
+        )?;
+        let rows = iterator.collect::<Result<Vec<_>>>()?;
+        assert_eq!(rows, vec![(b"b".to_vec(), b"two".to_vec())]);
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_source_order_is_reported_during_iteration() -> Result<()> {
+        let source = vec![value(b"b", 2, b"two")?, value(b"a", 1, b"one")?];
+        let iterator = DbIterator::new(
+            vec![(0, source)],
+            Some(SequenceNumber::new(2)?),
+            OwnedRange::all(),
+            None,
+        )?;
+        assert!(iterator.collect::<Result<Vec<_>>>().is_err());
         Ok(())
     }
 }
