@@ -9,26 +9,9 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 `v0.3.0` разрабатывается как stacked draft поверх ещё не выпущенной `v0.2.0`. Ветка и PR не должны
 считаться релизом до успешной Linux/Windows/Rust 1.89 матрицы.
 
-В текущем draft реализованы:
-
-- Rust 2024 workspace с MSRV Rust 1.89;
-- бинарные ключи и значения;
-- WAL V1, numbered WAL generations и strict replay;
-- SSTable V1 с CRC32C, index, Bloom filter, properties и restart points;
-- MANIFEST V1 и crash-safe CURRENT;
-- mutable/immutable MVCC memtables;
-- двухфазный flush в L0;
-- immutable `Arc<VersionSet>`;
-- L0 newest-first lookup;
-- модель L1+ со строгим non-overlap invariant;
-- cheap snapshot handles;
-- snapshot-aware point reads;
-- forward range scan и binary-heap merge iterator;
-- block-at-a-time `SstEntryCursor` с index + одним resident data block на SSTable source;
-- file inventory без destructive cleanup;
-- неразрушающий recovery plan;
-- quick и deep verification;
-- process-level эксклюзивная блокировка каталога базы.
+В текущем draft реализованы WAL/SSTable/MANIFEST V1, MVCC memtables, двухфазный L0 flush, immutable
+`Arc<VersionSet>`, snapshots, snapshot-aware point reads, forward range scan, block-at-a-time
+`SstEntryCursor`, file inventory, recovery plan и quick/deep verify.
 
 Код streaming path и его tests находятся в draft-ветке, но их успешная компиляция и выполнение ещё не подтверждены доступным CI runner.
 
@@ -39,17 +22,13 @@ use forgedb::{Database, Options, ReadOptions, Result, WriteOptions};
 
 fn main() -> Result<()> {
     let database = Database::open("./data", Options::default())?;
-
     database.put(b"user:42", b"Alice", WriteOptions::sync())?;
     let snapshot = database.snapshot()?;
     database.put(b"user:42", b"Alice v2", WriteOptions::sync())?;
     database.flush()?;
 
     assert_eq!(
-        database.get_with_options(
-            b"user:42",
-            ReadOptions::from_snapshot(&snapshot),
-        )?,
+        database.get_with_options(b"user:42", ReadOptions::from_snapshot(&snapshot))?,
         Some(b"Alice".to_vec()),
     );
 
@@ -57,7 +36,6 @@ fn main() -> Result<()> {
         let (key, value) = row?;
         println!("{} = {}", String::from_utf8_lossy(&key), String::from_utf8_lossy(&value));
     }
-
     database.close()?;
     Ok(())
 }
@@ -79,25 +57,14 @@ cargo run -p forgedb-cli -- verify ./data --deep
 live SSTables, orphan/obsolete/temp/backup/user/unknown files, warnings, blockers и только предлагаемые cleanup actions.
 Команда не выполняет rename или delete.
 
-CLI принимает ключи и границы как UTF-8 аргументы. Библиотечный API работает с произвольными байтами.
-Вывод `scan` использует raw key, TAB и raw value, поэтому формат предназначен для диагностики, а не для
-надёжного обмена произвольными бинарными записями.
-
 ## Порядок чтения
 
-Point lookup использует один зафиксированный sequence и проверяет:
+Point lookup использует один sequence и проверяет mutable, immutable, L0 newest-first, затем L1+.
+`Value` и `Tombstone` завершают поиск; только `Missing` разрешает перейти к следующему источнику.
 
-1. mutable memtable;
-2. immutable memtable незавершённого flush;
-3. L0 от новых file numbers к старым;
-4. L1+ по возрастанию уровня.
-
-`Value` и `Tombstone` завершают поиск. Только `Missing` разрешает перейти к следующему источнику.
-
-Range scan объединяет sorted MVCC cursors через binary heap, скрывает версии выше snapshot,
-shadowed versions и tombstones. Memtable cursors владеют frozen entry vectors. Каждый SSTable cursor
-удерживает проверенный index и декодированные entries только текущего data block; следующий block читается
-через `seek + read_exact` после исчерпания текущего.
+Range scan объединяет sorted MVCC cursors через binary heap. Memtable cursors владеют frozen entry vectors.
+Каждый SSTable cursor удерживает проверенный index и entries только текущего data block; следующий block
+читается через `seek + read_exact` после исчерпания текущего.
 
 ## Durability
 
@@ -105,20 +72,8 @@ shadowed versions и tombstones. Memtable cursors владеют frozen entry ve
 - `NoSync`: WAL frame записывается без обязательного физического sync перед возвратом.
 - `DisableWal`: batch существует только в памяти до flush и может исчезнуть при process crash.
 
-Flush сначала публикует WAL rotation в MANIFEST, затем строит и синхронизирует SSTable, после чего
-отдельным VersionEdit устанавливает таблицу и только потом делает старый WAL obsolete.
-
-## Структура workspace
-
-```text
-crates/forgedb           Public API, MVCC, VersionSet, snapshots, iterators, inventory, recovery, verify
-crates/forgedb-cli       put/get/delete/scan/inventory/inspect/verify
-crates/forgedb-core      Типы, лимиты, internal keys и WriteBatch
-crates/forgedb-fs        FileSystem abstraction, native lock и IDENTITY
-crates/forgedb-wal       WAL V1, generations, writer и replay
-crates/forgedb-sstable   SSTable V1, block codecs, Bloom filter и reader
-crates/forgedb-manifest  MANIFEST V1, VersionEdit и CURRENT
-```
+Flush публикует WAL rotation в MANIFEST, строит и синхронизирует SSTable, отдельным VersionEdit устанавливает
+таблицу и только затем делает старый WAL obsolete.
 
 ## Проверка
 
@@ -130,8 +85,8 @@ cargo test --workspace --doc
 cargo build --workspace --release
 ```
 
-Release gate требует Ubuntu stable, Windows stable и Rust 1.89. Текущий stacked draft ещё не имеет
-подтверждённого зелёного результата: GitHub-hosted jobs завершаются до checkout.
+Release gate требует Ubuntu stable, Windows stable и Rust 1.89. Run `30878893688` завершил все три jobs
+до checkout с `steps=null`, поэтому текущий stacked draft не имеет подтверждённого зелёного результата.
 
 ## Ограничения v0.3.0
 
@@ -139,22 +94,20 @@ Release gate требует Ubuntu stable, Windows stable и Rust 1.89. Теку
 - Нет compaction и физически заполненных L1+.
 - Index каждого выбранного SSTable загружается целиком; data blocks читаются по одному.
 - Нет block cache, table cache и background workers.
-- Snapshot не сериализуется и действует только в создавшем его open handle.
+- Snapshot действует только в создавшем его open handle.
 - Нет backward iterator, transactions и column-family API.
 - Inventory и recovery plan не изменяют файлы автоматически.
-- Streaming `Database` временно оформлен как public wrapper над storage core; после доступного compiler/refactor pass типы должны быть объединены без изменения API.
+- Streaming `Database` временно оформлен как public wrapper над storage core; типы должны быть объединены после доступного compiler/refactor pass без изменения API.
 
 ## Документация
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — границы компонентов;
-- [`docs/LSM_READ_PATH_V1.md`](docs/LSM_READ_PATH_V1.md) — порядок source lookup и range merge;
-- [`docs/SNAPSHOTS_AND_MVCC.md`](docs/SNAPSHOTS_AND_MVCC.md) — snapshot visibility;
-- [`docs/FILE_INVENTORY_AND_VERIFY.md`](docs/FILE_INVENTORY_AND_VERIFY.md) — inventory, recovery plan и verify;
-- [`docs/formats/SSTABLE_V1.md`](docs/formats/SSTABLE_V1.md) — SSTable V1;
-- [`docs/formats/MANIFEST_V1.md`](docs/formats/MANIFEST_V1.md) — MANIFEST V1;
-- [`docs/formats/WAL_V1.md`](docs/formats/WAL_V1.md) — WAL V1;
-- [`docs/INVARIANTS.md`](docs/INVARIANTS.md) — проверяемые инварианты;
-- [`docs/adr`](docs/adr) — архитектурные решения.
+- [`docs/LSM_READ_PATH_V1.md`](docs/LSM_READ_PATH_V1.md);
+- [`docs/SNAPSHOTS_AND_MVCC.md`](docs/SNAPSHOTS_AND_MVCC.md);
+- [`docs/FILE_INVENTORY_AND_VERIFY.md`](docs/FILE_INVENTORY_AND_VERIFY.md);
+- [`docs/formats/SSTABLE_V1.md`](docs/formats/SSTABLE_V1.md);
+- [`docs/formats/MANIFEST_V1.md`](docs/formats/MANIFEST_V1.md);
+- [`docs/formats/WAL_V1.md`](docs/formats/WAL_V1.md);
+- [`docs/INVARIANTS.md`](docs/INVARIANTS.md).
 
 ## Лицензия
 
