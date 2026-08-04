@@ -18,11 +18,13 @@
 - Forward `Database::scan` и binary-heap merge iterator.
 - Скрытие shadowed versions и tombstones в user iterator.
 - Recovery previous WAL в immutable memtable и current WAL в mutable memtable.
-- Неразрушающий `FileInventory` с классификацией live, obsolete, orphan, temporary и unknown objects.
+- Неразрушающий `FileInventory` с классификацией live, obsolete, orphan, temporary, backup, user и unknown objects.
+- `RecoveryPlan::inspect` и CLI `inspect recovery-plan` с authoritative MANIFEST, WAL replay order, warnings, blockers и proposed cleanup.
 - Quick и deep verify reports.
 - Повторный bounded SSTable scanner для snapshot reads, range scan и deep verify.
 - Tests snapshot visibility через overwrite/flush, foreign snapshot rejection, merge semantics, L1 overlap и deterministic scan model.
-- Русская документация полного LSM read path, snapshots/MVCC и file inventory/verify.
+- Test recovery plan, подтверждающий отсутствие изменения каталога.
+- Русская документация полного LSM read path, snapshots/MVCC и file inventory/recovery/verify.
 
 ### Изменено
 
@@ -31,6 +33,7 @@
 - Point reads используют единый snapshot sequence для всех sources.
 - Readers удерживают immutable VersionSet вместо чтения изменяемого списка L0.
 - Flush публикует новый VersionSet только после успешной записи installation edit в MANIFEST.
+- Unknown files больше не смешиваются с явно именованными backup artifacts и user files.
 
 ### Persisted-форматы
 
@@ -46,7 +49,7 @@ MANIFEST V1 текущей реализации сохраняет L0. L1+ мо�
 - Нет block cache и table cache.
 - Snapshot не сериализуется и не переносится между open handles.
 - Нет backward iterator, prefix iterator и transaction snapshot isolation.
-- Inventory не выполняет автоматический cleanup.
+- Inventory и recovery plan не выполняют автоматический cleanup.
 
 ## [0.2.0] — в разработке
 
