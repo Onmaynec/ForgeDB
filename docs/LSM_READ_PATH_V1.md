@@ -1,13 +1,5 @@
-# Полный LSM read path ForgeDB v0.3
+# Full LSM read path v0.3
 
-Статус: реализован в stacked draft, compiler/CI result отсутствует.
+Implemented in an unverified stacked draft: one snapshot per read, mutable/immutable/L0/L1+ source order, binary-heap merge, `VecEntryCursor` for memtables and block-at-a-time `SstEntryCursor` for SSTables.
 
-- Один snapshot sequence на read.
-- Source order: mutable → immutable → L0 newest-first → L1+.
-- Range merge: binary heap, без duplicate keys, shadowed versions и tombstones.
-- Memtables: `VecEntryCursor`.
-- SSTables: `SstEntryCursor`, decoded index + один current data block.
-- Unread blocks проверяются deep verify или чтением соответствующего range.
-- Public `Database` временно является streaming wrapper над storage core; consolidation остаётся release gate.
-
-Tests в source tree покрывают multi-block cursor, resident-memory contract, range через три L0 SSTables, snapshots, model, corruption и deep verify. Их зелёное выполнение не подтверждено из-за empty-step CI jobs.
+The SST cursor retains a decoded index and one current data block. Public `Database` temporarily uses a streaming wrapper over the storage core. Compiler/CI validation and wrapper consolidation remain release gates.
