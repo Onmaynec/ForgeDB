@@ -4,7 +4,10 @@
 //! forward range scan, file inventory, recovery plan и deep verification поверх
 //! WAL/SSTable/MANIFEST V1.
 
-mod database_v3_fixed;
+mod database_v3_fixed {
+    include!("database_v3_fixed.rs");
+    include!("database_streaming_wrapper.rs");
+}
 mod entry_cursor;
 mod inventory;
 mod iterator;
@@ -19,7 +22,7 @@ mod verify;
 mod version_set;
 mod write_options;
 
-pub use database_v3_fixed::Database;
+pub use database_v3_fixed::StreamingDatabase as Database;
 pub use forgedb_core::{
     BatchOperation, ColumnFamilyId, DatabaseId, Error, InternalKey, InternalKeyCodec,
     InternalKeyComparator, Limits, Result, SequenceNumber, ValueType, WriteBatch,
