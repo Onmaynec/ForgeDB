@@ -1,17 +1,9 @@
 # ForgeDB
 
-Embedded Rust key-value storage engine with versioned formats, explicit durability and strict corruption detection.
+ForgeDB is an embedded Rust key-value storage engine. The current `v0.3.0` branch is an unverified stacked draft over unreleased `v0.2.0`.
 
-`v0.3.0` is a stacked draft over unreleased `v0.2.0`. It implements WAL/SSTable/MANIFEST V1, MVCC snapshots, L0 flush, immutable VersionSet, cursor range scan, inventory, recovery plan and verify.
+Implemented source includes WAL/SSTable/MANIFEST V1, MVCC snapshots, L0 flush, immutable VersionSet, cursor range scan, inventory, recovery plan and verify. SST range sources retain a decoded index and one current data block.
 
-SSTable range sources keep a decoded index and one current data block. Tests cover multi-block and multi-file scans, but CI is unverified: run `30878893688` ended before checkout with `steps=null` on Ubuntu stable, Windows stable and Rust 1.89.
+GitHub Actions run `30878893688` ended before checkout with `steps=null` on Ubuntu stable, Windows stable and Rust 1.89. Local Rust tooling is unavailable. Merge, tag and release remain blocked.
 
-```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-cargo test --workspace --doc
-cargo build --workspace --release
-```
-
-Merge, tag and release remain blocked. Documentation is under [`docs`](docs). MIT.
+Documentation: [`docs`](docs). License: MIT.
