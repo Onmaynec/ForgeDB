@@ -1,39 +1,10 @@
 # ForgeDB
 
-ForgeDB — embedded key-value storage engine на Rust с versioned formats, explicit durability, bounded resources и strict corruption detection.
+Embedded Rust key-value storage engine with versioned formats, explicit durability and strict corruption detection.
 
-## v0.3.0 draft
+`v0.3.0` is a stacked draft over unreleased `v0.2.0`. It implements WAL/SSTable/MANIFEST V1, MVCC snapshots, L0 flush, immutable VersionSet, cursor range scan, inventory, recovery plan and verify.
 
-Реализованы WAL/SSTable/MANIFEST V1, MVCC, snapshots, L0 flush, immutable VersionSet, cursor range scan, inventory, recovery plan и verify.
-
-```rust
-use forgedb::{Database, Options, ReadOptions, Result, WriteOptions};
-
-fn main() -> Result<()> {
-    let db = Database::open("./data", Options::default())?;
-    db.put(b"key", b"old", WriteOptions::sync())?;
-    let snapshot = db.snapshot()?;
-    db.put(b"key", b"new", WriteOptions::sync())?;
-    db.flush()?;
-    assert_eq!(db.get_with_options(b"key", ReadOptions::from_snapshot(&snapshot))?, Some(b"old".to_vec()));
-    db.close()
-}
-```
-
-Range scan использует binary heap. Memtables представлены frozen vectors; каждый SSTable source удерживает decoded index и один current data block.
-
-## CLI
-
-```bash
-cargo run -p forgedb-cli -- put ./data key value --sync
-cargo run -p forgedb-cli -- get ./data key
-cargo run -p forgedb-cli -- scan ./data [start] [end-exclusive]
-cargo run -p forgedb-cli -- inventory ./data
-cargo run -p forgedb-cli -- inspect recovery-plan ./data
-cargo run -p forgedb-cli -- verify ./data --deep
-```
-
-## Release gate
+SSTable range sources keep a decoded index and one current data block. Tests cover multi-block and multi-file scans, but CI is unverified: run `30878893688` ended before checkout with `steps=null` on Ubuntu stable, Windows stable and Rust 1.89.
 
 ```bash
 cargo fmt --all --check
@@ -43,8 +14,4 @@ cargo test --workspace --doc
 cargo build --workspace --release
 ```
 
-Run `30878893688` завершил Ubuntu stable, Windows stable и Rust 1.89 до checkout с `steps=null`; локальная toolchain недоступна. Merge, tag и release заблокированы.
-
-До выпуска также нужно объединить временный streaming wrapper с storage core без изменения API.
-
-Документация: [`docs`](docs). Лицензия: MIT.
+Merge, tag and release remain blocked. Documentation is under [`docs`](docs). MIT.
