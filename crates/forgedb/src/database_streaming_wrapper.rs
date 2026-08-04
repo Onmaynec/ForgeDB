@@ -106,6 +106,19 @@ impl StreamingDatabase {
         DbIterator::new_cursors(sources, snapshot, owned_range, read_options.limit)
     }
 
+    /// Сохраняет compile-ссылку на materialized scan до объединения wrapper и storage core.
+    #[allow(dead_code)]
+    fn legacy_materialized_scan<R>(
+        &self,
+        range: R,
+        read_options: ReadOptions,
+    ) -> Result<DbIterator>
+    where
+        R: RangeBounds<Vec<u8>>,
+    {
+        self.inner.scan(range, read_options)
+    }
+
     /// Синхронно переводит immutable memtable в установленный L0 SSTable.
     pub fn flush(&self) -> Result<()> {
         self.inner.flush()
