@@ -2,7 +2,8 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use forgedb::{
-    Database, Error, FileInventory, Options, ReadOptions, Result, VerifyOptions, WriteOptions,
+    Database, Error, FileInventory, Options, ReadOptions, RecoveryPlan, Result, VerifyOptions,
+    WriteOptions,
 };
 
 fn main() {
@@ -61,9 +62,7 @@ fn run() -> Result<()> {
                 (None, None) => database.scan(.., ReadOptions::default())?,
                 (Some(start), None) => database.scan(start.., ReadOptions::default())?,
                 (None, Some(end)) => database.scan(..end, ReadOptions::default())?,
-                (Some(start), Some(end)) => {
-                    database.scan(start..end, ReadOptions::default())?
-                }
+                (Some(start), Some(end)) => database.scan(start..end, ReadOptions::default())?,
             };
             let mut stdout = std::io::stdout().lock();
             for row in iterator {
@@ -86,6 +85,16 @@ fn run() -> Result<()> {
             let database = Database::open(PathBuf::from(path), options)?;
             print_inventory(&database.file_inventory()?);
             database.close()
+        }
+        "inspect" => {
+            let subcommand = required(&mut arguments, "inspect_command")?;
+            if subcommand != "recovery-plan" {
+                return Err(Error::invalid_argument("inspect_command", usage()));
+            }
+            let path = required(&mut arguments, "path")?;
+            ensure_no_extra(arguments)?;
+            print_recovery_plan(&RecoveryPlan::inspect(PathBuf::from(path))?);
+            Ok(())
         }
         "verify" => {
             let path = required(&mut arguments, "path")?;
@@ -148,6 +157,25 @@ fn write_bytes_line(bytes: &[u8]) -> Result<()> {
         .map_err(|source| Error::io("write_stdout", None, source))
 }
 
+fn print_recovery_plan(plan: &RecoveryPlan) {
+    println!("database: {}", plan.database_path.display());
+    println!("selected MANIFEST: {}", plan.selected_manifest);
+    for value in &plan.replay_wals {
+        println!("replay WAL: {value}");
+    }
+    print_group("live SST", &plan.live_sstables);
+    print_group("obsolete", &plan.obsolete_files);
+    print_group("orphan SST", &plan.orphan_files);
+    print_group("temporary", &plan.temporary_files);
+    print_group("backup artifact", &plan.backup_artifacts);
+    print_group("user file", &plan.user_files);
+    print_group("unknown", &plan.unknown_files);
+    print_group("planned safe cleanup", &plan.planned_safe_cleanup);
+    print_group("warning", &plan.warnings);
+    print_group("blocker", &plan.blockers);
+    println!("normal open possible: {}", plan.can_open_normally());
+}
+
 fn print_inventory(inventory: &FileInventory) {
     print_group("live metadata", &inventory.live_metadata);
     print_group("live WAL", &inventory.live_wal);
@@ -155,6 +183,8 @@ fn print_inventory(inventory: &FileInventory) {
     print_group("obsolete", &inventory.obsolete);
     print_group("orphan SST", &inventory.orphan_sst);
     print_group("temporary", &inventory.temporary);
+    print_group("backup artifact", &inventory.backup_artifacts);
+    print_group("user file", &inventory.user_files);
     print_group("unknown", &inventory.unknown);
     print_group("blockers", &inventory.blockers);
 }
@@ -173,6 +203,7 @@ fn usage() -> String {
         "  forgedb delete <каталог> <ключ> [--sync|--no-sync|--disable-wal]",
         "  forgedb scan <каталог> [start] [end-exclusive]",
         "  forgedb inventory <каталог>",
+        "  forgedb inspect recovery-plan <каталог>",
         "  forgedb verify <каталог> [--deep]",
         "",
         "CLI v0.3.0 принимает границы scan как UTF-8 и выводит raw key/value через TAB.",
