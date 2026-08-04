@@ -25,6 +25,7 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 - snapshot-aware point reads;
 - forward range scan и binary-heap merge iterator;
 - file inventory без destructive cleanup;
+- неразрушающий recovery plan;
 - quick и deep verification;
 - process-level эксклюзивная блокировка каталога базы.
 
@@ -67,8 +68,13 @@ cargo run -p forgedb-cli -- get ./data key
 cargo run -p forgedb-cli -- delete ./data key --sync
 cargo run -p forgedb-cli -- scan ./data [start] [end-exclusive]
 cargo run -p forgedb-cli -- inventory ./data
+cargo run -p forgedb-cli -- inspect recovery-plan ./data
 cargo run -p forgedb-cli -- verify ./data --deep
 ```
+
+`inspect recovery-plan` получает process lock, выбирает authoritative MANIFEST, показывает порядок WAL replay,
+live SSTables, orphan/obsolete/temp/backup/user/unknown files, warnings, blockers и только предлагаемые cleanup actions.
+Команда не выполняет rename или delete.
 
 CLI принимает ключи и границы как UTF-8 аргументы. Библиотечный API работает с произвольными байтами.
 Вывод `scan` использует raw key, TAB и raw value, поэтому формат предназначен для диагностики, а не для
@@ -100,8 +106,8 @@ Flush сначала публикует WAL rotation в MANIFEST, затем с�
 ## Структура workspace
 
 ```text
-crates/forgedb           Public API, MVCC memtables, VersionSet, snapshots, iterators, verify
-crates/forgedb-cli       put/get/delete/scan/inventory/verify
+crates/forgedb           Public API, MVCC, VersionSet, snapshots, iterators, inventory, recovery, verify
+crates/forgedb-cli       put/get/delete/scan/inventory/inspect/verify
 crates/forgedb-core      Типы, лимиты, internal keys и WriteBatch
 crates/forgedb-fs        FileSystem abstraction, native lock и IDENTITY
 crates/forgedb-wal       WAL V1, generations, writer и replay
@@ -126,18 +132,18 @@ Release gate требует Ubuntu stable, Windows stable и Rust 1.89. Теку
 
 - `v0.2.0` и `v0.3.0` ещё не выпущены.
 - Нет compaction и физически заполненных L1+.
-- SSTable scan bounded-декодирует выбранные таблицы целиком перед merge.
+- SSTable scan bounded-декодирует выбранные таблицы целиком перед merge; block-at-a-time cursor находится в работе.
 - Нет block cache, table cache и background workers.
 - Snapshot не сериализуется и действует только в создавшем его open handle.
 - Нет backward iterator, transactions и column-family API.
-- Inventory не удаляет orphan/obsolete/unknown файлы автоматически.
+- Inventory и recovery plan не изменяют файлы автоматически.
 
 ## Документация
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — границы компонентов;
 - [`docs/LSM_READ_PATH_V1.md`](docs/LSM_READ_PATH_V1.md) — порядок source lookup и range merge;
 - [`docs/SNAPSHOTS_AND_MVCC.md`](docs/SNAPSHOTS_AND_MVCC.md) — snapshot visibility;
-- [`docs/FILE_INVENTORY_AND_VERIFY.md`](docs/FILE_INVENTORY_AND_VERIFY.md) — recovery inventory и verify;
+- [`docs/FILE_INVENTORY_AND_VERIFY.md`](docs/FILE_INVENTORY_AND_VERIFY.md) — inventory, recovery plan и verify;
 - [`docs/formats/SSTABLE_V1.md`](docs/formats/SSTABLE_V1.md) — SSTable V1;
 - [`docs/formats/MANIFEST_V1.md`](docs/formats/MANIFEST_V1.md) — MANIFEST V1;
 - [`docs/formats/WAL_V1.md`](docs/formats/WAL_V1.md) — WAL V1;
