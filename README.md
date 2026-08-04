@@ -24,6 +24,7 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 - cheap snapshot handles;
 - snapshot-aware point reads;
 - forward range scan и binary-heap merge iterator;
+- block-at-a-time `SstEntryCursor` с index + одним resident data block на SSTable source;
 - file inventory без destructive cleanup;
 - неразрушающий recovery plan;
 - quick и deep verification;
@@ -91,8 +92,10 @@ Point lookup использует один зафиксированный sequen
 
 `Value` и `Tombstone` завершают поиск. Только `Missing` разрешает перейти к следующему источнику.
 
-Range scan объединяет sorted MVCC sources через binary heap, скрывает версии выше snapshot,
-shadowed versions и tombstones.
+Range scan объединяет sorted MVCC cursors через binary heap, скрывает версии выше snapshot,
+shadowed versions и tombstones. Memtable cursors владеют frozen entry vectors. Каждый SSTable cursor
+удерживает проверенный index и декодированные entries только текущего data block; следующий block читается
+через `seek + read_exact` после исчерпания текущего.
 
 ## Durability
 
@@ -132,7 +135,7 @@ Release gate требует Ubuntu stable, Windows stable и Rust 1.89. Теку
 
 - `v0.2.0` и `v0.3.0` ещё не выпущены.
 - Нет compaction и физически заполненных L1+.
-- SSTable scan bounded-декодирует выбранные таблицы целиком перед merge; block-at-a-time cursor находится в работе.
+- Index каждого выбранного SSTable загружается целиком; data blocks читаются по одному.
 - Нет block cache, table cache и background workers.
 - Snapshot не сериализуется и действует только в создавшем его open handle.
 - Нет backward iterator, transactions и column-family API.
