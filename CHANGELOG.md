@@ -16,13 +16,16 @@
 - L0 lookup от новых file numbers к старым.
 - Модель L1+ со строгим sorted/non-overlap invariant и максимум одним candidate-файлом на уровень.
 - Forward `Database::scan` и binary-heap merge iterator.
+- Object-safe `EntryCursor`, materialized `VecEntryCursor` и block-at-a-time `SstEntryCursor`.
+- Инкрементальная range filtering и source-order validation без materialization полного SSTable.
 - Скрытие shadowed versions и tombstones в user iterator.
 - Recovery previous WAL в immutable memtable и current WAL в mutable memtable.
 - Неразрушающий `FileInventory` с классификацией live, obsolete, orphan, temporary, backup, user и unknown objects.
 - `RecoveryPlan::inspect` и CLI `inspect recovery-plan` с authoritative MANIFEST, WAL replay order, warnings, blockers и proposed cleanup.
 - Quick и deep verify reports.
-- Повторный bounded SSTable scanner для snapshot reads, range scan и deep verify.
+- Повторный bounded SSTable scanner для snapshot reads и deep verify.
 - Tests snapshot visibility через overwrite/flush, foreign snapshot rejection, merge semantics, L1 overlap и deterministic scan model.
+- Tests block-at-a-time cursor и range scan через три установленных L0 SSTables.
 - Test recovery plan, подтверждающий отсутствие изменения каталога.
 - Русская документация полного LSM read path, snapshots/MVCC и file inventory/recovery/verify.
 
@@ -32,6 +35,7 @@
 - Mutable memtable больше не схлопывает историю user key до одной версии.
 - Point reads используют единый snapshot sequence для всех sources.
 - Readers удерживают immutable VersionSet вместо чтения изменяемого списка L0.
+- Public `Database` использует streaming wrapper: write/flush/recovery остаются в основном storage core, а range scan строится из cursor sources.
 - Flush публикует новый VersionSet только после успешной записи installation edit в MANIFEST.
 - Unknown files больше не смешиваются с явно именованными backup artifacts и user files.
 
@@ -45,7 +49,7 @@ MANIFEST V1 текущей реализации сохраняет L0. L1+ мо�
 
 - `v0.3.0` является stacked draft поверх ещё не выпущенной `v0.2.0`.
 - Нет compaction и физически заполненных L1+.
-- Range iterator пока bounded-декодирует выбранные SSTables целиком перед heap merge.
+- Index каждого выбранного SSTable загружается целиком; одновременно resident только один data block на SSTable source.
 - Нет block cache и table cache.
 - Snapshot не сериализуется и не переносится между open handles.
 - Нет backward iterator, prefix iterator и transaction snapshot isolation.
