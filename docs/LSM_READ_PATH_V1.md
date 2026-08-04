@@ -2,130 +2,58 @@
 
 ## Статус
 
-Документ описывает read semantics milestone `v0.3.0`. Он не вводит новый persisted-формат: используются WAL V1, SSTable V1, MANIFEST V1 и CURRENT V1 из предыдущих этапов.
+Документ описывает реализованный в stacked draft read path. Persisted formats не меняются: WAL, SSTable, MANIFEST и CURRENT остаются V1. Compiler/test result пока отсутствует, потому что GitHub-hosted jobs завершаются до checkout.
 
-Streaming read path реализован в stacked draft, но ещё не имеет подтверждённого compiler/test result из-за GitHub-hosted jobs, завершающихся до checkout.
+## Snapshot
 
-## Read snapshot
+Каждая операция фиксирует один `snapshot_sequence`. Без explicit snapshot используется последний опубликованный sequence на момент начала операции. Версии выше snapshot невидимы.
 
-Каждая операция чтения сначала фиксирует один `snapshot_sequence`:
+## Point lookup
 
-- `ReadOptions::snapshot = Some(snapshot)` использует sequence указанного snapshot;
-- без явного snapshot используется последний опубликованный sequence на момент начала операции;
-- пустая база представляется отсутствующим sequence и не имеет видимых записей.
-
-Один read не должен менять snapshot между источниками.
-
-## Порядок point lookup
-
-Источники проверяются строго в следующем порядке:
+Порядок источников:
 
 1. mutable memtable;
 2. immutable memtable незавершённого flush;
-3. L0 SSTables от большего file number к меньшему;
-4. L1 и последующие уровни по возрастанию номера уровня.
+3. L0 newest-first;
+4. L1+ по возрастанию уровня.
 
-Внутри одного источника выбирается первая версия user key, для которой `sequence <= snapshot_sequence`.
-
-Результаты имеют три состояния:
-
-- `Value(bytes)` завершает lookup значением;
-- `Tombstone` завершает lookup отсутствием значения;
-- `Missing` разрешает перейти к следующему источнику.
-
-Tombstone никогда не разрешает искать более старое значение в нижнем источнике.
+`Value` и `Tombstone` завершают поиск. Только `Missing` разрешает перейти дальше.
 
 ## VersionSet
 
-Readers используют immutable `Arc<VersionSet>`. Публикация нового SSTable создаёт новый VersionSet и атомарно заменяет ссылку в состоянии базы. Уже начавшийся reader может продолжить работу со старой версией без удержания writer mutex.
-
-### L0
-
-- диапазоны могут перекрываться;
-- file numbers строго возрастают в metadata;
-- чтение выполняется newest-first.
-
-### L1+
-
-- файлы отсортированы по `smallest_user_key`;
-- соседние диапазоны не пересекаются;
-- для одного user key допускается не более одного candidate-файла на уровень.
-
-MANIFEST V1 текущей stacked-реализации сохраняет только L0. Поэтому L1+ уже моделируются и валидируются в памяти, но остаются пустыми до milestone compaction `v0.4.0`.
+Readers удерживают immutable `Arc<VersionSet>`. L0 может перекрываться и читается newest-first. L1+ валидируется как sorted/non-overlapping, но физически остаётся пустым до compaction `v0.4.0`.
 
 ## Range scan
 
-`Database::scan` создаёт forward user-key iterator.
-
-Алгоритм:
-
-1. фиксирует snapshot и immutable VersionSet;
-2. отбирает memtable и SSTable sources, пересекающиеся с range;
-3. каждый source предоставляет internal keys в canonical comparator order;
-4. binary heap выбирает минимальный internal key;
-5. все версии одного user key собираются вместе;
-6. версии выше snapshot отбрасываются;
-7. первая видимая версия определяет значение или tombstone;
-8. tombstones и shadowed versions не попадают в user output.
-
-User output строго отсортирован по байтам user key и не содержит дубликатов.
+`Database::scan` объединяет sorted sources через binary heap. Для каждого user key собираются все версии, отбрасываются sequence выше snapshot, затем первая видимая версия определяет value или tombstone. Output строго отсортирован и не содержит duplicate keys.
 
 ## Cursor model
 
-Merge iterator работает через object-safe `EntryCursor`:
+- memtables: `VecEntryCursor`;
+- SSTables: `SstEntryCursor`;
+- heap: один текущий internal key на source;
+- filtering и source-order validation выполняются инкрементально.
 
-- mutable и immutable memtables используют `VecEntryCursor` над frozen sorted entries;
-- каждый SSTable использует отдельный `SstEntryCursor`;
-- range filtering и source-order validation выполняются при продвижении cursor;
-- heap хранит только текущий internal key каждого source.
+`SstEntryCursor` проверяет physical size, header, footer, filter/index/properties trailers и block handles. Index декодируется один раз. Data blocks читаются через `seek + read_exact` по одному; предыдущий block освобождается перед публикацией следующего.
 
-`SstEntryCursor::open` выполняет bounded preflight:
-
-1. сверяет physical size и MANIFEST metadata;
-2. читает и проверяет header;
-3. читает footer;
-4. проверяет filter, index и properties block trailers;
-5. декодирует index и проверяет block handles;
-6. загружает первый data block.
-
-После исчерпания текущего data block cursor выполняет `seek + read_exact` следующего handle, проверяет trailer/CRC32C, декодирует entries и освобождает предыдущий block.
+Resident memory включает frozen memtables, decoded index и один data block на активный SSTable source, плюс heap. Полный SSTable не materialize-ится.
 
 ## Public API integration
 
-На текущем draft public alias `Database` указывает на streaming wrapper над основным storage core:
-
-- wrapper проксирует write, get, snapshot, flush, inventory, verify и close;
-- только range scan заменён cursor-based implementation;
-- внутренний materialized scan временно сохраняется как compile-reference;
-- после доступного compiler/refactor pass wrapper и storage core должны быть объединены без изменения public API или persisted state.
-
-## Граница памяти
-
-Для выбранного SSTable source одновременно удерживаются:
-
-- metadata и file handle;
-- полностью декодированный index;
-- entries одного текущего data block;
-- небольшое состояние metadata aggregation.
-
-Полное содержимое SSTable не материализуется. Для range с несколькими SSTables resident data memory ограничена одним block на каждый активный source плюс heap и memtable sources. Index пока загружается целиком; block/table cache отсутствуют.
-
-Unit test строит SSTable из нескольких data blocks и проверяет контракт `blocks_loaded > 1` при максимальном resident entry count меньше общего числа записей. Integration test выполняет один range scan через три установленных L0 SSTables. Наличие tests не считается зелёным доказательством до восстановления CI.
+Public alias `Database` временно указывает на streaming wrapper над storage core. Wrapper проксирует write/get/snapshot/flush/inventory/verify/close и заменяет только range scan. После доступного compiler/refactor pass оба типа должны быть объединены без изменения API или persisted state.
 
 ## Corruption policy
 
-До или во время выдачи данных scanner проверяет:
+Scanner проверяет UUID, file number, versions, CRC32C, block handles, restart arrays, internal-key ordering, tombstone payload и metadata consistency. Unread blocks не загружаются заранее: corruption вне затронутого range/limit обнаруживается deep verify или последующим чтением соответствующего block.
 
-- UUID и file number;
-- format versions;
-- header/footer CRC32C;
-- block handles и отсутствие перекрытий;
-- compression/checksum identifiers;
-- restart array bounds и ordering;
-- internal-key ordering внутри и между blocks;
-- tombstone payload;
-- entry count, key range и sequence range из MANIFEST при полном достижении конца таблицы.
+Resynchronization и угадывание структуры запрещены.
 
-Unread data blocks не читаются заранее. Поэтому corruption в block, который range/limit не затронул, обнаруживается deep verify или чтением соответствующего диапазона, а не коротким lazy scan.
+## Acceptance tests в source tree
 
-При нарушении контракта чтение завершается `Error::Corruption`, `Error::UnsupportedFormat` или contextual I/O error. Resynchronization и угадывание структуры не допускаются.
+- multi-block cursor;
+- resident entries меньше full table;
+- range через три L0 SSTables;
+- snapshot model;
+- corruption и deep verify.
+
+Их зелёное выполнение ещё не подтверждено CI.
