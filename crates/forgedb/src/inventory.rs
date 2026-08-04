@@ -3,13 +3,16 @@ use std::path::Path;
 
 use forgedb_core::Result;
 use forgedb_fs::{FileSystem, IDENTITY_FILE_NAME, NativeFileSystem};
-use forgedb_manifest::{CURRENT_FILE_NAME, ManifestState, manifest_file_name, parse_manifest_file_name};
+use forgedb_manifest::{
+    CURRENT_FILE_NAME, ManifestState, manifest_file_name, parse_manifest_file_name,
+};
 use forgedb_sstable::parse_sst_file_name;
 use forgedb_wal::{parse_wal_file_name, wal_file_name};
 
 const LOCK_FILE_NAME: &str = "LOCK";
 const TEMP_DIRECTORY_NAME: &str = "TEMP";
 const ORPHAN_DIRECTORY_NAME: &str = ".forgedb-orphans";
+const USER_DIRECTORY_NAME: &str = ".forgedb-user";
 
 /// Неразрушающая классификация файлов каталога базы.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -20,6 +23,8 @@ pub struct FileInventory {
     pub obsolete: Vec<String>,
     pub orphan_sst: Vec<String>,
     pub temporary: Vec<String>,
+    pub backup_artifacts: Vec<String>,
+    pub user_files: Vec<String>,
     pub unknown: Vec<String>,
     pub blockers: Vec<String>,
 }
@@ -75,6 +80,14 @@ impl FileInventory {
                 inventory.obsolete.push(name);
                 continue;
             }
+            if is_backup_artifact(&name) {
+                inventory.backup_artifacts.push(name);
+                continue;
+            }
+            if is_explicit_user_file(&name) {
+                inventory.user_files.push(name);
+                continue;
+            }
             inventory.unknown.push(name);
         }
 
@@ -117,7 +130,36 @@ impl FileInventory {
         self.obsolete.sort();
         self.orphan_sst.sort();
         self.temporary.sort();
+        self.backup_artifacts.sort();
+        self.user_files.sort();
         self.unknown.sort();
         self.blockers.sort();
+    }
+}
+
+fn is_backup_artifact(name: &str) -> bool {
+    name.starts_with("BACKUP-")
+        || name.ends_with(".bak")
+        || name.ends_with(".backup")
+        || name.ends_with(".old")
+        || name.ends_with('~')
+}
+
+fn is_explicit_user_file(name: &str) -> bool {
+    name == USER_DIRECTORY_NAME || name.starts_with("USER-")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backup_and_user_names_are_explicit() {
+        assert!(is_backup_artifact("CURRENT.bak"));
+        assert!(is_backup_artifact("BACKUP-20260804"));
+        assert!(!is_backup_artifact("notes.txt"));
+        assert!(is_explicit_user_file("USER-notes.txt"));
+        assert!(is_explicit_user_file(USER_DIRECTORY_NAME));
+        assert!(!is_explicit_user_file("notes.txt"));
     }
 }
