@@ -10,6 +10,10 @@ pub(crate) trait EntryCursor: Debug + Send {
 
     /// Перемещает cursor на следующую entry.
     fn advance(&mut self) -> Result<()>;
+
+    /// Число entries, физически удерживаемых cursor в текущий момент.
+    #[cfg(test)]
+    fn resident_entries(&self) -> usize;
 }
 
 /// Cursor над уже материализованными entries mutable/immutable memtable.
@@ -48,6 +52,11 @@ impl EntryCursor for VecEntryCursor {
         })?;
         Ok(())
     }
+
+    #[cfg(test)]
+    fn resident_entries(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 #[cfg(test)]
@@ -73,11 +82,22 @@ mod tests {
             )?,
         ];
         let mut cursor = VecEntryCursor::new(entries);
-        assert_eq!(cursor.current().map(|entry| entry.internal_key.user_key()), Some(b"a".as_slice()));
+        assert_eq!(
+            cursor
+                .current()
+                .map(|entry| entry.internal_key.user_key()),
+            Some(b"a".as_slice())
+        );
         cursor.advance()?;
-        assert_eq!(cursor.current().map(|entry| entry.internal_key.user_key()), Some(b"b".as_slice()));
+        assert_eq!(
+            cursor
+                .current()
+                .map(|entry| entry.internal_key.user_key()),
+            Some(b"b".as_slice())
+        );
         cursor.advance()?;
         assert!(cursor.current().is_none());
+        assert_eq!(cursor.resident_entries(), 2);
         Ok(())
     }
 }
