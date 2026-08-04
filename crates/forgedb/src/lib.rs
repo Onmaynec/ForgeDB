@@ -5,6 +5,7 @@
 //! WAL/SSTable/MANIFEST V1.
 
 mod database_v3_fixed;
+mod entry_cursor;
 mod inventory;
 mod iterator;
 mod mvcc_memtable;
