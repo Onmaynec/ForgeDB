@@ -13,6 +13,7 @@ mod options;
 mod read_options;
 mod recovery_plan;
 mod snapshot;
+mod sst_entry_cursor;
 mod table_scan;
 mod verify;
 mod version_set;
