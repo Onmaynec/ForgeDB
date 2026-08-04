@@ -1,21 +1,14 @@
 # ForgeDB
 
-ForgeDB — встраиваемый key-value storage engine на Rust. Проект ставит корректность,
-явные гарантии durability, ограниченное использование ресурсов, версионируемые persisted-форматы
-и обнаружение повреждений выше преждевременной оптимизации производительности.
+ForgeDB — встраиваемый key-value storage engine на Rust с явными durability guarantees, bounded resource use, versioned persisted formats и strict corruption detection.
 
 ## Текущий этап: v0.3.0 — Full LSM Read Path
 
-`v0.3.0` разрабатывается как stacked draft поверх ещё не выпущенной `v0.2.0`. Ветка и PR не должны
-считаться релизом до успешной Linux/Windows/Rust 1.89 матрицы.
+`v0.3.0` — stacked draft поверх ещё не выпущенной `v0.2.0`. Реализованы WAL/SSTable/MANIFEST V1, MVCC memtables, двухфазный L0 flush, immutable `VersionSet`, snapshots, point reads, cursor-based range scan, inventory, recovery plan и verify.
 
-В текущем draft реализованы WAL/SSTable/MANIFEST V1, MVCC memtables, двухфазный L0 flush, immutable
-`Arc<VersionSet>`, snapshots, snapshot-aware point reads, forward range scan, block-at-a-time
-`SstEntryCursor`, file inventory, recovery plan и quick/deep verify.
+Streaming range path использует binary heap. Memtables представлены `VecEntryCursor`, а каждый SSTable source — `SstEntryCursor`, который удерживает decoded index и только один текущий data block. Код и tests присутствуют, но compiler/CI результат пока отсутствует.
 
-Код streaming path и его tests находятся в draft-ветке, но их успешная компиляция и выполнение ещё не подтверждены доступным CI runner.
-
-## Пример библиотеки
+## Пример
 
 ```rust
 use forgedb::{Database, Options, ReadOptions, Result, WriteOptions};
@@ -36,8 +29,7 @@ fn main() -> Result<()> {
         let (key, value) = row?;
         println!("{} = {}", String::from_utf8_lossy(&key), String::from_utf8_lossy(&value));
     }
-    database.close()?;
-    Ok(())
+    database.close()
 }
 ```
 
@@ -53,29 +45,9 @@ cargo run -p forgedb-cli -- inspect recovery-plan ./data
 cargo run -p forgedb-cli -- verify ./data --deep
 ```
 
-`inspect recovery-plan` получает process lock, выбирает authoritative MANIFEST, показывает порядок WAL replay,
-live SSTables, orphan/obsolete/temp/backup/user/unknown files, warnings, blockers и только предлагаемые cleanup actions.
-Команда не выполняет rename или delete.
+`inspect recovery-plan` работает под process lock, но не выполняет rename/delete.
 
-## Порядок чтения
-
-Point lookup использует один sequence и проверяет mutable, immutable, L0 newest-first, затем L1+.
-`Value` и `Tombstone` завершают поиск; только `Missing` разрешает перейти к следующему источнику.
-
-Range scan объединяет sorted MVCC cursors через binary heap. Memtable cursors владеют frozen entry vectors.
-Каждый SSTable cursor удерживает проверенный index и entries только текущего data block; следующий block
-читается через `seek + read_exact` после исчерпания текущего.
-
-## Durability
-
-- `Sync`: WAL frame синхронизируется до публикации batch в mutable memtable.
-- `NoSync`: WAL frame записывается без обязательного физического sync перед возвратом.
-- `DisableWal`: batch существует только в памяти до flush и может исчезнуть при process crash.
-
-Flush публикует WAL rotation в MANIFEST, строит и синхронизирует SSTable, отдельным VersionEdit устанавливает
-таблицу и только затем делает старый WAL obsolete.
-
-## Проверка
+## Release gate
 
 ```bash
 cargo fmt --all --check
@@ -85,29 +57,19 @@ cargo test --workspace --doc
 cargo build --workspace --release
 ```
 
-Release gate требует Ubuntu stable, Windows stable и Rust 1.89. Run `30878893688` завершил все три jobs
-до checkout с `steps=null`, поэтому текущий stacked draft не имеет подтверждённого зелёного результата.
+Нужны Ubuntu stable, Windows stable и Rust 1.89. GitHub Actions run `30878893688` завершил все jobs до checkout с `steps=null`; локальная toolchain недоступна. Merge, tag и release заблокированы.
 
-## Ограничения v0.3.0
+## Ограничения
 
-- `v0.2.0` и `v0.3.0` ещё не выпущены.
-- Нет compaction и физически заполненных L1+.
-- Index каждого выбранного SSTable загружается целиком; data blocks читаются по одному.
-- Нет block cache, table cache и background workers.
-- Snapshot действует только в создавшем его open handle.
-- Нет backward iterator, transactions и column-family API.
-- Inventory и recovery plan не изменяют файлы автоматически.
-- Streaming `Database` временно оформлен как public wrapper над storage core; типы должны быть объединены после доступного compiler/refactor pass без изменения API.
+Нет compaction, L1+ data, block/table cache, backward iterator, transactions и column-family API. Index выбранного SSTable загружается целиком. Streaming `Database` временно оформлен wrapper-ом над storage core и должен быть объединён после доступного compiler/refactor pass без изменения API.
 
 ## Документация
 
-- [`docs/LSM_READ_PATH_V1.md`](docs/LSM_READ_PATH_V1.md);
-- [`docs/SNAPSHOTS_AND_MVCC.md`](docs/SNAPSHOTS_AND_MVCC.md);
-- [`docs/FILE_INVENTORY_AND_VERIFY.md`](docs/FILE_INVENTORY_AND_VERIFY.md);
-- [`docs/formats/SSTABLE_V1.md`](docs/formats/SSTABLE_V1.md);
-- [`docs/formats/MANIFEST_V1.md`](docs/formats/MANIFEST_V1.md);
-- [`docs/formats/WAL_V1.md`](docs/formats/WAL_V1.md);
-- [`docs/INVARIANTS.md`](docs/INVARIANTS.md).
+- [`docs/LSM_READ_PATH_V1.md`](docs/LSM_READ_PATH_V1.md)
+- [`docs/SNAPSHOTS_AND_MVCC.md`](docs/SNAPSHOTS_AND_MVCC.md)
+- [`docs/FILE_INVENTORY_AND_VERIFY.md`](docs/FILE_INVENTORY_AND_VERIFY.md)
+- [`docs/INVARIANTS.md`](docs/INVARIANTS.md)
+- [`docs/formats`](docs/formats)
 
 ## Лицензия
 
