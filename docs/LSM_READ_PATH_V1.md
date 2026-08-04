@@ -90,6 +90,15 @@ Merge iterator работает через object-safe `EntryCursor`:
 
 После исчерпания текущего data block cursor выполняет `seek + read_exact` следующего handle, проверяет trailer/CRC32C, декодирует entries и освобождает предыдущий block.
 
+## Public API integration
+
+На текущем draft public alias `Database` указывает на streaming wrapper над основным storage core:
+
+- wrapper проксирует write, get, snapshot, flush, inventory, verify и close;
+- только range scan заменён cursor-based implementation;
+- внутренний materialized scan временно сохраняется как compile-reference;
+- после доступного compiler/refactor pass wrapper и storage core должны быть объединены без изменения public API или persisted state.
+
 ## Граница памяти
 
 Для выбранного SSTable source одновременно удерживаются:
