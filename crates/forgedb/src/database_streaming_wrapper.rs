@@ -162,23 +162,44 @@ mod streaming_wrapper_tests {
     }
 
     #[test]
-    fn public_database_scan_uses_multiple_sstable_blocks() -> Result<()> {
-        let directory = temporary_directory("range")?;
+    fn public_database_scan_streams_multiple_sstables() -> Result<()> {
+        let directory = temporary_directory("multi-file-range")?;
         let mut options = Options::default();
         options.data_block_size = 1024;
         let database = StreamingDatabase::open(&directory, options)?;
-        for index in 0..160_u64 {
-            database.put(
-                format!("key-{index:04}").as_bytes(),
-                vec![u8::try_from(index % 251).unwrap_or(0); 256],
-                WriteOptions::sync(),
-            )?;
+
+        for generation in 0..3_u64 {
+            let mut batch = WriteBatch::new();
+            for offset in 0..120_u64 {
+                let index = generation
+                    .checked_mul(120)
+                    .and_then(|base| base.checked_add(offset))
+                    .ok_or(Error::ResourceLimit {
+                        resource: "test_key_index",
+                        limit: u64::MAX,
+                        observed: u64::MAX,
+                    })?;
+                batch.put(
+                    format!("key-{index:04}").into_bytes(),
+                    vec![u8::try_from(index % 251).unwrap_or(0); 256],
+                )?;
+            }
+            database.write(batch, WriteOptions::sync())?;
+            database.flush()?;
         }
-        database.flush()?;
+
+        assert_eq!(database.file_inventory()?.live_sst.len(), 3);
         let rows = database
-            .scan(.., ReadOptions::default())?
+            .scan(
+                b"key-0050".to_vec()..b"key-0310".to_vec(),
+                ReadOptions::default(),
+            )?
             .collect::<Result<Vec<_>>>()?;
-        assert_eq!(rows.len(), 160);
+        assert_eq!(rows.len(), 260);
+        assert!(rows.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        assert_eq!(rows.first().map(|row| row.0.as_slice()), Some(b"key-0050"));
+        assert_eq!(rows.last().map(|row| row.0.as_slice()), Some(b"key-0309"));
+
         database.close()?;
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
