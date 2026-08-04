@@ -54,6 +54,7 @@ MANIFEST V1 текущей реализации сохраняет L0. L1+ мо�
 - Snapshot не сериализуется и не переносится между open handles.
 - Нет backward iterator, prefix iterator и transaction snapshot isolation.
 - Inventory и recovery plan не выполняют автоматический cleanup.
+- Streaming wrapper должен быть объединён с основным `Database` после доступного compiler/refactor pass.
 
 ## [0.2.0] — в разработке
 
