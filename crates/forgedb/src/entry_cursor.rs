@@ -14,7 +14,7 @@ pub(crate) trait EntryCursor: Debug + Send {
     /// Число entries, физически удерживаемых cursor в текущий момент.
     #[cfg(test)]
     fn resident_entries(&self) -> usize {
-        usize::from(self.current().is_some())
+        if self.current().is_some() { 1 } else { 0 }
     }
 }
 
