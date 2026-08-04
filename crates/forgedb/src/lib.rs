@@ -1,7 +1,8 @@
 //! Публичный API ForgeDB v0.3.0.
 //!
 //! Версия добавляет immutable VersionSet, MVCC snapshots, snapshot-aware point reads,
-//! forward range scan, file inventory и deep verification поверх WAL/SSTable/MANIFEST V1.
+//! forward range scan, file inventory, recovery plan и deep verification поверх
+//! WAL/SSTable/MANIFEST V1.
 
 mod database_v3_fixed;
 mod inventory;
@@ -9,6 +10,7 @@ mod iterator;
 mod mvcc_memtable;
 mod options;
 mod read_options;
+mod recovery_plan;
 mod snapshot;
 mod table_scan;
 mod verify;
@@ -24,6 +26,7 @@ pub use inventory::FileInventory;
 pub use iterator::DbIterator;
 pub use options::Options;
 pub use read_options::ReadOptions;
+pub use recovery_plan::RecoveryPlan;
 pub use snapshot::Snapshot;
 pub use verify::{VerifyOptions, VerifyReport};
 pub use write_options::{Durability, WriteOptions};
