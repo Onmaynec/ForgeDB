@@ -142,6 +142,7 @@ Release gate требует Ubuntu stable, Windows stable и Rust 1.89. Теку
 - Snapshot не сериализуется и действует только в создавшем его open handle.
 - Нет backward iterator, transactions и column-family API.
 - Inventory и recovery plan не изменяют файлы автоматически.
+- Streaming `Database` временно оформлен как public wrapper над storage core; после доступного compiler/refactor pass типы должны быть объединены без изменения API.
 
 ## Документация
 
