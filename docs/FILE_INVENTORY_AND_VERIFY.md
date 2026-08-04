@@ -1,8 +1,8 @@
-# File inventory и verify ForgeDB v0.3
+# File inventory, recovery plan и verify ForgeDB v0.3
 
 ## Назначение
 
-Recovery и диагностика не должны удалять файлы только потому, что их назначение не удалось доказать. `FileInventory` классифицирует содержимое каталога без destructive cleanup.
+Recovery и диагностика не должны удалять файлы только потому, что их назначение не удалось доказать. `FileInventory` классифицирует содержимое каталога без destructive cleanup, а `RecoveryPlan` показывает authoritative state и только предлагаемые действия.
 
 ## Категории
 
@@ -12,10 +12,47 @@ Recovery и диагностика не должны удалять файлы �
 - `obsolete`: старые canonical WAL или MANIFEST;
 - `orphan_sst`: canonical SSTable, отсутствующий в VersionSet;
 - `temporary`: `TEMP` и объекты с suffix `.tmp`;
-- `unknown`: всё, что не соответствует известному canonical имени;
+- `backup_artifacts`: имена `BACKUP-*`, а также suffix `.bak`, `.backup`, `.old` или `~`;
+- `user_files`: только явно выделенный namespace `.forgedb-user` и имена `USER-*`;
+- `unknown`: всё, что не соответствует известной категории;
 - `blockers`: отсутствующие required live files.
 
+Явная политика имён для backup и user files нужна, чтобы ForgeDB не угадывала назначение произвольного объекта. Обычный `notes.txt` остаётся `unknown`, а не автоматически считается пользовательским файлом.
+
 Inventory не перемещает и не удаляет объекты.
+
+## Recovery plan
+
+Нормативная команда:
+
+```bash
+forgedb inspect recovery-plan ./database
+```
+
+`RecoveryPlan::inspect`:
+
+1. получает process lock каталога;
+2. читает и проверяет `IDENTITY`;
+3. выбирает MANIFEST через `CURRENT`;
+4. восстанавливает immutable `VersionSet`;
+5. определяет WAL replay order: optional previous, затем current;
+6. строит file inventory;
+7. формирует warnings, blockers и предложения safe cleanup;
+8. освобождает lock без изменения базы.
+
+Отчёт содержит:
+
+- путь базы;
+- выбранный MANIFEST;
+- WALs для replay в правильном порядке;
+- live SSTables;
+- obsolete, orphan, temporary, backup, user и unknown files;
+- planned safe cleanup;
+- warnings;
+- blockers;
+- признак возможности normal open.
+
+`planned_safe_cleanup` является только планом. Команда не выполняет rename, quarantine или delete.
 
 ## Recovery policy
 
@@ -28,7 +65,7 @@ Inventory не перемещает и не удаляет объекты.
 - previous WAL, когда он указан MANIFEST;
 - любой live SSTable.
 
-Orphan, obsolete, temporary и unknown objects не становятся live автоматически. Они отражаются в report и требуют отдельного доказуемого cleanup protocol.
+Orphan, obsolete, temporary, backup, user и unknown objects не становятся live автоматически. Unknown и user files никогда не включаются в автоматический cleanup.
 
 ## Quick verify
 
