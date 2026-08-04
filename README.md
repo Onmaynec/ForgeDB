@@ -1,10 +1,10 @@
 # ForgeDB
 
-ForgeDB — встраиваемый key-value storage engine на Rust с versioned formats, explicit durability, bounded resources и strict corruption detection.
+ForgeDB — embedded key-value storage engine на Rust с versioned formats, explicit durability, bounded resources и strict corruption detection.
 
-## v0.3.0 — Full LSM Read Path
+## v0.3.0 draft
 
-Текущий stacked draft поверх невыпущенной `v0.2.0` реализует WAL/SSTable/MANIFEST V1, MVCC, snapshots, L0 flush, immutable VersionSet, cursor range scan, inventory, recovery plan и verify.
+Реализованы WAL/SSTable/MANIFEST V1, MVCC, snapshots, L0 flush, immutable VersionSet, cursor range scan, inventory, recovery plan и verify.
 
 ```rust
 use forgedb::{Database, Options, ReadOptions, Result, WriteOptions};
@@ -15,15 +15,12 @@ fn main() -> Result<()> {
     let snapshot = db.snapshot()?;
     db.put(b"key", b"new", WriteOptions::sync())?;
     db.flush()?;
-    assert_eq!(
-        db.get_with_options(b"key", ReadOptions::from_snapshot(&snapshot))?,
-        Some(b"old".to_vec()),
-    );
+    assert_eq!(db.get_with_options(b"key", ReadOptions::from_snapshot(&snapshot))?, Some(b"old".to_vec()));
     db.close()
 }
 ```
 
-Range scan объединяет cursor sources через binary heap. Memtables используют frozen vectors. Каждый SSTable source удерживает decoded index и один current data block; полный файл не materialize-ится.
+Range scan использует binary heap. Memtables представлены frozen vectors; каждый SSTable source удерживает decoded index и один current data block.
 
 ## CLI
 
@@ -48,14 +45,6 @@ cargo build --workspace --release
 
 Run `30878893688` завершил Ubuntu stable, Windows stable и Rust 1.89 до checkout с `steps=null`; локальная toolchain недоступна. Merge, tag и release заблокированы.
 
-До выпуска также нужно объединить временный streaming wrapper с основным `Database` без изменения public API.
+До выпуска также нужно объединить временный streaming wrapper с storage core без изменения API.
 
-## Документация
-
-- [`docs/LSM_READ_PATH_V1.md`](docs/LSM_READ_PATH_V1.md)
-- [`docs/SNAPSHOTS_AND_MVCC.md`](docs/SNAPSHOTS_AND_MVCC.md)
-- [`docs/FILE_INVENTORY_AND_VERIFY.md`](docs/FILE_INVENTORY_AND_VERIFY.md)
-- [`docs/INVARIANTS.md`](docs/INVARIANTS.md)
-- [`docs/formats`](docs/formats)
-
-MIT.
+Документация: [`docs`](docs). Лицензия: MIT.
