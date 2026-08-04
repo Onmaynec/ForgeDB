@@ -30,6 +30,8 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 - quick и deep verification;
 - process-level эксклюзивная блокировка каталога базы.
 
+Код streaming path и его tests находятся в draft-ветке, но их успешная компиляция и выполнение ещё не подтверждены доступным CI runner.
+
 ## Пример библиотеки
 
 ```rust
