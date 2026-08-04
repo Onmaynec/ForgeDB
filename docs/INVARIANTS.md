@@ -36,6 +36,7 @@
 | I-025 | Range scan использует один snapshot sequence для всех sources. | реализован в draft v0.3.0 | immutable VersionSet, ReadOptions и scan model tests; CI gate не подтверждён |
 | I-026 | SSTable range source не материализует полный файл. | реализован в draft v0.3.0 | `SstEntryCursor`: decoded index + один resident data block; multi-block и multi-file tests; CI gate не подтверждён |
 | I-027 | Recovery plan и inventory не изменяют каталог базы. | реализован в draft v0.3.0 | process lock, read-only inspection и before/after directory tests; CI gate не подтверждён |
+| I-028 | Временный streaming wrapper не изменяет public API или persisted state. | реализован в draft v0.3.0 | public alias `Database`, forwarding storage methods и отдельный cursor scan; объединение типов остаётся release gate |
 
 ## Правило изменения
 
