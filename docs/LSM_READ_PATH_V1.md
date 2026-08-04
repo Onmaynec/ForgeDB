@@ -4,6 +4,8 @@
 
 Документ описывает read semantics milestone `v0.3.0`. Он не вводит новый persisted-формат: используются WAL V1, SSTable V1, MANIFEST V1 и CURRENT V1 из предыдущих этапов.
 
+Streaming read path реализован в stacked draft, но ещё не имеет подтверждённого compiler/test result из-за GitHub-hosted jobs, завершающихся до checkout.
+
 ## Read snapshot
 
 Каждая операция чтения сначала фиксирует один `snapshot_sequence`:
@@ -99,7 +101,7 @@ Merge iterator работает через object-safe `EntryCursor`:
 
 Полное содержимое SSTable не материализуется. Для range с несколькими SSTables resident data memory ограничена одним block на каждый активный source плюс heap и memtable sources. Index пока загружается целиком; block/table cache отсутствуют.
 
-Unit test строит SSTable из нескольких data blocks и подтверждает, что cursor проходит все entries при `blocks_loaded > 1`, а максимальное число resident entries меньше общего числа записей. Integration test выполняет один range scan через три установленных L0 SSTables.
+Unit test строит SSTable из нескольких data blocks и проверяет контракт `blocks_loaded > 1` при максимальном resident entry count меньше общего числа записей. Integration test выполняет один range scan через три установленных L0 SSTables. Наличие tests не считается зелёным доказательством до восстановления CI.
 
 ## Corruption policy
 
