@@ -275,6 +275,7 @@ impl Database {
             ));
         }
 
+        self.apply_write_stall()?;
         let mut state = self.lock_state()?;
         ensure_writer_healthy(&state)?;
         let sequence_start = state.next_sequence;
