@@ -6,81 +6,9 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  canonicalize-manifest-dispatch:
-    if: github.event_name == 'pull_request' && github.head_ref == 'feature/v0.4.0-leveled-compaction'
-    name: canonicalize MANIFEST dispatch
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - name: Apply strict dispatch fixes
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("crates/forgedb-manifest/src/dispatch.rs")
-          lines = path.read_text().splitlines()
-
-          for index, line in enumerate(lines):
-              if "use crate::log::{ManifestWriter," in line:
-                  lines[index] = line.replace("ManifestWriter, ", "")
-              if "use crate::v2_log::{ManifestV2Writer," in line:
-                  lines[index] = line.replace("ManifestV2Writer, ", "")
-              if "use forgedb_fs::{FileSystem, NativeFileSystem};" in line:
-                  lines[index] = line.replace(
-                      "use forgedb_fs::{FileSystem, NativeFileSystem};",
-                      "use forgedb_fs::NativeFileSystem;",
-                  )
-
-          for index, line in enumerate(lines):
-              if line.strip() != "component,":
-                  continue
-              nearby = "\n".join(lines[index : index + 6])
-              if 'found: 1' not in nearby or 'component == "MANIFEST V2"' not in nearby:
-                  continue
-              indent = line[: len(line) - len(line.lstrip())]
-              lines[index] = f'{indent}component: "MANIFEST V2",'
-              for guard_index in range(index + 1, min(index + 8, len(lines))):
-                  if '}) if component == "MANIFEST V2" => {' in lines[guard_index]:
-                      lines[guard_index] = lines[guard_index].replace(
-                          '}) if component == "MANIFEST V2" => {',
-                          '}) => {',
-                      )
-                      break
-              else:
-                  raise SystemExit("MANIFEST V2 redundant guard line not found")
-              break
-          else:
-              if not any('component: "MANIFEST V2",' in line for line in lines):
-                  raise SystemExit("MANIFEST V2 dispatch arm not found")
-
-          path.write_text("\n".join(lines) + "\n")
-          PY
-      - run: cargo fmt --all
-      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --locked --workspace --all-features
-      - name: Commit canonical dispatch
-        shell: bash
-        run: |
-          if git diff --quiet; then
-            echo "MANIFEST dispatch already canonical"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/forgedb-manifest/src/dispatch.rs
-          git commit -m "refactor(v0.4): satisfy strict MANIFEST dispatch lints"
-          git push origin HEAD:${{ github.head_ref }}
-
   test:
     name: ${{ matrix.os }} / stable
     strategy:
