@@ -6,6 +6,12 @@ use forgedb::{
     WriteOptions,
 };
 
+#[derive(Debug, Eq, PartialEq)]
+struct CompactBounds {
+    start: Option<Vec<u8>>,
+    end: Option<Vec<u8>>,
+}
+
 fn main() {
     let exit_code = match run() {
         Ok(()) => 0,
@@ -79,9 +85,9 @@ fn run() -> Result<()> {
         }
         "compact" => {
             let path = required(&mut arguments, "path")?;
-            let (start, end) = parse_compact_bounds(arguments)?;
+            let bounds = parse_compact_bounds(arguments)?;
             let database = Database::open(PathBuf::from(path), Options::default())?;
-            database.compact_range(start.as_deref(), end.as_deref())?;
+            database.compact_range(bounds.start.as_deref(), bounds.end.as_deref())?;
             database.close()
         }
         "inventory" => {
@@ -156,9 +162,7 @@ fn parse_write_options(argument: Option<&str>) -> Result<WriteOptions> {
     }
 }
 
-fn parse_compact_bounds(
-    mut arguments: impl Iterator<Item = String>,
-) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>)> {
+fn parse_compact_bounds(mut arguments: impl Iterator<Item = String>) -> Result<CompactBounds> {
     let mut start = None;
     let mut end = None;
     while let Some(argument) = arguments.next() {
@@ -189,7 +193,7 @@ fn parse_compact_bounds(
             }
         }
     }
-    Ok((start, end))
+    Ok(CompactBounds { start, end })
 }
 
 fn ensure_no_extra(mut arguments: impl Iterator<Item = String>) -> Result<()> {
@@ -267,26 +271,45 @@ fn usage() -> String {
 mod tests {
     use super::*;
 
-    fn compact_arguments(values: &[&str]) -> impl Iterator<Item = String> + '_ {
-        values.iter().map(|value| (*value).to_owned())
+    fn compact_arguments(values: &[&str]) -> std::vec::IntoIter<String> {
+        values
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     #[test]
     fn compact_bounds_accept_empty_from_to_and_both_orders() -> Result<()> {
-        assert_eq!(parse_compact_bounds(compact_arguments(&[]))?, (None, None));
+        assert_eq!(
+            parse_compact_bounds(compact_arguments(&[]))?,
+            CompactBounds {
+                start: None,
+                end: None,
+            }
+        );
         assert_eq!(
             parse_compact_bounds(compact_arguments(&["--from", "alpha"]))?,
-            (Some(b"alpha".to_vec()), None)
+            CompactBounds {
+                start: Some(b"alpha".to_vec()),
+                end: None,
+            }
         );
         assert_eq!(
             parse_compact_bounds(compact_arguments(&["--to", "omega"]))?,
-            (None, Some(b"omega".to_vec()))
+            CompactBounds {
+                start: None,
+                end: Some(b"omega".to_vec()),
+            }
         );
         assert_eq!(
             parse_compact_bounds(compact_arguments(&[
-                "--to", "omega", "--from", "alpha"
+                "--to", "omega", "--from", "alpha",
             ]))?,
-            (Some(b"alpha".to_vec()), Some(b"omega".to_vec()))
+            CompactBounds {
+                start: Some(b"alpha".to_vec()),
+                end: Some(b"omega".to_vec()),
+            }
         );
         Ok(())
     }
