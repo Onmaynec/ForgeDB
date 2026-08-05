@@ -5,6 +5,7 @@
 
 mod database_v3_fixed {
     include!("database_v3_fixed.rs");
+    include!("database_compaction.rs");
     include!("database_streaming_wrapper.rs");
 }
 mod entry_cursor;
