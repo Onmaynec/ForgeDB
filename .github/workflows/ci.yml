@@ -28,65 +28,74 @@ jobs:
           from pathlib import Path
 
           path = Path("crates/forgedb/src/database_v3_fixed.rs")
-          text = path.read_text()
+          lines = path.read_text().splitlines()
 
-          open_marker = '''        let mut recovered_last = manifest.last_sequence;
-          let pending_flush = recover_previous_wal('''
-          open_replacement = '''        require_manifest_wal(
-              &filesystem,
-              &directory,
-              manifest.log_number,
-              "current WAL",
-          )?;
-          if let Some(previous_log_number) = manifest.previous_log_number {
-              require_manifest_wal(
-                  &filesystem,
-                  &directory,
-                  previous_log_number,
-                  "previous WAL",
-              )?;
-          }
+          if not any("require_manifest_wal(" in line for line in lines):
+              recovered_index = next(
+                  (index for index, line in enumerate(lines)
+                   if line.strip() == "let mut recovered_last = manifest.last_sequence;"),
+                  None,
+              )
+              if recovered_index is None:
+                  raise SystemExit("recovered_last insertion point not found")
+              indent = lines[recovered_index][: len(lines[recovered_index]) - len(lines[recovered_index].lstrip())]
+              validation = [
+                  f"{indent}require_manifest_wal(",
+                  f"{indent}    &filesystem,",
+                  f"{indent}    &directory,",
+                  f"{indent}    manifest.log_number,",
+                  f"{indent}    \"current WAL\",",
+                  f"{indent})?;",
+                  f"{indent}if let Some(previous_log_number) = manifest.previous_log_number {{",
+                  f"{indent}    require_manifest_wal(",
+                  f"{indent}        &filesystem,",
+                  f"{indent}        &directory,",
+                  f"{indent}        previous_log_number,",
+                  f"{indent}        \"previous WAL\",",
+                  f"{indent}    )?;",
+                  f"{indent}}}",
+                  "",
+              ]
+              lines[recovered_index:recovered_index] = validation
 
-          let mut recovered_last = manifest.last_sequence;
-          let pending_flush = recover_previous_wal('''
-          if open_marker in text:
-              text = text.replace(open_marker, open_replacement, 1)
-          elif "require_manifest_wal(" not in text:
-              raise SystemExit("Database::open WAL validation marker not found")
+          if not any(line.startswith("fn require_manifest_wal(") for line in lines):
+              helper_index = next(
+                  (index for index, line in enumerate(lines)
+                   if line.startswith("fn ensure_writer_healthy(")),
+                  None,
+              )
+              if helper_index is None:
+                  raise SystemExit("helper insertion point not found")
+              helper = [
+                  "fn require_manifest_wal(",
+                  "    filesystem: &NativeFileSystem,",
+                  "    directory: &Path,",
+                  "    file_number: u64,",
+                  "    role: &'static str,",
+                  ") -> Result<()> {",
+                  "    let path = directory.join(wal_file_name(file_number));",
+                  "    match filesystem.open_sequential(&path) {",
+                  "        Ok(file) => {",
+                  "            drop(file);",
+                  "            Ok(())",
+                  "        }",
+                  "        Err(Error::Io { source, .. }) if source.kind() == ErrorKind::NotFound => {",
+                  "            Err(Error::corruption(",
+                  "                role,",
+                  "                format!(",
+                  "                    \"MANIFEST ссылается на отсутствующий WAL {}\",",
+                  "                    path.display()",
+                  "                ),",
+                  "            ))",
+                  "        }",
+                  "        Err(error) => Err(error),",
+                  "    }",
+                  "}",
+                  "",
+              ]
+              lines[helper_index:helper_index] = helper
 
-          helper_marker = '''fn ensure_writer_healthy(state: &DatabaseState) -> Result<()> {'''
-          helper = '''fn require_manifest_wal(
-              filesystem: &NativeFileSystem,
-              directory: &Path,
-              file_number: u64,
-              role: &'static str,
-          ) -> Result<()> {
-              let path = directory.join(wal_file_name(file_number));
-              match filesystem.open_sequential(&path) {
-                  Ok(file) => {
-                      drop(file);
-                      Ok(())
-                  }
-                  Err(Error::Io { source, .. }) if source.kind() == ErrorKind::NotFound => {
-                      Err(Error::corruption(
-                          role,
-                          format!(
-                              "MANIFEST ссылается на отсутствующий WAL {}",
-                              path.display()
-                          ),
-                      ))
-                  }
-                  Err(error) => Err(error),
-              }
-          }
-
-          fn ensure_writer_healthy(state: &DatabaseState) -> Result<()> {'''
-          if helper_marker in text:
-              text = text.replace(helper_marker, helper, 1)
-          elif "fn require_manifest_wal(" not in text:
-              raise SystemExit("WAL validation helper marker not found")
-
-          path.write_text(text)
+          path.write_text("\n".join(lines) + "\n")
           PY
       - run: cargo fmt --all
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
