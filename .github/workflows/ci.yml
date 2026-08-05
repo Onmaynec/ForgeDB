@@ -1,289 +1,39 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  integrate_manual_picker:
-    name: integrate deterministic manual picker
-    runs-on: ubuntu-latest
+  test:
+    name: ${{ matrix.os }} / stable
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-        with:
-          ref: feature/v0.4.0-leveled-compaction
-          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Connect manual picker structurally
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          def one_index(lines, predicate, label, start=0):
-              matches = [i for i in range(start, len(lines)) if predicate(lines[i])]
-              if len(matches) != 1:
-                  raise SystemExit(f"{label}: expected one match, found {len(matches)}")
-              return matches[0]
-
-          planner = Path("crates/forgedb-lsm/src/lib.rs")
-          lines = planner.read_text().splitlines()
-          enum_start = one_index(
-              lines,
-              lambda line: line.strip() == "pub enum CompactionReason {",
-              "CompactionReason enum",
-          )
-          enum_end = next(
-              (i for i in range(enum_start + 1, len(lines)) if lines[i].strip() == "}"),
-              None,
-          )
-          if enum_end is None:
-              raise SystemExit("CompactionReason enum end not found")
-          if not any(lines[i].strip() == "ManualRange," for i in range(enum_start, enum_end)):
-              level_bytes = one_index(
-                  lines,
-                  lambda line: line.strip() == "LevelBytes,",
-                  "LevelBytes variant",
-                  enum_start,
-              )
-              indent = lines[level_bytes][: len(lines[level_bytes]) - len(lines[level_bytes].lstrip())]
-              lines.insert(level_bytes + 1, f"{indent}ManualRange,")
-          for function in ["validate_layout", "ranges_overlap", "extend_range"]:
-              index = one_index(
-                  lines,
-                  lambda line, function=function: line.startswith(f"fn {function}(")
-                  or line.strip().startswith(f"fn {function}(") and not line.strip().startswith("pub"),
-                  f"{function} visibility",
-              )
-              prefix = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
-              stripped = lines[index].lstrip()
-              lines[index] = f"{prefix}pub(super) {stripped}"
-          planner.write_text("\n".join(lines) + "\n")
-
-          root = Path("crates/forgedb-lsm/src/root.rs")
-          lines = root.read_text().splitlines()
-          merge_mod = one_index(lines, lambda line: line.strip() == "mod merge;", "merge module")
-          if not any(line.strip() == "mod manual;" for line in lines):
-              lines.insert(merge_mod, "mod manual;")
-          merge_export = one_index(
-              lines,
-              lambda line: line.strip() == "pub use merge::{",
-              "merge export",
-          )
-          if not any("pick_manual_compaction" in line for line in lines):
-              lines.insert(merge_export, "pub use manual::pick_manual_compaction;")
-          root.write_text("\n".join(lines) + "\n")
-
-          manual = Path("crates/forgedb-lsm/src/manual.rs")
-          lines = manual.read_text().splitlines()
-          calls = [i for i, line in enumerate(lines) if line.strip() == "build_manual_plan("]
-          if len(calls) != 2:
-              raise SystemExit(f"manual build call count: {len(calls)}")
-
-          def replace_call(lines, start, fields):
-              end = next(
-                  (i for i in range(start + 1, len(lines)) if lines[i].strip() == ")"),
-                  None,
-              )
-              if end is None:
-                  raise SystemExit("manual build call end not found")
-              indent = lines[start][: len(lines[start]) - len(lines[start].lstrip())]
-              body_indent = indent + "    "
-              replacement = [f"{indent}build_manual_plan(BuildManualPlanRequest {{"]
-              replacement.extend(f"{body_indent}{field}" for field in fields)
-              replacement.append(f"{indent}}})")
-              lines[start : end + 1] = replacement
-
-          replace_call(
-              lines,
-              calls[1],
-              [
-                  "source_level: score.level,",
-                  "output_level,",
-                  "source,",
-                  "target,",
-                  "selected_source: &selected_source,",
-                  "selected_target: &selected_target,",
-                  "smallest_user_key: smallest,",
-                  "largest_user_key: largest,",
-                  "score,",
-              ],
-          )
-          replace_call(
-              lines,
-              calls[0],
-              [
-                  "source_level: 0,",
-                  "output_level: 1,",
-                  "source: level_zero,",
-                  "target: level_one,",
-                  "selected_source: &selected_l0,",
-                  "selected_target: &selected_l1,",
-                  "smallest_user_key: smallest,",
-                  "largest_user_key: largest,",
-                  "score,",
-              ],
-          )
-
-          allow_index = one_index(
-              lines,
-              lambda line: line.strip() == "#[allow(clippy::too_many_arguments)]",
-              "manual lint allowance",
-          )
-          source_line = one_index(
-              lines,
-              lambda line: line.strip() == "let source_files = source",
-              "manual source file construction",
-              allow_index,
-          )
-          typed_header = [
-              "struct BuildManualPlanRequest<'a> {",
-              "    source_level: usize,",
-              "    output_level: usize,",
-              "    source: &'a [TableMeta],",
-              "    target: &'a [TableMeta],",
-              "    selected_source: &'a BTreeSet<u64>,",
-              "    selected_target: &'a BTreeSet<u64>,",
-              "    smallest_user_key: Vec<u8>,",
-              "    largest_user_key: Vec<u8>,",
-              "    score: CompactionScore,",
-              "}",
-              "",
-              "fn build_manual_plan(request: BuildManualPlanRequest<'_>) -> Result<CompactionPlan> {",
-              "    let BuildManualPlanRequest {",
-              "        source_level,",
-              "        output_level,",
-              "        source,",
-              "        target,",
-              "        selected_source,",
-              "        selected_target,",
-              "        smallest_user_key,",
-              "        largest_user_key,",
-              "        score,",
-              "    } = request;",
-          ]
-          lines[allow_index:source_line] = typed_header
-          if any("allow(clippy::too_many_arguments)" in line for line in lines):
-              raise SystemExit("manual lint allowance remains")
-          manual.write_text("\n".join(lines) + "\n")
-
-          database = Path("crates/forgedb/src/database_compaction.rs")
-          lines = database.read_text().splitlines()
-          decision_start = one_index(
-              lines,
-              lambda line: line.strip() == "let decision = forgedb_lsm::pick_compaction(",
-              "background picker call",
-          )
-          decision_end = next(
-              (i for i in range(decision_start + 1, len(lines)) if lines[i].strip() == ")?;"),
-              None,
-          )
-          if decision_end is None:
-              raise SystemExit("picker call end not found")
-          indent = lines[decision_start][: len(lines[decision_start]) - len(lines[decision_start].lstrip())]
-          body = indent + "    "
-          config = body + "    "
-          lines[decision_start : decision_end + 1] = [
-              f"{indent}let decision = forgedb_lsm::pick_manual_compaction(",
-              f"{body}&levels,",
-              f"{body}forgedb_lsm::CompactionConfig {{",
-              f"{config}l0_compaction_trigger: self.options.l0_compaction_trigger,",
-              f"{config}level1_target_size: self.options.level1_target_size,",
-              f"{config}level_size_multiplier: self.options.level_size_multiplier,",
-              f"{config}max_compaction_bytes: self.options.max_compaction_bytes,",
-              f"{body}}},",
-              f"{body}start,",
-              f"{body}end,",
-              f"{indent})?;",
-          ]
-          range_if = one_index(
-              lines,
-              lambda line: line.strip() == "if !plan_overlaps_requested_range(&plan, start, end) {",
-              "obsolete range filter",
-          )
-          range_end = next(
-              (i for i in range(range_if + 1, len(lines)) if lines[i].strip() == "}"),
-              None,
-          )
-          if range_end is None:
-              raise SystemExit("obsolete range filter end not found")
-          del lines[range_if : range_end + 1]
-          if range_if < len(lines) and lines[range_if].strip() == "":
-              del lines[range_if]
-
-          helper_start = one_index(
-              lines,
-              lambda line: line.strip().startswith("fn plan_overlaps_requested_range("),
-              "obsolete range helper",
-          )
-          helper_end = one_index(
-              lines,
-              lambda line: line.strip().startswith("fn selected_compaction_inputs("),
-              "selected inputs helper",
-              helper_start + 1,
-          )
-          del lines[helper_start:helper_end]
-
-          if not any("manual_range_compacts_requested_l0_file" in line for line in lines):
-              module_end = len(lines) - 1
-              if lines[module_end].strip() != "}":
-                  raise SystemExit("database compaction module end not found")
-              test = [
-                  "",
-                  "    #[test]",
-                  "    fn manual_range_compacts_requested_l0_file_below_pressure_trigger() -> Result<()> {",
-                  "        let directory = temporary_directory(\"manual-range\")?;",
-                  "        let options = Options {",
-                  "            l0_compaction_trigger: 10,",
-                  "            l0_slowdown_trigger: 11,",
-                  "            l0_stop_trigger: 12,",
-                  "            target_sst_size: 1024,",
-                  "            data_block_size: 1024,",
-                  "            ..Options::default()",
-                  "        };",
-                  "        let database = StreamingDatabase::open(&directory, options)?;",
-                  "        database.put(b\"alpha\", b\"one\", WriteOptions::sync())?;",
-                  "        database.flush()?;",
-                  "        database.put(b\"middle\", b\"two\", WriteOptions::sync())?;",
-                  "        database.flush()?;",
-                  "",
-                  "        database.compact_range(Some(b\"m\"), Some(b\"z\"))?;",
-                  "        assert_eq!(database.get(b\"alpha\")?, Some(b\"one\".to_vec()));",
-                  "        assert_eq!(database.get(b\"middle\")?, Some(b\"two\".to_vec()));",
-                  "        {",
-                  "            let state = database.inner.lock_state()?;",
-                  "            let levels = state.version.metadata_levels();",
-                  "            assert_eq!(levels[0].len(), 1);",
-                  "            assert_eq!(levels[0][0].smallest_user_key, b\"alpha\");",
-                  "            assert_eq!(levels[1].len(), 1);",
-                  "            assert_eq!(levels[1][0].smallest_user_key, b\"middle\");",
-                  "        }",
-                  "        database.close()?;",
-                  "        fs::remove_dir_all(&directory).map_err(|source| {",
-                  "            Error::io(\"remove_test_directory\", Some(directory), source)",
-                  "        })?;",
-                  "        Ok(())",
-                  "    }",
-              ]
-              lines[module_end:module_end] = test
-          database.write_text("\n".join(lines) + "\n")
-          PY
-      - run: cargo fmt --all
+      - run: cargo fmt --all --check
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace --all-features
       - run: cargo test --locked --workspace --doc
       - run: cargo build --locked --workspace --release
-      - name: Commit manual picker
-        run: |
-          if git diff --quiet; then
-            echo "No changes"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/forgedb-lsm/src crates/forgedb/src/database_compaction.rs
-          git commit -m "feat(v0.4): select manual compaction by requested range"
-          git push origin HEAD:feature/v0.4.0-leveled-compaction
+
+  msrv:
+    name: ubuntu / Rust 1.89
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: clippy
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-features
