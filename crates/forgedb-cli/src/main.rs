@@ -80,8 +80,10 @@ fn run() -> Result<()> {
         "inventory" => {
             let path = required(&mut arguments, "path")?;
             ensure_no_extra(arguments)?;
-            let mut options = Options::default();
-            options.read_only = true;
+            let options = Options {
+                read_only: true,
+                ..Options::default()
+            };
             let database = Database::open(PathBuf::from(path), options)?;
             print_inventory(&database.file_inventory()?);
             database.close()
@@ -104,8 +106,10 @@ fn run() -> Result<()> {
                 Some(_) => return Err(Error::invalid_argument("verify_mode", usage())),
             };
             ensure_no_extra(arguments)?;
-            let mut options = Options::default();
-            options.read_only = true;
+            let options = Options {
+                read_only: true,
+                ..Options::default()
+            };
             let database = Database::open(PathBuf::from(path), options)?;
             let report = database.verify(verify_options)?;
             println!("deep: {}", report.deep);
