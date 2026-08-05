@@ -13,6 +13,7 @@ homepage.workspace = true
 forgedb-core = { path = "../forgedb-core" }
 forgedb-fs = { path = "../forgedb-fs" }
 forgedb-sstable = { path = "../forgedb-sstable" }
+forgedb-wal = { path = "../forgedb-wal" }
 
 [lints]
 workspace = true
