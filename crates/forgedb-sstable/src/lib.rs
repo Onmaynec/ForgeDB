@@ -1771,7 +1771,7 @@ fn read_u64(input: &[u8], offset: usize, component: &'static str) -> Result<u64>
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::io::{Seek, SeekFrom, Write};
+    use std::io::{Read, Seek, SeekFrom, Write};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1875,11 +1875,16 @@ mod tests {
             .write(true)
             .open(&path)
             .map_err(|source| Error::io("open_test_sstable", Some(path.clone()), source))?;
-        file.seek(SeekFrom::Start(
-            u64::try_from(SST_HEADER_SIZE + 5).unwrap_or(u64::MAX),
-        ))
-        .map_err(|source| Error::io("seek_test_sstable", Some(path.clone()), source))?;
-        file.write_all(&[0xff])
+        let checksum_offset = u64::try_from(SST_HEADER_SIZE - 4).unwrap_or(u64::MAX);
+        file.seek(SeekFrom::Start(checksum_offset))
+            .map_err(|source| Error::io("seek_test_sstable", Some(path.clone()), source))?;
+        let mut checksum_byte = [0_u8; 1];
+        file.read_exact(&mut checksum_byte)
+            .map_err(|source| Error::io("read_test_sstable", Some(path.clone()), source))?;
+        checksum_byte[0] ^= 0xff;
+        file.seek(SeekFrom::Start(checksum_offset))
+            .map_err(|source| Error::io("seek_test_sstable", Some(path.clone()), source))?;
+        file.write_all(&checksum_byte)
             .map_err(|source| Error::io("corrupt_test_sstable", Some(path.clone()), source))?;
         file.sync_all()
             .map_err(|source| Error::io("sync_test_sstable", Some(path.clone()), source))?;
