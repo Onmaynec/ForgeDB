@@ -3,7 +3,12 @@ use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use forgedb::{Database, Error, Options, Result, WriteOptions};
+use forgedb::{
+    Database, Error, Limits, Options, Result, SequenceNumber, WriteBatch, WriteOptions,
+};
+use forgedb_fs::{NativeFileSystem, load_or_create_identity};
+use forgedb_manifest::CURRENT_FILE_NAME;
+use forgedb_wal::{create_wal, wal_file_name};
 
 fn temporary_directory(name: &str) -> Result<PathBuf> {
     let unique = SystemTime::now()
@@ -111,6 +116,79 @@ fn missing_manifest_owned_wal_blocks_open() -> Result<()> {
         Database::open(&directory, Options::default()),
         Err(Error::Corruption { .. })
     ));
+    fs::remove_dir_all(&directory)
+        .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+    Ok(())
+}
+
+#[test]
+fn database_bootstrap_recovers_header_only_wal_before_current() -> Result<()> {
+    let directory = temporary_directory("bootstrap-retry")?;
+    let filesystem = NativeFileSystem;
+    let identity = load_or_create_identity(&filesystem, &directory)?;
+    drop(create_wal(&filesystem, &directory, identity, 1)?);
+    assert!(!directory.join(CURRENT_FILE_NAME).exists());
+
+    let database = Database::open(&directory, Options::default())?;
+    database.put(b"key", b"value", WriteOptions::sync())?;
+    database.close()?;
+    assert!(directory.join(CURRENT_FILE_NAME).exists());
+    assert!(directory.join(wal_file_name(1)).exists());
+
+    let reopened = Database::open(&directory, Options::default())?;
+    assert_eq!(reopened.get(b"key")?, Some(b"value".to_vec()));
+    reopened.close()?;
+    fs::remove_dir_all(&directory)
+        .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+    Ok(())
+}
+
+#[test]
+fn flush_reuses_header_only_orphan_next_wal() -> Result<()> {
+    let directory = temporary_directory("orphan-next-wal")?;
+    let database = Database::open(&directory, Options::default())?;
+    let identity = database.identity();
+    database.put(b"key", b"value", WriteOptions::sync())?;
+    database.close()?;
+
+    let filesystem = NativeFileSystem;
+    drop(create_wal(&filesystem, &directory, identity, 3)?);
+    let reopened = Database::open(&directory, Options::default())?;
+    reopened.flush()?;
+    assert!(directory.join("SST-000002.sst").exists());
+    assert!(directory.join(wal_file_name(3)).exists());
+    assert!(!directory.join(wal_file_name(1)).exists());
+    reopened.close()?;
+
+    let verified = Database::open(&directory, Options::default())?;
+    assert_eq!(verified.get(b"key")?, Some(b"value".to_vec()));
+    verified.close()?;
+    fs::remove_dir_all(&directory)
+        .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+    Ok(())
+}
+
+#[test]
+fn flush_refuses_nonempty_orphan_next_wal() -> Result<()> {
+    let directory = temporary_directory("nonempty-orphan-wal")?;
+    let database = Database::open(&directory, Options::default())?;
+    let identity = database.identity();
+    database.put(b"live", b"value", WriteOptions::sync())?;
+    database.close()?;
+
+    let filesystem = NativeFileSystem;
+    let mut orphan = create_wal(&filesystem, &directory, identity, 3)?;
+    let limits = Limits::default();
+    let mut batch = WriteBatch::new();
+    batch.put(b"foreign", b"must-not-be-deleted")?;
+    orphan.append_batch(SequenceNumber::new(2)?, &batch, &limits, true)?;
+    drop(orphan);
+
+    let reopened = Database::open(&directory, Options::default())?;
+    assert!(matches!(reopened.flush(), Err(Error::Corruption { .. })));
+    assert_eq!(reopened.get(b"live")?, Some(b"value".to_vec()));
+    assert!(directory.join(wal_file_name(3)).exists());
+    reopened.close()?;
     fs::remove_dir_all(&directory)
         .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
     Ok(())
