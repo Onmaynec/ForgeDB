@@ -1,5 +1,5 @@
 use std::fs::{self, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -7,6 +7,8 @@ use forgedb::{Database, Error, Limits, Options, Result, SequenceNumber, WriteBat
 use forgedb_fs::{NativeFileSystem, load_or_create_identity};
 use forgedb_manifest::CURRENT_FILE_NAME;
 use forgedb_wal::{create_wal, wal_file_name};
+
+const SST_HEADER_CHECKSUM_OFFSET: u64 = 60;
 
 fn temporary_directory(name: &str) -> Result<PathBuf> {
     let unique = SystemTime::now()
@@ -58,10 +60,18 @@ fn installed_sstable_checksum_corruption_blocks_open() -> Result<()> {
         .open(&table_path)
         .map_err(|source| Error::io("open_test_sstable", Some(table_path.clone()), source))?;
     table
-        .seek(SeekFrom::Start(70))
+        .seek(SeekFrom::Start(SST_HEADER_CHECKSUM_OFFSET))
+        .map_err(|source| Error::io("seek_test_sstable", Some(table_path.clone()), source))?;
+    let mut checksum_byte = [0_u8; 1];
+    table
+        .read_exact(&mut checksum_byte)
+        .map_err(|source| Error::io("read_test_sstable_checksum", Some(table_path.clone()), source))?;
+    checksum_byte[0] ^= 0xff;
+    table
+        .seek(SeekFrom::Start(SST_HEADER_CHECKSUM_OFFSET))
         .map_err(|source| Error::io("seek_test_sstable", Some(table_path.clone()), source))?;
     table
-        .write_all(&[0xff])
+        .write_all(&checksum_byte)
         .map_err(|source| Error::io("corrupt_test_sstable", Some(table_path.clone()), source))?;
     table
         .sync_all()
