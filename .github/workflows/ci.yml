@@ -1,71 +1,39 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  integrate_write_stalls:
-    name: integrate bounded write stalls
-    runs-on: ubuntu-latest
+  test:
+    name: ${{ matrix.os }} / stable
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-        with:
-          ref: feature/v0.4.0-leveled-compaction
-          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Connect stall policy to write path
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("crates/forgedb/src/database_v3_fixed.rs")
-          lines = path.read_text().splitlines()
-          write_start = next(
-              (index for index, line in enumerate(lines) if "pub fn write(&self" in line),
-              None,
-          )
-          if write_start is None:
-              raise SystemExit("write method not found")
-          get_start = next(
-              (
-                  index
-                  for index in range(write_start + 1, len(lines))
-                  if "pub fn get(&self" in lines[index]
-              ),
-              None,
-          )
-          if get_start is None:
-              raise SystemExit("get method boundary not found")
-          matches = [
-              index
-              for index in range(write_start, get_start)
-              if lines[index].strip() == "let mut state = self.lock_state()?;"
-          ]
-          if len(matches) != 1:
-              raise SystemExit(f"serialized write lock count: {len(matches)}")
-          index = matches[0]
-          indent = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
-          lines.insert(index, f"{indent}self.apply_write_stall()?;")
-          path.write_text("\n".join(lines) + "\n")
-          PY
-      - run: cargo fmt --all
+      - run: cargo fmt --all --check
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace --all-features
       - run: cargo test --locked --workspace --doc
       - run: cargo build --locked --workspace --release
-      - name: Commit write stalls
-        run: |
-          if git diff --quiet; then
-            echo "No changes"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/forgedb/src
-          git commit -m "feat(v0.4): apply bounded L0 write stalls"
-          git push origin HEAD:feature/v0.4.0-leveled-compaction
+
+  msrv:
+    name: ubuntu / Rust 1.89
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: clippy
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-features
