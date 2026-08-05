@@ -95,7 +95,8 @@ impl StreamingDatabase {
                 &limits,
                 self.inner.options.max_compaction_bytes,
                 read_options.verify_checksums,
-            )?;
+            )?
+            .with_version_lease(Arc::clone(&version));
             sources.push((priority, Box::new(cursor)));
             priority = priority.checked_add(1).ok_or(Error::ResourceLimit {
                 resource: "scan_source_count",

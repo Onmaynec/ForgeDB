@@ -6,6 +6,12 @@ use forgedb::{
     WriteOptions,
 };
 
+#[derive(Debug, Eq, PartialEq)]
+struct CompactBounds {
+    start: Option<Vec<u8>>,
+    end: Option<Vec<u8>>,
+}
+
 fn main() {
     let exit_code = match run() {
         Ok(()) => 0,
@@ -75,6 +81,13 @@ fn run() -> Result<()> {
                     .map_err(|source| Error::io("write_stdout", None, source))?;
             }
             drop(stdout);
+            database.close()
+        }
+        "compact" => {
+            let path = required(&mut arguments, "path")?;
+            let bounds = parse_compact_bounds(arguments)?;
+            let database = Database::open(PathBuf::from(path), Options::default())?;
+            database.compact_range(bounds.start.as_deref(), bounds.end.as_deref())?;
             database.close()
         }
         "inventory" => {
@@ -149,6 +162,40 @@ fn parse_write_options(argument: Option<&str>) -> Result<WriteOptions> {
     }
 }
 
+fn parse_compact_bounds(mut arguments: impl Iterator<Item = String>) -> Result<CompactBounds> {
+    let mut start = None;
+    let mut end = None;
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--from" => {
+                if start.is_some() {
+                    return Err(Error::invalid_argument(
+                        "compact_from",
+                        "флаг --from указан повторно",
+                    ));
+                }
+                start = Some(required(&mut arguments, "compact_from")?.into_bytes());
+            }
+            "--to" => {
+                if end.is_some() {
+                    return Err(Error::invalid_argument(
+                        "compact_to",
+                        "флаг --to указан повторно",
+                    ));
+                }
+                end = Some(required(&mut arguments, "compact_to")?.into_bytes());
+            }
+            _ => {
+                return Err(Error::invalid_argument(
+                    "compact_argument",
+                    format!("неизвестный аргумент compact: {argument}"),
+                ));
+            }
+        }
+    }
+    Ok(CompactBounds { start, end })
+}
+
 fn ensure_no_extra(mut arguments: impl Iterator<Item = String>) -> Result<()> {
     if arguments.next().is_some() {
         return Err(Error::invalid_argument("arguments", usage()));
@@ -209,11 +256,77 @@ fn usage() -> String {
         "  forgedb get <каталог> <ключ>",
         "  forgedb delete <каталог> <ключ> [--sync|--no-sync|--disable-wal]",
         "  forgedb scan <каталог> [start] [end-exclusive]",
+        "  forgedb compact <каталог> [--from <ключ>] [--to <ключ>]",
         "  forgedb inventory <каталог>",
         "  forgedb inspect recovery-plan <каталог>",
         "  forgedb verify <каталог> [--deep]",
         "",
-        "CLI v0.3.0 принимает границы scan как UTF-8 и выводит raw key/value через TAB.",
+        "CLI v0.4.0 принимает UTF-8 границы scan/compact; --to является exclusive.",
+        "scan выводит raw key/value через TAB.",
     ]
     .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn compact_arguments(values: &[&str]) -> std::vec::IntoIter<String> {
+        values
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    #[test]
+    fn compact_bounds_accept_empty_from_to_and_both_orders() -> Result<()> {
+        assert_eq!(
+            parse_compact_bounds(compact_arguments(&[]))?,
+            CompactBounds {
+                start: None,
+                end: None,
+            }
+        );
+        assert_eq!(
+            parse_compact_bounds(compact_arguments(&["--from", "alpha"]))?,
+            CompactBounds {
+                start: Some(b"alpha".to_vec()),
+                end: None,
+            }
+        );
+        assert_eq!(
+            parse_compact_bounds(compact_arguments(&["--to", "omega"]))?,
+            CompactBounds {
+                start: None,
+                end: Some(b"omega".to_vec()),
+            }
+        );
+        assert_eq!(
+            parse_compact_bounds(compact_arguments(&[
+                "--to", "omega", "--from", "alpha",
+            ]))?,
+            CompactBounds {
+                start: Some(b"alpha".to_vec()),
+                end: Some(b"omega".to_vec()),
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compact_bounds_reject_duplicate_unknown_and_missing_values() {
+        for arguments in [
+            &["--from", "a", "--from", "b"][..],
+            &["--to", "z", "--to", "x"][..],
+            &["--unknown", "value"][..],
+            &["--from"][..],
+            &["--to"][..],
+        ] {
+            assert!(matches!(
+                parse_compact_bounds(compact_arguments(arguments)),
+                Err(Error::InvalidArgument { .. })
+            ));
+        }
+    }
 }

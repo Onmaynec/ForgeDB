@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use forgedb_core::{
     DatabaseId, Error, InternalKey, InternalKeyCodec, Limits, Result, SequenceNumber, ValueType,
@@ -11,6 +12,7 @@ use forgedb_sstable::{
 };
 
 use crate::entry_cursor::EntryCursor;
+use crate::version_set::VersionSet;
 
 const SST_MAGIC: &[u8; 8] = b"FORGESST";
 const FOOTER_MAGIC: &[u8; 8] = b"FGSSTEND";
@@ -60,6 +62,7 @@ pub(crate) struct SstEntryCursor {
     smallest_sequence: Option<SequenceNumber>,
     largest_sequence: Option<SequenceNumber>,
     finished: bool,
+    _version_lease: Option<Arc<VersionSet>>,
     #[cfg(test)]
     blocks_loaded: usize,
     #[cfg(test)]
@@ -189,6 +192,7 @@ impl SstEntryCursor {
             smallest_sequence: None,
             largest_sequence: None,
             finished: false,
+            _version_lease: None,
             #[cfg(test)]
             blocks_loaded: 0,
             #[cfg(test)]
@@ -196,6 +200,11 @@ impl SstEntryCursor {
         };
         cursor.load_next_block()?;
         Ok(cursor)
+    }
+
+    pub(crate) fn with_version_lease(mut self, lease: Arc<VersionSet>) -> Self {
+        self._version_lease = Some(lease);
+        self
     }
 
     fn load_next_block(&mut self) -> Result<()> {

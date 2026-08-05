@@ -32,8 +32,8 @@ fn installed_sstable_survives_reopen_without_obsolete_wal() -> Result<()> {
     assert!(directory.join("WAL-000001.log").exists());
 
     database.flush()?;
-    assert!(directory.join("SST-000002.sst").exists());
-    assert!(directory.join("WAL-000003.log").exists());
+    assert!(directory.join("SST-000003.sst").exists());
+    assert!(directory.join("WAL-000004.log").exists());
     assert!(!directory.join("WAL-000001.log").exists());
     database.close()?;
 
@@ -53,7 +53,7 @@ fn installed_sstable_checksum_corruption_blocks_open() -> Result<()> {
     database.flush()?;
     database.close()?;
 
-    let table_path = directory.join("SST-000002.sst");
+    let table_path = directory.join("SST-000003.sst");
     let mut table = OpenOptions::new()
         .read(true)
         .write(true)
@@ -100,7 +100,7 @@ fn orphan_sstable_does_not_override_manifest_state() -> Result<()> {
     database.close()?;
 
     fs::copy(
-        directory.join("SST-000002.sst"),
+        directory.join("SST-000003.sst"),
         directory.join("SST-999999.sst"),
     )
     .map_err(|source| Error::io("copy_orphan_sstable", Some(directory.clone()), source))?;
@@ -164,11 +164,11 @@ fn flush_reuses_header_only_orphan_next_wal() -> Result<()> {
     database.close()?;
 
     let filesystem = NativeFileSystem;
-    drop(create_wal(&filesystem, &directory, identity, 3)?);
+    drop(create_wal(&filesystem, &directory, identity, 4)?);
     let reopened = Database::open(&directory, Options::default())?;
     reopened.flush()?;
-    assert!(directory.join("SST-000002.sst").exists());
-    assert!(directory.join(wal_file_name(3)).exists());
+    assert!(directory.join("SST-000003.sst").exists());
+    assert!(directory.join(wal_file_name(4)).exists());
     assert!(!directory.join(wal_file_name(1)).exists());
     reopened.close()?;
 
@@ -189,7 +189,7 @@ fn flush_refuses_nonempty_orphan_next_wal() -> Result<()> {
     database.close()?;
 
     let filesystem = NativeFileSystem;
-    let mut orphan = create_wal(&filesystem, &directory, identity, 3)?;
+    let mut orphan = create_wal(&filesystem, &directory, identity, 4)?;
     let limits = Limits::default();
     let mut batch = WriteBatch::new();
     batch.put(b"foreign", b"must-not-be-deleted")?;
@@ -199,7 +199,7 @@ fn flush_refuses_nonempty_orphan_next_wal() -> Result<()> {
     let reopened = Database::open(&directory, Options::default())?;
     assert!(matches!(reopened.flush(), Err(Error::Corruption { .. })));
     assert_eq!(reopened.get(b"live")?, Some(b"value".to_vec()));
-    assert!(directory.join(wal_file_name(3)).exists());
+    assert!(directory.join(wal_file_name(4)).exists());
     reopened.close()?;
     fs::remove_dir_all(&directory)
         .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;

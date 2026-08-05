@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use forgedb_core::{DatabaseId, Error, Limits, Result, SequenceNumber};
 use forgedb_fs::NativeFileSystem;
-use forgedb_manifest::ManifestState;
+use forgedb_manifest::ManifestStateV2;
 use forgedb_sstable::{TableMeta, TableReader};
 
 use crate::table_scan::{self, TableLookupRequest, TableSnapshotLookup};
@@ -37,39 +37,33 @@ pub(crate) struct VersionSet {
 }
 
 impl VersionSet {
-    pub(crate) fn open(
+    pub(crate) fn open_v2(
         directory: &Path,
         identity: DatabaseId,
-        manifest: &ManifestState,
+        manifest: &ManifestStateV2,
         limits: &Limits,
-        level_count: usize,
         max_file_size: u64,
     ) -> Result<Self> {
-        if level_count < 2 {
-            return Err(Error::invalid_argument(
-                "level_count",
-                "VersionSet требует минимум L0 и L1",
-            ));
-        }
+        manifest.validate(limits)?;
         let filesystem = NativeFileSystem;
-        let mut levels = (0..level_count).map(|_| Vec::new()).collect::<Vec<_>>();
-        for metadata in &manifest.l0_files {
-            let reader = TableReader::open(
-                &filesystem,
-                directory,
-                identity,
-                metadata,
-                limits,
-                max_file_size,
-            )?;
-            let level_zero = levels.get_mut(0).ok_or(Error::InternalInvariant {
-                invariant: "I-VERSIONSET-L0-PRESENT",
-                reason: "VersionSet не содержит L0".to_owned(),
-            })?;
-            level_zero.push(TableHandle {
-                metadata: metadata.clone(),
-                reader: Arc::new(reader),
-            });
+        let mut levels = Vec::with_capacity(manifest.levels.len());
+        for metadata_level in &manifest.levels {
+            let mut level = Vec::with_capacity(metadata_level.len());
+            for metadata in metadata_level {
+                let reader = TableReader::open(
+                    &filesystem,
+                    directory,
+                    identity,
+                    metadata,
+                    limits,
+                    max_file_size,
+                )?;
+                level.push(TableHandle {
+                    metadata: metadata.clone(),
+                    reader: Arc::new(reader),
+                });
+            }
+            levels.push(level);
         }
         let version = Self {
             directory: directory.to_path_buf(),
@@ -195,8 +189,16 @@ impl VersionSet {
     }
 
     #[must_use]
+    pub(crate) fn metadata_levels(&self) -> Vec<Vec<TableMeta>> {
+        self.levels
+            .iter()
+            .map(|level| level.iter().map(|table| table.metadata.clone()).collect())
+            .collect()
+    }
+
+    #[must_use]
     pub(crate) fn file_count(&self) -> usize {
-        self.levels.iter().map(Vec::len).sum()
+        self.metadata_levels().iter().map(Vec::len).sum()
     }
 
     #[must_use]
@@ -290,6 +292,101 @@ mod tests {
     fn l0_requires_creation_order() -> Result<()> {
         let files = vec![metadata(20, b"a", b"z")?, metadata(19, b"a", b"z")?];
         assert!(validate_level_metadata(0, &files, &Limits::default()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn v2_version_set_opens_physical_l0_and_l1_files() -> Result<()> {
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        use forgedb_manifest::{LevelFile, VersionEditV2};
+        use forgedb_sstable::{TableBuildOptions, TableBuildRequest, TableEntry, build_table};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "forgedb-version-set-v2-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).map_err(|source| {
+            Error::io("create_test_directory", Some(directory.clone()), source)
+        })?;
+        let temporary = directory.join("TEMP");
+        let filesystem = NativeFileSystem;
+        let limits = Limits::default();
+        let identity = DatabaseId::random();
+        let options = TableBuildOptions {
+            data_block_size: 1024,
+            restart_interval: 16,
+            bloom_bits_per_key: 10,
+        };
+        let l0_entries = vec![TableEntry::value(
+            b"a".to_vec(),
+            SequenceNumber::new(2)?,
+            b"l0".to_vec(),
+            &limits,
+        )?];
+        let l1_entries = vec![TableEntry::value(
+            b"n".to_vec(),
+            SequenceNumber::FIRST,
+            b"l1".to_vec(),
+            &limits,
+        )?];
+        let l0 = build_table(
+            &filesystem,
+            TableBuildRequest::new(
+                &directory,
+                &temporary,
+                identity,
+                10,
+                &l0_entries,
+                &limits,
+                options,
+            ),
+        )?;
+        let l1 = build_table(
+            &filesystem,
+            TableBuildRequest::new(
+                &directory,
+                &temporary,
+                identity,
+                11,
+                &l1_entries,
+                &limits,
+                options,
+            ),
+        )?;
+        let state = ManifestStateV2::initial(identity, 2, 1, 3)?.applied(
+            &VersionEditV2 {
+                next_file_number: Some(12),
+                added_files: vec![
+                    LevelFile {
+                        level: 0,
+                        metadata: l0.clone(),
+                    },
+                    LevelFile {
+                        level: 1,
+                        metadata: l1.clone(),
+                    },
+                ],
+                ..VersionEditV2::default()
+            },
+            &limits,
+        )?;
+        let version = VersionSet::open_v2(&directory, identity, &state, &limits, 64 * 1024 * 1024)?;
+        assert_eq!(version.level_count(), 3);
+        assert_eq!(version.metadata_levels()[0], vec![l0]);
+        assert_eq!(version.metadata_levels()[1], vec![l1]);
+        assert_eq!(
+            version.get_at(b"n", Some(SequenceNumber::new(2)?), &limits, true,)?,
+            TableSnapshotLookup::Value(b"l1".to_vec())
+        );
+        drop(version);
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
         Ok(())
     }
 }
