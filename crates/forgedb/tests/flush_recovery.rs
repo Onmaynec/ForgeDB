@@ -63,9 +63,13 @@ fn installed_sstable_checksum_corruption_blocks_open() -> Result<()> {
         .seek(SeekFrom::Start(SST_HEADER_CHECKSUM_OFFSET))
         .map_err(|source| Error::io("seek_test_sstable", Some(table_path.clone()), source))?;
     let mut checksum_byte = [0_u8; 1];
-    table
-        .read_exact(&mut checksum_byte)
-        .map_err(|source| Error::io("read_test_sstable_checksum", Some(table_path.clone()), source))?;
+    table.read_exact(&mut checksum_byte).map_err(|source| {
+        Error::io(
+            "read_test_sstable_checksum",
+            Some(table_path.clone()),
+            source,
+        )
+    })?;
     checksum_byte[0] ^= 0xff;
     table
         .seek(SeekFrom::Start(SST_HEADER_CHECKSUM_OFFSET))
