@@ -1,19 +1,37 @@
-//! Публичный API ForgeDB v0.2.0.
+//! Публичный API ForgeDB v0.3.0.
 //!
-//! Версия предоставляет durable WAL V1, mutable/immutable memtable, SSTable V1,
-//! MANIFEST V1, crash-safe flush, point get/put/delete, атомарный WriteBatch
-//! и восстановление после повторного открытия.
+//! Версия добавляет immutable VersionSet, MVCC snapshots, snapshot-aware point reads,
+//! forward range scan, file inventory, recovery plan и deep verification поверх
+//! WAL/SSTable/MANIFEST V1.
 
-#[path = "database_v2_fixed.rs"]
-mod database;
-mod memtable;
+mod database_v3_fixed {
+    include!("database_v3_fixed.rs");
+    include!("database_streaming_wrapper.rs");
+}
+mod entry_cursor;
+mod inventory;
+mod iterator;
+mod mvcc_memtable;
 mod options;
+mod read_options;
+mod recovery_plan;
+mod snapshot;
+mod sst_entry_cursor;
+mod table_scan;
+mod verify;
+mod version_set;
 mod write_options;
 
-pub use database::Database;
+pub use database_v3_fixed::StreamingDatabase as Database;
 pub use forgedb_core::{
     BatchOperation, ColumnFamilyId, DatabaseId, Error, InternalKey, InternalKeyCodec,
     InternalKeyComparator, Limits, Result, SequenceNumber, ValueType, WriteBatch,
 };
+pub use inventory::FileInventory;
+pub use iterator::DbIterator;
 pub use options::Options;
+pub use read_options::ReadOptions;
+pub use recovery_plan::RecoveryPlan;
+pub use snapshot::Snapshot;
+pub use verify::{VerifyOptions, VerifyReport};
 pub use write_options::{Durability, WriteOptions};
