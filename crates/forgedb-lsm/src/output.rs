@@ -205,12 +205,11 @@ where
         };
         let logical_key = LogicalKey::from_entry(&first);
         let mut entries = vec![first];
-        let mut estimated_bytes = estimated_entry_bytes(entries.first().ok_or(
-            Error::InternalInvariant {
+        let mut estimated_bytes =
+            estimated_entry_bytes(entries.first().ok_or(Error::InternalInvariant {
                 invariant: "I-COMPACTION-OUTPUT-GROUP-FIRST",
                 reason: "new key-group не содержит first entry".to_owned(),
-            },
-        )?)?;
+            })?)?;
 
         loop {
             let Some(entry) = self.pull_entry()? else {
@@ -222,25 +221,21 @@ where
                 break;
             }
             let entry_bytes = estimated_entry_bytes(&entry)?;
-            estimated_bytes = estimated_bytes.checked_add(entry_bytes).ok_or(
-                Error::ResourceLimit {
-                    resource: "compaction_key_group_bytes",
-                    limit: self.options.max_key_group_bytes,
-                    observed: u64::MAX,
-                },
-            )?;
+            estimated_bytes =
+                estimated_bytes
+                    .checked_add(entry_bytes)
+                    .ok_or(Error::ResourceLimit {
+                        resource: "compaction_key_group_bytes",
+                        limit: self.options.max_key_group_bytes,
+                        observed: u64::MAX,
+                    })?;
             entries.push(entry);
             self.validate_group_limits(entries.len(), estimated_bytes)?;
         }
         self.validate_group_limits(entries.len(), estimated_bytes)?;
-        self.stats.peak_key_group_bytes = self
-            .stats
-            .peak_key_group_bytes
-            .max(estimated_bytes);
-        self.stats.peak_versions_per_user_key = self
-            .stats
-            .peak_versions_per_user_key
-            .max(entries.len());
+        self.stats.peak_key_group_bytes = self.stats.peak_key_group_bytes.max(estimated_bytes);
+        self.stats.peak_versions_per_user_key =
+            self.stats.peak_versions_per_user_key.max(entries.len());
         Ok(Some(KeyGroup {
             entries,
             estimated_bytes,
@@ -248,11 +243,10 @@ where
     }
 
     fn pull_entry(&mut self) -> Result<Option<TableEntry>> {
-        let entry = match self.lookahead.take() {
-            Some(entry) => Some(entry),
-            None => self.source.next().transpose()?,
-        };
-        let Some(entry) = entry else {
+        if let Some(entry) = self.lookahead.take() {
+            return Ok(Some(entry));
+        }
+        let Some(entry) = self.source.next().transpose()? else {
             return Ok(None);
         };
         if self
@@ -283,8 +277,7 @@ where
         if versions > self.options.max_versions_per_user_key {
             return Err(Error::ResourceLimit {
                 resource: "compaction_output_versions_per_user_key",
-                limit: u64::try_from(self.options.max_versions_per_user_key)
-                    .unwrap_or(u64::MAX),
+                limit: u64::try_from(self.options.max_versions_per_user_key).unwrap_or(u64::MAX),
                 observed: u64::try_from(versions).unwrap_or(u64::MAX),
             });
         }
@@ -300,14 +293,14 @@ where
 
     fn begin_output(&mut self) -> Result<()> {
         let output_index = self.next_output_index;
-        self.next_output_index = self
-            .next_output_index
-            .checked_add(1)
-            .ok_or(Error::ResourceLimit {
-                resource: "compaction_output_index",
-                limit: u64::MAX,
-                observed: u64::MAX,
-            })?;
+        self.next_output_index =
+            self.next_output_index
+                .checked_add(1)
+                .ok_or(Error::ResourceLimit {
+                    resource: "compaction_output_index",
+                    limit: u64::MAX,
+                    observed: u64::MAX,
+                })?;
         self.open_output = Some(OpenOutput {
             output_index,
             entry_count: 0,
@@ -331,13 +324,10 @@ where
             .internal_key
             .user_key()
             .to_vec();
-        let open = self
-            .open_output
-            .as_mut()
-            .ok_or(Error::InternalInvariant {
-                invariant: "I-COMPACTION-OUTPUT-OPEN",
-                reason: "append group выполняется без открытого output".to_owned(),
-            })?;
+        let open = self.open_output.as_mut().ok_or(Error::InternalInvariant {
+            invariant: "I-COMPACTION-OUTPUT-OPEN",
+            reason: "append group выполняется без открытого output".to_owned(),
+        })?;
         if open.entry_count == 0 {
             open.smallest_user_key = first_key.clone();
         }
@@ -357,8 +347,7 @@ where
             "compaction_output_estimated_bytes",
         )?;
         for entry in group.entries {
-            self.pending
-                .push_back(CompactionOutputEvent::Entry(entry));
+            self.pending.push_back(CompactionOutputEvent::Entry(entry));
         }
         Ok(())
     }
@@ -378,11 +367,8 @@ where
             });
         }
         let oversized_key_group = open.estimated_bytes > self.options.target_file_size;
-        self.stats.output_files = checked_add(
-            self.stats.output_files,
-            1,
-            "compaction_output_files",
-        )?;
+        self.stats.output_files =
+            checked_add(self.stats.output_files, 1, "compaction_output_files")?;
         if oversized_key_group {
             self.stats.oversized_key_groups = checked_add(
                 self.stats.oversized_key_groups,
@@ -391,16 +377,14 @@ where
             )?;
         }
         self.pending
-            .push_back(CompactionOutputEvent::FinishFile(
-                CompactionOutputSummary {
-                    output_index: open.output_index,
-                    entry_count: open.entry_count,
-                    estimated_bytes: open.estimated_bytes,
-                    smallest_user_key: open.smallest_user_key,
-                    largest_user_key: open.largest_user_key,
-                    oversized_key_group,
-                },
-            ));
+            .push_back(CompactionOutputEvent::FinishFile(CompactionOutputSummary {
+                output_index: open.output_index,
+                entry_count: open.entry_count,
+                estimated_bytes: open.estimated_bytes,
+                smallest_user_key: open.smallest_user_key,
+                largest_user_key: open.largest_user_key,
+                oversized_key_group,
+            }));
         Ok(())
     }
 }
@@ -432,13 +416,12 @@ where
 }
 
 fn estimated_entry_bytes(entry: &TableEntry) -> Result<u64> {
-    let key_bytes = u64::try_from(entry.internal_key.user_key().len()).map_err(|_| {
-        Error::ResourceLimit {
+    let key_bytes =
+        u64::try_from(entry.internal_key.user_key().len()).map_err(|_| Error::ResourceLimit {
             resource: "compaction_output_user_key_bytes",
             limit: u64::MAX,
             observed: u64::MAX,
-        }
-    })?;
+        })?;
     let value_bytes = u64::try_from(entry.value.len()).map_err(|_| Error::ResourceLimit {
         resource: "compaction_output_value_bytes",
         limit: u64::MAX,
@@ -553,10 +536,7 @@ mod tests {
 
     #[test]
     fn key_group_byte_limit_is_enforced() -> Result<()> {
-        let entries = vec![
-            entry(b"same", 2, &[1; 32])?,
-            entry(b"same", 1, &[2; 32])?,
-        ];
+        let entries = vec![entry(b"same", 2, &[1; 32])?, entry(b"same", 1, &[2; 32])?];
         let mut splitter = CompactionOutputSplitter::new(
             entries.into_iter().map(Ok),
             CompactionOutputOptions {
@@ -580,16 +560,17 @@ mod tests {
             entries.into_iter().map(Ok),
             CompactionOutputOptions::default(),
         )?;
-        assert!(matches!(splitter.next(), Some(Err(Error::Corruption { .. }))));
+        assert!(matches!(
+            splitter.next(),
+            Some(Err(Error::Corruption { .. }))
+        ));
         Ok(())
     }
 
     #[test]
     fn empty_input_produces_no_files() -> Result<()> {
-        let mut splitter = CompactionOutputSplitter::new(
-            std::iter::empty(),
-            CompactionOutputOptions::default(),
-        )?;
+        let mut splitter =
+            CompactionOutputSplitter::new(std::iter::empty(), CompactionOutputOptions::default())?;
         assert!(splitter.next().is_none());
         assert_eq!(splitter.stats(), CompactionOutputStats::default());
         Ok(())
