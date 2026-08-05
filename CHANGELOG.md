@@ -4,7 +4,7 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
-## [0.3.0] — в разработке
+## [0.3.0] — 2026-08-05
 
 ### Добавлено
 
@@ -23,6 +23,13 @@
 - Model, snapshot, cursor, level-invariant, recovery-plan и deep-verify tests.
 - Русские документы Full LSM read path, snapshots/MVCC и inventory/recovery/verify.
 
+### Исправлено
+
+- Read-write open больше не может пересоздать отсутствующий MANIFEST-owned current или previous WAL пустым файлом.
+- Все MANIFEST-owned WAL проверяются до replay и append-open; отсутствие классифицируется как corruption.
+- Range scan больше не materialize-ит SSTable целиком и удерживает только текущий data block каждого cursor.
+- Чистая история v0.3 пересобрана поверх выпущенного `v0.2.0` без старых stacked commits.
+
 ### Изменено
 
 - Workspace version повышена до `0.3.0`.
@@ -30,10 +37,29 @@
 - Persisted-форматы остаются V1; новая версия формата не добавлена.
 - L1+ пока представлены validated in-memory model и будут физически заполняться compaction milestone v0.4.0.
 
-### Статус
+### Проверка
 
-- Версия остаётся draft до зелёного Ubuntu stable, Windows stable и Rust 1.89 gate.
-- Опубликованная `v0.2.0` остаётся текущей Pre-release.
+- Feature gate на head `620a90e9bd697c63efe92b4fee6c65f8636bf571` прошёл GitHub Actions run `31009363168`.
+- Ubuntu stable и Windows stable прошли canonical rustfmt, strict Clippy `-D warnings`, workspace tests, doctests и release build.
+- Ubuntu Rust 1.89 прошёл strict Clippy и workspace tests.
+
+### Persisted-форматы
+
+| Формат | Текущая версия | Чтение | Запись |
+|---|---:|---:|---:|
+| IDENTITY | 1 | 1 | 1 |
+| Internal Key | 1 | 1 | 1 |
+| WAL | 1 | 1 | 1 |
+| SSTable | 1 | 1 | 1 |
+| MANIFEST | 1 | 1 | 1 |
+| CURRENT | 1 | 1 | 1 |
+
+### Ограничения
+
+- Физические L1+ files и leveled compaction ещё отсутствуют.
+- Reverse iterator и transactions ещё отсутствуют.
+- Flush синхронный; background compaction и write stalls появятся позже.
+- Произвольные orphan/unknown-файлы не удаляются автоматически.
 
 ## [0.2.0] — 2026-08-05
 
