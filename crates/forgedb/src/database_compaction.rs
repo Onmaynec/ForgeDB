@@ -185,6 +185,9 @@ impl Database {
             });
         }
 
+        #[cfg(test)]
+        compaction_crash_failpoint("after_compaction_output_sync");
+
         let output_metadata = outputs
             .iter()
             .map(|(metadata, _)| metadata.clone())
@@ -241,10 +244,14 @@ impl Database {
             ..VersionEditV2::default()
         };
         append_manifest_edit(&mut state, &installation, &limits)?;
+        #[cfg(test)]
+        compaction_crash_failpoint("after_compaction_manifest_sync");
         let obsolete = ObsoleteVersion::new(&previous_version, obsolete_files)?;
         state.version = Arc::new(next_version);
         state.obsolete_versions.push(obsolete);
         drop(previous_version);
+        #[cfg(test)]
+        compaction_crash_failpoint("before_obsolete_sst_delete");
         self.collect_obsolete_ssts_locked(&mut state)?;
         Ok(())
     }
