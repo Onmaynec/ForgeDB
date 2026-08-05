@@ -4,11 +4,11 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 явные гарантии durability, ограниченное использование ресурсов, версионируемые persisted-форматы
 и обнаружение повреждений выше преждевременной оптимизации производительности.
 
-## Текущий этап: v0.2.0 — SSTable and Flush
+## Текущая версия: v0.2.0 — SSTable and Flush
 
-Статус: **release candidate**. Последняя опубликованная версия — `v0.1.0`; публикация `v0.2.0` требует отдельного зелёного release PR, annotated tag и GitHub Pre-release.
+Статус: **GitHub Pre-release**.
 
-Release candidate реализует первый persisted LSM-слой:
+Версия реализует первый persisted LSM-слой:
 
 - Rust 2024 workspace с минимальной поддерживаемой версией Rust 1.89;
 - бинарные ключи и значения в библиотечном API;
@@ -97,7 +97,7 @@ cargo test --locked --workspace --doc
 cargo build --locked --workspace --release
 ```
 
-Feature gate проходит без lint-исключений на Ubuntu stable, Windows stable и Rust 1.89.
+Release gate проходит без lint-исключений на Ubuntu stable, Windows stable и Rust 1.89.
 
 ## Ограничения v0.2.0
 
@@ -120,7 +120,7 @@ Feature gate проходит без lint-исключений на Ubuntu stabl
 - [`docs/formats/MANIFEST_V1.md`](docs/formats/MANIFEST_V1.md) — MANIFEST V1;
 - [`docs/formats/CURRENT_V1.md`](docs/formats/CURRENT_V1.md) — CURRENT V1;
 - [`docs/INVARIANTS.md`](docs/INVARIANTS.md) — проверяемые инварианты;
-- [`docs/releases/V0.2.0_DRAFT.md`](docs/releases/V0.2.0_DRAFT.md) — release candidate notes;
+- [`docs/releases/V0.2.0.md`](docs/releases/V0.2.0.md) — release notes;
 - [`docs/adr`](docs/adr) — принятые архитектурные решения.
 
 ## Лицензия
