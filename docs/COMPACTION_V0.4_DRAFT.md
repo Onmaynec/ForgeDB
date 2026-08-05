@@ -2,7 +2,7 @@
 
 Статус: development contract для draft PR v0.4.0. Документ не является обещанием выпущенной версии.
 
-## Уже подтверждённый путь
+## Selection
 
 ForgeDB использует отдельные deterministic picker-ы:
 
@@ -10,6 +10,12 @@ ForgeDB использует отдельные deterministic picker-ы:
 - manual range picker выбирает первый source SST, пересекающий half-open range, независимо от background pressure в других диапазонах.
 
 L0→L1 строит overlap closure по L0 и L1. Ln→Ln+1 выбирает source file и все target overlaps. Любой plan ограничен `max_compaction_bytes`.
+
+Public `compact_range` сначала flush-ит mutable state и фиксирует set исходных source SST, пересекающих range. Затем выполняет durable installation steps, пока каждый исходный file number не исчезнет из source levels. Newly created outputs не добавляются в этот work set и могут быть продвинуты следующим manual вызовом.
+
+После каждого step сравнивается source layout. Отсутствие progress при непустом work set является internal invariant error. Один вызов ограничен 10 000 steps и возвращает `ResourceLimit`, если safety bound исчерпан.
+
+## Merge и outputs
 
 Input SST читаются block-at-a-time с обязательной checksum verification. Merge сохраняет версии, необходимые oldest active snapshot, и удаляет tombstones только по bottommost rules. Output splitter не разделяет версии одного logical key.
 
@@ -25,6 +31,8 @@ Crash до cleanup может оставить безопасный orphan SST. 
 
 При L0 slowdown threshold write path выполняет bounded delay вне database state lock. При stop threshold write возвращает `Error::Busy`; reads и manual compaction остаются доступны.
 
-## Текущий validation status
+## Validation status
 
-Один manual installation step и requested-range picker подтверждены Ubuntu stable, Windows stable и Rust 1.89. Bounded exhaustive loop по всем пересекающимся plans находится в следующем validation slice и не считается подтверждённым до отдельного clean read-only CI run.
+Picker, merge, output splitting, MANIFEST V2 installation, snapshot preservation, reference-aware obsolete lifetime, write stalls, requested-range selection и bounded exhaustive original-source processing подтверждены clean read-only CI на Ubuntu stable, Windows stable и Rust 1.89.
+
+Installation failpoint/crash matrix, background scheduler и stall metrics остаются незавершёнными slices draft milestone.
