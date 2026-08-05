@@ -4,7 +4,7 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
-## [0.2.0] — в разработке
+## [0.2.0] — release candidate
 
 ### Добавлено
 
@@ -18,7 +18,7 @@
 - Mutable/immutable memtable lifecycle для синхронного flush.
 - Двухфазный WAL rotation и SSTable installation protocol.
 - `Database::flush()` и point reads в порядке mutable → immutable → L0 от новых к старым.
-- Recovery current и previous WAL в разных memtable generation.
+- Recovery current и previous WAL в разных memtable generations.
 - WAL-first bootstrap: initial WAL синхронизируется до публикации MANIFEST/CURRENT.
 - Strict idempotent creation для header-only orphan WAL после crash до rotation edit.
 - Fail-safe отказ от повторного использования WAL с complete frame или partial tail.
@@ -27,9 +27,10 @@
 - Удаление obsolete WAL только после успешного sync MANIFEST installation edit.
 - `flush_in_progress` и `Busy` для concurrent flush/close.
 - Fatal writer state после MANIFEST append/sync error.
-- Integration tests reopen-after-flush, SST checksum corruption, orphan SST, missing live WAL, WAL bootstrap/rotation retry и deterministic model.
+- `TableBuildRequest` для типизированного SSTable builder API без длинного позиционного списка аргументов.
+- Integration tests reopen-after-flush, deterministic SST checksum corruption, orphan SST, missing live WAL, WAL bootstrap/rotation retry и deterministic model.
 - Crash recovery matrix `docs/CRASH_RECOVERY_MATRIX_V0.2.md`.
-- Draft release notes `docs/releases/V0.2.0_DRAFT.md`.
+- Release notes `docs/releases/V0.2.0_DRAFT.md`.
 - Русские нормативные документы SSTable V1, MANIFEST V1 и CURRENT V1.
 
 ### Исправлено
@@ -43,6 +44,8 @@
 - `Database::close()` публикует closed state только после успешного WAL/MANIFEST sync.
 - Старый небезопасный `database.rs` удалён; активна generation-safe state machine.
 - Рассинхронизированный `Cargo.lock` обновлён до полного workspace `0.2.0`.
+- Flaky corruption-тесты теперь гарантированно изменяют сохранённый CRC через XOR.
+- Удалены локальные `clone_on_copy` и `too_many_arguments` lint-исключения из `forgedb-sstable`.
 
 ### Изменено
 
@@ -52,8 +55,9 @@
 - Public `create_manifest` гарантирует WAL-before-CURRENT bootstrap и запрещает reinitialize при существующем CURRENT.
 - Memtable различает `Missing`, `Value` и `Tombstone`.
 - Открытие базы проверяет все SSTables и WAL, на которые ссылается MANIFEST.
-- CI использует `actions/checkout@v6` и `--locked` для clippy/tests/release build.
-- Статус инвариантов новой версии остаётся `draft` до подтверждённого зелёного release gate.
+- CI использует `actions/checkout@v6`, зафиксированный `Cargo.lock` и `--locked` для Clippy/tests/release build.
+- Все crates снова наследуют единый strict workspace lint policy.
+- Feature gate подтверждён на Ubuntu stable, Windows stable и Rust 1.89; публикация всё ещё требует отдельного release PR gate.
 
 ### Persisted-форматы
 
@@ -73,7 +77,7 @@
 - Flush синхронный; background worker и write stalls появятся позже.
 - SSTable reader версии 0.2 bounded-загружает файл в память.
 - Произвольные orphan/unknown-файлы не удаляются автоматически и пока не имеют отдельного CLI inventory report.
-- GitHub-hosted CI private-репозитория сейчас заблокирован до checkout; версия не считается проверенной и не выпущена.
+- Версия ещё не опубликована: требуется отдельный зелёный release PR, annotated tag и GitHub Pre-release.
 
 ## [0.1.0] — 2026-08-03
 
