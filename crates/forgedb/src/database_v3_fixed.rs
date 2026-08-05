@@ -52,6 +52,7 @@ struct DatabaseState {
     next_sequence: SequenceNumber,
     last_sequence: Option<SequenceNumber>,
     fatal_write_error: Option<String>,
+    obsolete_versions: Vec<ObsoleteVersion>,
     lock: Option<NativeLockGuard>,
 }
 
@@ -232,6 +233,7 @@ impl Database {
                 next_sequence,
                 last_sequence: recovered_last,
                 fatal_write_error: None,
+                obsolete_versions: Vec::new(),
                 lock: Some(lock),
             }),
             snapshots: Arc::new(SnapshotRegistry::default()),
@@ -448,7 +450,8 @@ impl Database {
     pub fn file_inventory(&self) -> Result<FileInventory> {
         self.ensure_open()?;
         let (manifest, version) = {
-            let state = self.lock_state()?;
+            let mut state = self.lock_state()?;
+            self.collect_obsolete_ssts_locked(&mut state)?;
             (state.manifest.clone(), Arc::clone(&state.version))
         };
         inventory_for(version.as_ref(), &manifest)
@@ -492,6 +495,7 @@ impl Database {
         if let Some(writer) = state.manifest_writer.take() {
             writer.sync()?;
         }
+        self.collect_obsolete_ssts_locked(&mut state)?;
         state.lock.take();
         Ok(())
     }

@@ -191,7 +191,8 @@ impl Database {
             .iter()
             .map(|(metadata, _)| metadata.clone())
             .collect::<Vec<_>>();
-        let next_version = state.version.with_compaction(
+        let previous_version = Arc::clone(&state.version);
+        let next_version = previous_version.with_compaction(
             crate::version_set::CompactionVersionRequest {
                 source_level: plan.source_level,
                 output_level: plan.output_level,
@@ -219,6 +220,12 @@ impl Database {
                 file_number: *file_number,
             }
         }));
+        let obsolete_files = plan
+            .source_files
+            .iter()
+            .chain(plan.output_level_files.iter())
+            .copied()
+            .collect::<Vec<_>>();
         let installation = VersionEditV2 {
             last_sequence: Some(state.last_sequence),
             added_files: output_metadata
@@ -236,7 +243,11 @@ impl Database {
             ..VersionEditV2::default()
         };
         append_manifest_edit(&mut state, &installation, &limits)?;
+        let obsolete = ObsoleteVersion::new(&previous_version, obsolete_files)?;
         state.version = Arc::new(next_version);
+        state.obsolete_versions.push(obsolete);
+        drop(previous_version);
+        self.collect_obsolete_ssts_locked(&mut state)?;
         Ok(())
     }
 
@@ -457,7 +468,7 @@ mod database_compaction_tests {
         }
         let inventory = database.file_inventory()?;
         assert_eq!(inventory.live_sst.len(), 1);
-        assert_eq!(inventory.orphan_sst.len(), 2);
+        assert!(inventory.orphan_sst.is_empty());
         drop(snapshot);
         database.close()?;
 
@@ -494,6 +505,29 @@ mod database_compaction_tests {
         ));
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
+    #[test]
+    fn active_streaming_scan_defers_input_deletion_until_iterator_drop() -> Result<()> {
+        let directory = temporary_directory("active-scan-lifetime")?;
+        let database = StreamingDatabase::open(&directory, compaction_options())?;
+        database.put(b"alpha", b"old", WriteOptions::sync())?;
+        database.flush()?;
+        database.put(b"alpha", b"new", WriteOptions::sync())?;
+        database.put(b"beta", b"value", WriteOptions::sync())?;
+        database.flush()?;
+
+        let iterator = database.scan(.., ReadOptions::default())?;
+        database.compact_range(None, None)?;
+        assert_eq!(database.file_inventory()?.orphan_sst.len(), 2);
+
+        drop(iterator);
+        assert!(database.file_inventory()?.orphan_sst.is_empty());
+        database.close()?;
+        fs::remove_dir_all(&directory).map_err(|source| {
+            Error::io("remove_test_directory", Some(directory), source)
+        })?;
         Ok(())
     }
 }
