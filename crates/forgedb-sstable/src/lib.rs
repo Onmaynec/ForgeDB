@@ -136,6 +136,44 @@ impl TableBuildOptions {
     }
 }
 
+/// Полный запрос на физическое построение одного SSTable V1.
+///
+/// Тип объединяет неизменяемые входы builder и не позволяет перепутать
+/// каталог базы, временный каталог, identity или номер файла.
+pub struct TableBuildRequest<'a> {
+    database_directory: &'a Path,
+    temporary_directory: &'a Path,
+    database_id: DatabaseId,
+    file_number: u64,
+    entries: &'a [TableEntry],
+    limits: &'a Limits,
+    options: TableBuildOptions,
+}
+
+impl<'a> TableBuildRequest<'a> {
+    /// Создаёт полностью типизированный запрос к SSTable builder.
+    #[must_use]
+    pub fn new(
+        database_directory: &'a Path,
+        temporary_directory: &'a Path,
+        database_id: DatabaseId,
+        file_number: u64,
+        entries: &'a [TableEntry],
+        limits: &'a Limits,
+        options: TableBuildOptions,
+    ) -> Self {
+        Self {
+            database_directory,
+            temporary_directory,
+            database_id,
+            file_number,
+            entries,
+            limits,
+            options,
+        }
+    }
+}
+
 /// Persisted metadata одного L0 SSTable, хранимая в MANIFEST.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TableMeta {
@@ -386,7 +424,7 @@ impl TableReader {
             meta: expected_meta.clone(),
             index,
             filter,
-            limits: limits.clone(),
+            limits: *limits,
         })
     }
 
@@ -434,14 +472,17 @@ impl TableReader {
 /// Строит, синхронизирует и атомарно устанавливает один SSTable V1.
 pub fn build_table<F: FileSystem>(
     filesystem: &F,
-    database_directory: &Path,
-    temporary_directory: &Path,
-    database_id: DatabaseId,
-    file_number: u64,
-    entries: &[TableEntry],
-    limits: &Limits,
-    options: TableBuildOptions,
+    request: TableBuildRequest<'_>,
 ) -> Result<TableMeta> {
+    let TableBuildRequest {
+        database_directory,
+        temporary_directory,
+        database_id,
+        file_number,
+        entries,
+        limits,
+        options,
+    } = request;
     options.validate()?;
     limits.validate()?;
     if file_number == 0 {
@@ -1821,17 +1862,19 @@ mod tests {
         let database_id = DatabaseId::random();
         let meta = build_table(
             &filesystem,
-            &directory,
-            &directory.join("TEMP"),
-            database_id,
-            7,
-            &entries(&limits)?,
-            &limits,
-            TableBuildOptions {
-                data_block_size: 1024,
-                restart_interval: 2,
-                bloom_bits_per_key: 10,
-            },
+            TableBuildRequest::new(
+                &directory,
+                &directory.join("TEMP"),
+                database_id,
+                7,
+                &entries(&limits)?,
+                &limits,
+                TableBuildOptions {
+                    data_block_size: 1024,
+                    restart_interval: 2,
+                    bloom_bits_per_key: 10,
+                },
+            ),
         )?;
         let reader = TableReader::open(
             &filesystem,
@@ -1857,17 +1900,19 @@ mod tests {
         let database_id = DatabaseId::random();
         let meta = build_table(
             &filesystem,
-            &directory,
-            &directory.join("TEMP"),
-            database_id,
-            8,
-            &entries(&limits)?,
-            &limits,
-            TableBuildOptions {
-                data_block_size: 1024,
-                restart_interval: 2,
-                bloom_bits_per_key: 10,
-            },
+            TableBuildRequest::new(
+                &directory,
+                &directory.join("TEMP"),
+                database_id,
+                8,
+                &entries(&limits)?,
+                &limits,
+                TableBuildOptions {
+                    data_block_size: 1024,
+                    restart_interval: 2,
+                    bloom_bits_per_key: 10,
+                },
+            ),
         )?;
         let path = directory.join(sst_file_name(8));
         let mut file = std::fs::OpenOptions::new()
@@ -1913,17 +1958,19 @@ mod tests {
         let database_id = DatabaseId::random();
         let meta = build_table(
             &filesystem,
-            &directory,
-            &directory.join("TEMP"),
-            database_id,
-            9,
-            &entries(&limits)?,
-            &limits,
-            TableBuildOptions {
-                data_block_size: 1024,
-                restart_interval: 2,
-                bloom_bits_per_key: 10,
-            },
+            TableBuildRequest::new(
+                &directory,
+                &directory.join("TEMP"),
+                database_id,
+                9,
+                &entries(&limits)?,
+                &limits,
+                TableBuildOptions {
+                    data_block_size: 1024,
+                    restart_interval: 2,
+                    bloom_bits_per_key: 10,
+                },
+            ),
         )?;
         let path = directory.join(sst_file_name(9));
         let mut bytes = fs::read(&path)

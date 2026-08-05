@@ -479,17 +479,19 @@ impl Database {
         self.remove_reserved_sst(table_file_number)?;
         let metadata = build_table(
             &filesystem,
-            &self.directory,
-            &self.directory.join(TEMP_DIRECTORY_NAME),
-            self.identity,
-            table_file_number,
-            &entries,
-            limits,
-            TableBuildOptions {
-                data_block_size: self.options.data_block_size,
-                restart_interval: self.options.restart_interval,
-                bloom_bits_per_key: self.options.bloom_bits_per_key,
-            },
+            forgedb_sstable::TableBuildRequest::new(
+                &self.directory,
+                &self.directory.join(TEMP_DIRECTORY_NAME),
+                self.identity,
+                table_file_number,
+                &entries,
+                limits,
+                TableBuildOptions {
+                    data_block_size: self.options.data_block_size,
+                    restart_interval: self.options.restart_interval,
+                    bloom_bits_per_key: self.options.bloom_bits_per_key,
+                },
+            ),
         )?;
         let reader = TableReader::open(
             &filesystem,
