@@ -43,8 +43,7 @@ pub fn parse_manifest_file_name(name: &str) -> Option<u64> {
 
 pub use bootstrap::create_manifest;
 pub use dispatch::{
-    OpenManifestAny, bridge_manifest_v1_to_v2, next_available_manifest_number,
-    open_manifest_any,
+    OpenManifestAny, bridge_manifest_v1_to_v2, next_available_manifest_number, open_manifest_any,
 };
 pub use log::{ManifestWriter, OpenManifest, ReplaySummary, open_manifest, replay_manifest};
 pub use state::{ManifestState, VersionEdit};
