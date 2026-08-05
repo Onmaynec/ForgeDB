@@ -4,87 +4,86 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 явные гарантии durability, ограниченное использование ресурсов, версионируемые persisted-форматы
 и обнаружение повреждений выше преждевременной оптимизации производительности.
 
-## Текущая версия: v0.2.0 — SSTable and Flush
+## Статус версий
 
-Статус: **GitHub Pre-release**.
+- последняя опубликованная версия: **v0.2.0 — SSTable and Flush**, GitHub Pre-release;
+- текущий milestone разработки: **v0.3.0 — Full LSM Read Path**, draft.
 
-Версия реализует первый persisted LSM-слой:
+## Что добавляет v0.3.0
 
-- Rust 2024 workspace с минимальной поддерживаемой версией Rust 1.89;
-- бинарные ключи и значения в библиотечном API;
-- `Database::open`, `put`, `get`, `delete`, `write`, `flush` и `close`;
-- атомарный `WriteBatch`;
-- WAL V1 с numbered generations, CRC32C и строгим bounded replay;
-- mutable и immutable memtable;
-- SSTable V1 с checksummed data/index/filter/properties blocks;
-- prefix compression, restart points и versioned Bloom filter;
-- MANIFEST V1, `VersionEdit` и crash-safe `CURRENT`;
-- point reads `mutable → immutable → L0 newest-first`;
-- generation-safe recovery current/previous WAL;
-- WAL-first bootstrap новой базы;
-- retry-safe flush после header-only orphan WAL/SST;
-- obsolete WAL cleanup только после durable MANIFEST installation;
-- fail-safe открытие при checksum mismatch, неизвестной версии или отсутствующем live-файле;
-- process-level эксклюзивная блокировка каталога базы.
+- MVCC memtable, сохраняющая версии internal keys;
+- cheap snapshots с registry активных sequence;
+- snapshot-aware `get` и `scan`;
+- `ReadOptions`;
+- immutable `VersionSet`;
+- L0 newest-first lookup;
+- validated модель L1+ с sorted/non-overlap invariant;
+- forward merge iterator на binary heap;
+- block-at-a-time SSTable cursors;
+- range filtering и `limit`;
+- file inventory;
+- неразрушающий recovery plan;
+- quick/deep verify;
+- CLI `scan`, `inventory`, `verify` и `inspect recovery-plan`.
 
-## Пример библиотеки
+Persisted-форматы не меняются: IDENTITY, Internal Key, WAL, SSTable, MANIFEST и CURRENT остаются V1.
+
+## Пример draft API v0.3.0
 
 ```rust
-use forgedb::{Database, Options, Result, WriteOptions};
+use forgedb::{Database, Options, ReadOptions, Result, WriteOptions};
 
 fn main() -> Result<()> {
     let database = Database::open("./data", Options::default())?;
     database.put(b"user:42", b"Alice", WriteOptions::sync())?;
-    database.flush()?;
-    assert_eq!(database.get(b"user:42")?, Some(b"Alice".to_vec()));
-    database.delete(b"user:42", WriteOptions::sync())?;
+    let snapshot = database.snapshot()?;
+    database.put(b"user:42", b"Bob", WriteOptions::sync())?;
+
+    assert_eq!(
+        database.get_with_options(b"user:42", ReadOptions::from_snapshot(&snapshot))?,
+        Some(b"Alice".to_vec())
+    );
+
+    for item in database.scan(b"user:".to_vec()..b"user;".to_vec(), ReadOptions::default())? {
+        let (key, value) = item?;
+        println!("{} = {}", String::from_utf8_lossy(&key), String::from_utf8_lossy(&value));
+    }
+
     database.close()?;
     Ok(())
 }
 ```
 
-`flush()` синхронно переводит immutable memtable в проверенный L0 SSTable. Старый WAL удаляется только после успешной durable installation записи в MANIFEST.
-
 ## CLI
 
 ```bash
-cargo run -p forgedb-cli -- put ./data key value --sync
-cargo run -p forgedb-cli -- get ./data key
-cargo run -p forgedb-cli -- delete ./data key --sync
+cargo run -p forgedb-cli -- scan ./data
+cargo run -p forgedb-cli -- inventory ./data
+cargo run -p forgedb-cli -- verify ./data --deep
+cargo run -p forgedb-cli -- inspect recovery-plan ./data
 ```
 
-CLI принимает ключи и значения как UTF-8 аргументы командной строки. Библиотечный API работает с произвольными байтами.
+## Гарантии v0.2.0, сохраняемые в v0.3
 
-## Режимы durability
+- WAL-first bootstrap;
+- generation-safe recovery current/previous WAL;
+- SSTable становится live только через durable MANIFEST installation;
+- obsolete previous WAL удаляется только после installation edit;
+- missing MANIFEST-owned file блокирует open;
+- unknown/user files normal recovery не удаляет.
 
-- `Sync`: успех возвращается после append frame, `sync_all` WAL и атомарного применения batch к memtable.
-- `NoSync`: batch записывается в WAL и становится видимым без обязательного физического sync перед возвратом.
-- `DisableWal`: batch применяется только к memtable и может исчезнуть при process crash.
-
-Перед WAL rotation current generation синхронизируется независимо от режима отдельных записей. Точные границы гарантий описаны в [`docs/DURABILITY.md`](docs/DURABILITY.md) и [`docs/CRASH_RECOVERY_MATRIX_V0.2.md`](docs/CRASH_RECOVERY_MATRIX_V0.2.md).
-
-## Crash-safety v0.2.0
-
-- initial WAL синхронизируется до публикации `CURRENT`;
-- existing `CURRENT` запрещает повторную initial initialization;
-- MANIFEST-owned WAL не пересоздаётся пустым при отсутствии;
-- previous/current WAL восстанавливаются в разные memtable generations;
-- header-only orphan WAL повторно используется только после строгой проверки UUID, file number и frame/tail state;
-- non-empty или partial orphan WAL не удаляется и блокирует flush;
-- SSTable становится live только через durable MANIFEST installation edit;
-- obsolete previous WAL удаляется только после установки SSTable;
-- normal open не удаляет произвольные unknown/user files.
+Точная crash matrix: [`docs/CRASH_RECOVERY_MATRIX_V0.2.md`](docs/CRASH_RECOVERY_MATRIX_V0.2.md).
 
 ## Структура workspace
 
 ```text
-crates/forgedb           Публичный API, Database и memtable lifecycle
-crates/forgedb-cli       Командная строка put/get/delete
-crates/forgedb-core      Storage-neutral типы, лимиты, internal keys и WriteBatch
-crates/forgedb-fs        Файловая абстракция, native lock и database identity
-crates/forgedb-wal       WAL V1, numbered generations, writer и strict replay
-crates/forgedb-sstable   SSTable V1, Bloom filter, blocks и TableBuildRequest
-crates/forgedb-manifest  MANIFEST V1, VersionEdit, CURRENT и authoritative L0 metadata
+crates/forgedb           Database, MVCC, snapshots, iterator, inventory и verify
+crates/forgedb-cli       CLI put/get/delete/scan/inventory/verify/inspect
+crates/forgedb-core      Типы, лимиты, internal keys и WriteBatch
+crates/forgedb-fs        Файловая абстракция, native lock и identity
+crates/forgedb-wal       WAL V1 и numbered generations
+crates/forgedb-sstable   SSTable V1, blocks, Bloom filter и TableBuildRequest
+crates/forgedb-manifest  MANIFEST V1, VersionEdit и CURRENT
 ```
 
 ## Проверка
@@ -97,31 +96,24 @@ cargo test --locked --workspace --doc
 cargo build --locked --workspace --release
 ```
 
-Release gate проходит без lint-исключений на Ubuntu stable, Windows stable и Rust 1.89.
+Обязательная matrix: Ubuntu stable, Windows stable и Rust 1.89. До полного зелёного gate `v0.3.0` остаётся draft.
 
-## Ограничения v0.2.0
+## Ограничения draft v0.3.0
 
-- только Level 0;
-- нет leveled compaction;
-- нет range iterator, snapshots и transactions;
-- flush синхронный, без background worker и write stalls;
-- SSTable reader bounded-загружает файл целиком;
-- normal open не удаляет произвольные orphan/unknown files;
-- CLI inventory/verify появится в следующем этапе.
+- физические L1+ файлы появятся только с compaction в v0.4.0;
+- нет reverse iterator;
+- нет transactions;
+- flush остаётся синхронным;
+- normal recovery не удаляет произвольные orphan/unknown files.
 
 ## Документация
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — границы компонентов;
-- [`docs/WRITE_PATH.md`](docs/WRITE_PATH.md) — порядок записи;
-- [`docs/RECOVERY.md`](docs/RECOVERY.md) — replay и corruption policy;
-- [`docs/CRASH_RECOVERY_MATRIX_V0.2.md`](docs/CRASH_RECOVERY_MATRIX_V0.2.md) — точки падения и recovery contract;
-- [`docs/formats/WAL_V1.md`](docs/formats/WAL_V1.md) — WAL V1;
-- [`docs/formats/SSTABLE_V1.md`](docs/formats/SSTABLE_V1.md) — SSTable V1;
-- [`docs/formats/MANIFEST_V1.md`](docs/formats/MANIFEST_V1.md) — MANIFEST V1;
-- [`docs/formats/CURRENT_V1.md`](docs/formats/CURRENT_V1.md) — CURRENT V1;
-- [`docs/INVARIANTS.md`](docs/INVARIANTS.md) — проверяемые инварианты;
-- [`docs/releases/V0.2.0.md`](docs/releases/V0.2.0.md) — release notes;
-- [`docs/adr`](docs/adr) — принятые архитектурные решения.
+- [`docs/LSM_READ_PATH_V1.md`](docs/LSM_READ_PATH_V1.md);
+- [`docs/SNAPSHOTS_AND_MVCC.md`](docs/SNAPSHOTS_AND_MVCC.md);
+- [`docs/FILE_INVENTORY_AND_VERIFY.md`](docs/FILE_INVENTORY_AND_VERIFY.md);
+- [`docs/INVARIANTS.md`](docs/INVARIANTS.md);
+- [`docs/releases/V0.3.0_DRAFT.md`](docs/releases/V0.3.0_DRAFT.md);
+- [`docs/releases/V0.2.0.md`](docs/releases/V0.2.0.md).
 
 ## Лицензия
 

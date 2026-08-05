@@ -4,6 +4,37 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
+## [0.3.0] — в разработке
+
+### Добавлено
+
+- MVCC memtable, сохраняющая версии internal keys.
+- Cheap snapshots с registry активных sequence и проверкой принадлежности open handle.
+- `ReadOptions` и snapshot-aware point reads.
+- Immutable `VersionSet` с L0 newest-first lookup.
+- Validated модель L1+ с sorted/non-overlap invariant.
+- Forward merge iterator на binary heap.
+- Block-at-a-time SSTable cursors и bounded resident memory.
+- Public range scan с bounds и limit.
+- File inventory с live/obsolete/orphan/temp/backup/user/unknown категориями.
+- Неразрушающий `RecoveryPlan::inspect`.
+- Quick/deep verify reports.
+- CLI `scan`, `inventory`, `verify`, `verify --deep` и `inspect recovery-plan`.
+- Model, snapshot, cursor, level-invariant, recovery-plan и deep-verify tests.
+- Русские документы Full LSM read path, snapshots/MVCC и inventory/recovery/verify.
+
+### Изменено
+
+- Workspace version повышена до `0.3.0`.
+- Read path объединяет mutable, immutable и все файлы текущего VersionSet.
+- Persisted-форматы остаются V1; новая версия формата не добавлена.
+- L1+ пока представлены validated in-memory model и будут физически заполняться compaction milestone v0.4.0.
+
+### Статус
+
+- Версия остаётся draft до зелёного Ubuntu stable, Windows stable и Rust 1.89 gate.
+- Опубликованная `v0.2.0` остаётся текущей Pre-release.
+
 ## [0.2.0] — 2026-08-05
 
 ### Добавлено
