@@ -39,6 +39,11 @@
 | I-028 | Повторный flush использует то же reserved SST generation и может удалить только доказанный orphan этого номера. | draft v0.2.0 | generation validation; deterministic orphan cleanup |
 | I-029 | Параллельные flush не строят два SSTable для одной immutable memtable. | draft v0.2.0 | `flush_in_progress`; `Busy` для второго flush и close |
 | I-030 | Перед WAL rotation текущее WAL-поколение синхронизируется. | draft v0.2.0 | explicit WAL sync до создания rotation edit |
+| I-031 | Initial WAL создан и синхронизирован до публикации `CURRENT`. | draft v0.2.0 | MANIFEST bootstrap wrapper; WAL-before-CURRENT unit/integration tests |
+| I-032 | Header-only orphan WAL можно повторно использовать только после проверки UUID, file number, отсутствия complete frame и partial tail. | draft v0.2.0 | strict idempotent `create_wal`; empty/non-empty orphan tests |
+| I-033 | При отсутствии `CURRENT` bootstrap cleanup удаляет только reserved `MANIFEST-000001`, его temp и `CURRENT.tmp`; неизвестные пользовательские файлы сохраняются. | draft v0.2.0 | bootstrap orphan cleanup test, включая `user.data` |
+| I-034 | Существующий `CURRENT` запрещает повторную initial MANIFEST initialization. | draft v0.2.0 | existing-current rejection test |
+| I-035 | Release gate использует зафиксированный dependency graph. | draft v0.2.0 | синхронизированный `Cargo.lock`; все compile/test/build команды CI запускаются с `--locked` |
 
 ## Правило изменения
 
