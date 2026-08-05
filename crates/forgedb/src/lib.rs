@@ -19,7 +19,10 @@ mod snapshot;
 mod sst_entry_cursor;
 mod table_scan;
 mod verify;
-mod version_set;
+mod version_set {
+    include!("version_set.rs");
+    include!("version_set_compaction.rs");
+}
 mod write_options;
 
 pub use database_v3_fixed::StreamingDatabase as Database;
