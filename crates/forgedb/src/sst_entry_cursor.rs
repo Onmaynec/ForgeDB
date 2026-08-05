@@ -199,7 +199,7 @@ impl SstEntryCursor {
     }
 
     fn load_next_block(&mut self) -> Result<()> {
-        while self.next_block < self.data_handles.len() {
+        if self.next_block < self.data_handles.len() {
             let handle =
                 *self
                     .data_handles

@@ -7,7 +7,7 @@ use forgedb_fs::NativeFileSystem;
 use forgedb_manifest::ManifestState;
 use forgedb_sstable::{TableMeta, TableReader};
 
-use crate::table_scan::{self, TableSnapshotLookup};
+use crate::table_scan::{self, TableLookupRequest, TableSnapshotLookup};
 
 #[derive(Clone, Debug)]
 pub(crate) struct TableHandle {
@@ -117,16 +117,16 @@ impl VersionSet {
             if !table.metadata.may_contain_user_key(user_key) {
                 continue;
             }
-            let lookup = table_scan::lookup_at(
-                table.path(),
-                self.identity,
-                &table.metadata,
+            let lookup = table_scan::lookup_at(TableLookupRequest {
+                path: table.path(),
+                expected_database_id: self.identity,
+                metadata: &table.metadata,
                 user_key,
                 snapshot,
                 limits,
-                self.max_file_size,
+                max_file_size: self.max_file_size,
                 verify_checksums,
-            )?;
+            })?;
             if lookup != TableSnapshotLookup::Missing {
                 return Ok(lookup);
             }
@@ -138,16 +138,16 @@ impl VersionSet {
             let Some(table) = candidate else {
                 continue;
             };
-            let lookup = table_scan::lookup_at(
-                table.path(),
-                self.identity,
-                &table.metadata,
+            let lookup = table_scan::lookup_at(TableLookupRequest {
+                path: table.path(),
+                expected_database_id: self.identity,
+                metadata: &table.metadata,
                 user_key,
                 snapshot,
                 limits,
-                self.max_file_size,
+                max_file_size: self.max_file_size,
                 verify_checksums,
-            )?;
+            })?;
             if lookup != TableSnapshotLookup::Missing {
                 return Ok(lookup);
             }

@@ -103,12 +103,12 @@ impl FileInventory {
                     .push(format!("required file отсутствует: {required}"));
             }
         }
-        if let Some(previous) = previous_wal {
-            if !seen.contains(&previous) {
-                inventory
-                    .blockers
-                    .push(format!("previous WAL отсутствует: {previous}"));
-            }
+        if let Some(previous) = previous_wal
+            && !seen.contains(&previous)
+        {
+            inventory
+                .blockers
+                .push(format!("previous WAL отсутствует: {previous}"));
         }
         for number in live_sst_numbers {
             let required = forgedb_sstable::sst_file_name(number);

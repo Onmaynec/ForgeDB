@@ -177,8 +177,10 @@ mod streaming_wrapper_tests {
     #[test]
     fn public_database_scan_streams_multiple_sstables() -> Result<()> {
         let directory = temporary_directory("multi-file-range")?;
-        let mut options = Options::default();
-        options.data_block_size = 1024;
+        let options = Options {
+            data_block_size: 1024,
+            ..Options::default()
+        };
         let database = StreamingDatabase::open(&directory, options)?;
 
         for generation in 0..3_u64 {

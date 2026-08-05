@@ -29,16 +29,28 @@ struct BlockHandle {
     length: u64,
 }
 
-pub(crate) fn lookup_at(
-    path: &Path,
-    expected_database_id: DatabaseId,
-    metadata: &TableMeta,
-    user_key: &[u8],
-    snapshot: Option<SequenceNumber>,
-    limits: &Limits,
-    max_file_size: u64,
-    verify_checksums: bool,
-) -> Result<TableSnapshotLookup> {
+pub(crate) struct TableLookupRequest<'a> {
+    pub(crate) path: &'a Path,
+    pub(crate) expected_database_id: DatabaseId,
+    pub(crate) metadata: &'a TableMeta,
+    pub(crate) user_key: &'a [u8],
+    pub(crate) snapshot: Option<SequenceNumber>,
+    pub(crate) limits: &'a Limits,
+    pub(crate) max_file_size: u64,
+    pub(crate) verify_checksums: bool,
+}
+
+pub(crate) fn lookup_at(request: TableLookupRequest<'_>) -> Result<TableSnapshotLookup> {
+    let TableLookupRequest {
+        path,
+        expected_database_id,
+        metadata,
+        user_key,
+        snapshot,
+        limits,
+        max_file_size,
+        verify_checksums,
+    } = request;
     let Some(snapshot) = snapshot else {
         return Ok(TableSnapshotLookup::Missing);
     };
