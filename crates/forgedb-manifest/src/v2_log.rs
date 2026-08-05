@@ -32,17 +32,14 @@ impl<W: WritableFile> ManifestV2Writer<W> {
     ) -> Result<()> {
         let next = state.applied(edit, limits)?;
         let frame = ManifestV2Codec::encode_edit_frame(edit, limits)?;
-        self.file
-            .write_all(&frame)
-            .map_err(|source| Error::io("append_manifest_v2_edit", Some(self.path.clone()), source))?;
+        self.file.write_all(&frame).map_err(|source| {
+            Error::io("append_manifest_v2_edit", Some(self.path.clone()), source)
+        })?;
         self.file
             .sync_all()
             .map_err(|source| Error::io("sync_manifest_v2", Some(self.path.clone()), source))?;
-        self.bytes_written = checked_add_length(
-            self.bytes_written,
-            frame.len(),
-            "manifest_v2_bytes_written",
-        )?;
+        self.bytes_written =
+            checked_add_length(self.bytes_written, frame.len(), "manifest_v2_bytes_written")?;
         *state = next;
         Ok(())
     }
@@ -135,6 +132,7 @@ pub fn migrate_manifest_v1_to_v2<F: FileSystem>(
     let name = manifest_file_name(new_manifest_number);
     let temporary = directory.join(format!("{name}.tmp"));
     let final_path = directory.join(&name);
+    ensure_path_absent(filesystem, &final_path, "MANIFEST V2 destination")?;
     let snapshot = ManifestV2Codec::encode_edit_frame(&state.snapshot_edit(), limits)?;
     let header = ManifestV2Codec::encode_header(ManifestV2Header {
         database_id: state.database_id,
@@ -193,8 +191,7 @@ pub fn open_manifest_v2<F: FileSystem>(
     let number = parse_manifest_file_name(&name)
         .ok_or_else(|| Error::corruption("CURRENT", "имя MANIFEST не canonical"))?;
     let path = directory.join(name);
-    let (state, summary) =
-        replay_manifest_v2(filesystem, &path, database_id, number, limits)?;
+    let (state, summary) = replay_manifest_v2(filesystem, &path, database_id, number, limits)?;
     if summary.truncated_tail && !read_only {
         filesystem.truncate_file(&path, summary.valid_bytes)?;
     }
@@ -259,9 +256,8 @@ pub fn replay_manifest_v2<F: FileSystem>(
             Error::io("read_manifest_v2_frame_header", Some(path.into()), source)
         })?;
         if read == 0 {
-            let state = state.ok_or_else(|| {
-                Error::corruption("MANIFEST V2", "не содержит VersionEdit V2")
-            })?;
+            let state = state
+                .ok_or_else(|| Error::corruption("MANIFEST V2", "не содержит VersionEdit V2"))?;
             state.validate(limits)?;
             return Ok((state, summary));
         }
@@ -278,9 +274,8 @@ pub fn replay_manifest_v2<F: FileSystem>(
             .checked_add(payload_length)
             .ok_or_else(|| Error::corruption("MANIFEST V2 frame", "длина переполнена"))?;
         let mut payload = vec![0_u8; payload_length];
-        let payload_read = read_up_to(&mut reader, &mut payload).map_err(|source| {
-            Error::io("read_manifest_v2_payload", Some(path.into()), source)
-        })?;
+        let payload_read = read_up_to(&mut reader, &mut payload)
+            .map_err(|source| Error::io("read_manifest_v2_payload", Some(path.into()), source))?;
         if payload_read != payload_length {
             let state = state.ok_or_else(|| {
                 Error::corruption("MANIFEST V2", "первый VersionEdit V2 физически усечён")
@@ -305,11 +300,8 @@ pub fn replay_manifest_v2<F: FileSystem>(
                 limit: u64::MAX,
                 observed: u64::MAX,
             })?;
-        summary.valid_bytes = checked_add_length(
-            summary.valid_bytes,
-            total_length,
-            "manifest_v2_valid_bytes",
-        )?;
+        summary.valid_bytes =
+            checked_add_length(summary.valid_bytes, total_length, "manifest_v2_valid_bytes")?;
     }
 }
 
@@ -319,18 +311,16 @@ fn state_from_snapshot(
     edit: &VersionEditV2,
     limits: &Limits,
 ) -> Result<ManifestStateV2> {
-    let comparator = edit.comparator.as_ref().ok_or_else(|| {
-        Error::corruption("MANIFEST V2 snapshot", "comparator отсутствует")
-    })?;
+    let comparator = edit
+        .comparator
+        .as_ref()
+        .ok_or_else(|| Error::corruption("MANIFEST V2 snapshot", "comparator отсутствует"))?;
     if comparator.is_empty() {
-        return Err(Error::corruption(
-            "MANIFEST V2 snapshot",
-            "comparator пуст",
-        ));
+        return Err(Error::corruption("MANIFEST V2 snapshot", "comparator пуст"));
     }
-    let log_number = edit.log_number.ok_or_else(|| {
-        Error::corruption("MANIFEST V2 snapshot", "log_number отсутствует")
-    })?;
+    let log_number = edit
+        .log_number
+        .ok_or_else(|| Error::corruption("MANIFEST V2 snapshot", "log_number отсутствует"))?;
     if edit.previous_log_number.is_none()
         || edit.next_file_number.is_none()
         || edit.last_sequence.is_none()
@@ -342,9 +332,9 @@ fn state_from_snapshot(
             "обязательные snapshot fields отсутствуют",
         ));
     }
-    let level_count_u32 = edit.level_count.ok_or_else(|| {
-        Error::corruption("MANIFEST V2 snapshot", "level_count отсутствует")
-    })?;
+    let level_count_u32 = edit
+        .level_count
+        .ok_or_else(|| Error::corruption("MANIFEST V2 snapshot", "level_count отсутствует"))?;
     let level_count = usize::try_from(level_count_u32).map_err(|_| Error::ResourceLimit {
         resource: "manifest_v2_level_count",
         limit: u64::MAX,
@@ -356,12 +346,7 @@ fn state_from_snapshot(
             "первый snapshot edit не может удалять files",
         ));
     }
-    let initial = ManifestStateV2::initial(
-        database_id,
-        manifest_number,
-        log_number,
-        level_count,
-    )?;
+    let initial = ManifestStateV2::initial(database_id, manifest_number, log_number, level_count)?;
     initial.applied(edit, limits)
 }
 
@@ -370,10 +355,7 @@ fn bounded_payload_length(
     limits: &Limits,
 ) -> Result<usize> {
     if frame_header.get(0..4) != Some(b"FMV2".as_slice()) {
-        return Err(Error::corruption(
-            "MANIFEST V2 frame",
-            "неверная сигнатура",
-        ));
+        return Err(Error::corruption("MANIFEST V2 frame", "неверная сигнатура"));
     }
     let version = read_u16(frame_header, 14, "MANIFEST V2 frame")?;
     if version != MANIFEST_V2_FORMAT_VERSION {
@@ -408,6 +390,24 @@ fn bounded_payload_length(
         ));
     }
     Ok(payload)
+}
+
+fn ensure_path_absent<F: FileSystem>(
+    filesystem: &F,
+    path: &Path,
+    component: &'static str,
+) -> Result<()> {
+    match filesystem.file_size(path) {
+        Ok(size) => Err(Error::corruption(
+            component,
+            format!(
+                "destination уже существует: {} ({size} bytes)",
+                path.display()
+            ),
+        )),
+        Err(Error::Io { source, .. }) if source.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn write_current_v2<F: FileSystem>(filesystem: &F, directory: &Path, name: &str) -> Result<()> {
@@ -566,7 +566,7 @@ mod tests {
             &VersionEdit {
                 next_file_number: Some(11),
                 last_sequence: Some(Some(SequenceNumber::FIRST)),
-                added_l0_files: vec![table(10, b"a", b"z")],
+                added_files: vec![table(10, b"a", b"z")],
                 ..VersionEdit::default()
             },
             limits,
@@ -582,31 +582,24 @@ mod tests {
         let v1 = v1_state(database_id, &limits)?;
         let original = v1.clone();
 
-        let (writer, migrated) = migrate_manifest_v1_to_v2(
-            &filesystem,
-            &directory,
-            &v1,
-            11,
-            4,
-            &limits,
-        )?;
+        let (writer, migrated) =
+            migrate_manifest_v1_to_v2(&filesystem, &directory, &v1, 11, 4, &limits)?;
         assert_eq!(v1, original);
         assert_eq!(migrated.manifest_number, 11);
         assert_eq!(migrated.next_file_number, 12);
         assert_eq!(migrated.levels[0], v1.l0_files);
         assert!(migrated.levels[1..].iter().all(Vec::is_empty));
-        assert_eq!(fs::read_to_string(directory.join(CURRENT_FILE_NAME)).map_err(
-            |source| Error::io("read_current_test", Some(directory.clone()), source)
-        )?, "MANIFEST-000011\n");
+        assert_eq!(
+            fs::read_to_string(directory.join(CURRENT_FILE_NAME)).map_err(|source| Error::io(
+                "read_current_test",
+                Some(directory.clone()),
+                source
+            ))?,
+            "MANIFEST-000011\n"
+        );
         drop(writer);
 
-        let opened = open_manifest_v2(
-            &filesystem,
-            &directory,
-            database_id,
-            &limits,
-            true,
-        )?;
+        let opened = open_manifest_v2(&filesystem, &directory, database_id, &limits, true)?;
         assert_eq!(opened.state, migrated);
         assert_eq!(opened.replay.edit_count, 1);
         fs::remove_dir_all(&directory)
@@ -621,14 +614,8 @@ mod tests {
         let limits = Limits::default();
         let database_id = DatabaseId::random();
         let v1 = v1_state(database_id, &limits)?;
-        let (mut writer, mut state) = migrate_manifest_v1_to_v2(
-            &filesystem,
-            &directory,
-            &v1,
-            11,
-            4,
-            &limits,
-        )?;
+        let (mut writer, mut state) =
+            migrate_manifest_v1_to_v2(&filesystem, &directory, &v1, 11, 4, &limits)?;
         writer.append_edit(
             &mut state,
             &VersionEditV2 {
@@ -642,13 +629,7 @@ mod tests {
             &limits,
         )?;
         drop(writer);
-        let opened = open_manifest_v2(
-            &filesystem,
-            &directory,
-            database_id,
-            &limits,
-            true,
-        )?;
+        let opened = open_manifest_v2(&filesystem, &directory, database_id, &limits, true)?;
         assert_eq!(opened.state, state);
         assert_eq!(opened.state.levels[1].len(), 1);
         assert_eq!(opened.replay.edit_count, 2);
@@ -664,14 +645,7 @@ mod tests {
         let limits = Limits::default();
         let database_id = DatabaseId::random();
         let v1 = v1_state(database_id, &limits)?;
-        let (writer, _) = migrate_manifest_v1_to_v2(
-            &filesystem,
-            &directory,
-            &v1,
-            11,
-            4,
-            &limits,
-        )?;
+        let (writer, _) = migrate_manifest_v1_to_v2(&filesystem, &directory, &v1, 11, 4, &limits)?;
         let path = writer.path().to_path_buf();
         let valid_bytes = writer.bytes_written();
         drop(writer);
@@ -679,26 +653,15 @@ mod tests {
             .append(true)
             .open(&path)
             .map_err(|source| Error::io("open_manifest_v2_test", Some(path.clone()), source))?;
-        file.write_all(b"FMV2\x20")
-            .map_err(|source| Error::io("append_partial_manifest_v2", Some(path.clone()), source))?;
+        file.write_all(b"FMV2\x20").map_err(|source| {
+            Error::io("append_partial_manifest_v2", Some(path.clone()), source)
+        })?;
         drop(file);
 
-        let read_only = open_manifest_v2(
-            &filesystem,
-            &directory,
-            database_id,
-            &limits,
-            true,
-        )?;
+        let read_only = open_manifest_v2(&filesystem, &directory, database_id, &limits, true)?;
         assert!(read_only.replay.truncated_tail);
         drop(read_only);
-        let read_write = open_manifest_v2(
-            &filesystem,
-            &directory,
-            database_id,
-            &limits,
-            false,
-        )?;
+        let read_write = open_manifest_v2(&filesystem, &directory, database_id, &limits, false)?;
         assert!(read_write.replay.truncated_tail);
         assert_eq!(filesystem.file_size(&path)?, valid_bytes);
         drop(read_write);
@@ -716,22 +679,52 @@ mod tests {
         let v1 = v1_state(database_id, &limits)?;
         let temporary = directory.join("MANIFEST-000011.tmp");
         fs::write(&temporary, b"suspicious").map_err(|source| {
-            Error::io("write_existing_manifest_test", Some(temporary.clone()), source)
+            Error::io(
+                "write_existing_manifest_test",
+                Some(temporary.clone()),
+                source,
+            )
         })?;
-        assert!(migrate_manifest_v1_to_v2(
-            &filesystem,
-            &directory,
-            &v1,
-            11,
-            4,
-            &limits,
-        )
-        .is_err());
-        assert_eq!(fs::read(&temporary).map_err(|source| Error::io(
-            "read_existing_manifest_test",
-            Some(temporary.clone()),
-            source
-        ))?, b"suspicious");
+        assert!(migrate_manifest_v1_to_v2(&filesystem, &directory, &v1, 11, 4, &limits,).is_err());
+        assert_eq!(
+            fs::read(&temporary).map_err(|source| Error::io(
+                "read_existing_manifest_test",
+                Some(temporary.clone()),
+                source
+            ))?,
+            b"suspicious"
+        );
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
+    #[test]
+    fn migration_refuses_to_overwrite_existing_final_manifest() -> Result<()> {
+        let directory = temporary_directory("existing-final")?;
+        let filesystem = NativeFileSystem;
+        let limits = Limits::default();
+        let database_id = DatabaseId::random();
+        let v1 = v1_state(database_id, &limits)?;
+        let final_path = directory.join("MANIFEST-000011");
+        let temporary = directory.join("MANIFEST-000011.tmp");
+        fs::write(&final_path, b"suspicious-final").map_err(|source| {
+            Error::io(
+                "write_existing_final_manifest_test",
+                Some(final_path.clone()),
+                source,
+            )
+        })?;
+        assert!(migrate_manifest_v1_to_v2(&filesystem, &directory, &v1, 11, 4, &limits,).is_err());
+        assert_eq!(
+            fs::read(&final_path).map_err(|source| Error::io(
+                "read_existing_final_manifest_test",
+                Some(final_path.clone()),
+                source,
+            ))?,
+            b"suspicious-final"
+        );
+        assert!(!temporary.exists());
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
         Ok(())
