@@ -135,6 +135,21 @@ impl Database {
             (Some(writer), state, Default::default())
         };
 
+        require_manifest_wal(
+            &filesystem,
+            &directory,
+            manifest.log_number,
+            "current WAL",
+        )?;
+        if let Some(previous_log_number) = manifest.previous_log_number {
+            require_manifest_wal(
+                &filesystem,
+                &directory,
+                previous_log_number,
+                "previous WAL",
+            )?;
+        }
+
         let mut recovered_last = manifest.last_sequence;
         let pending_flush = recover_previous_wal(
             &filesystem,
@@ -827,6 +842,31 @@ fn validate_pending(
         });
     }
     Ok(())
+}
+
+fn require_manifest_wal(
+    filesystem: &NativeFileSystem,
+    directory: &Path,
+    file_number: u64,
+    role: &'static str,
+) -> Result<()> {
+    let path = directory.join(wal_file_name(file_number));
+    match filesystem.open_sequential(&path) {
+        Ok(file) => {
+            drop(file);
+            Ok(())
+        }
+        Err(Error::Io { source, .. }) if source.kind() == ErrorKind::NotFound => {
+            Err(Error::corruption(
+                role,
+                format!(
+                    "MANIFEST ссылается на отсутствующий WAL {}",
+                    path.display()
+                ),
+            ))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn ensure_writer_healthy(state: &DatabaseState) -> Result<()> {
