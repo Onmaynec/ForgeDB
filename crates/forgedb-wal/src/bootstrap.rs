@@ -20,6 +20,12 @@ pub fn create_wal<F: FileSystem>(
     database_id: DatabaseId,
     file_number: u64,
 ) -> Result<WalWriter<F::WritableFile>> {
+    if file_number == 0 {
+        return Err(Error::invalid_argument(
+            "file_number",
+            "ноль зарезервирован",
+        ));
+    }
     let path = directory.join(wal_file_name(file_number));
     match filesystem.open_sequential(&path) {
         Ok(_) => {
@@ -94,6 +100,19 @@ mod tests {
         fs::create_dir_all(&path)
             .map_err(|source| Error::io("create_test_directory", Some(path.clone()), source))?;
         Ok(path)
+    }
+
+    #[test]
+    fn zero_generation_is_rejected() -> Result<()> {
+        let directory = temporary_directory("zero")?;
+        let filesystem = NativeFileSystem;
+        assert!(matches!(
+            create_wal(&filesystem, &directory, DatabaseId::random(), 0),
+            Err(Error::InvalidArgument { .. })
+        ));
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
     }
 
     #[test]
