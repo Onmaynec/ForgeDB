@@ -1,5 +1,6 @@
 //! MANIFEST V1 ForgeDB: authoritative VersionEdit log, CURRENT и L0 metadata.
 
+mod bootstrap;
 mod checksum;
 mod codec;
 mod log;
@@ -29,5 +30,6 @@ pub fn parse_manifest_file_name(name: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
-pub use log::{ManifestWriter, ReplaySummary, create_manifest, open_manifest, replay_manifest};
+pub use bootstrap::create_manifest;
+pub use log::{ManifestWriter, ReplaySummary, open_manifest, replay_manifest};
 pub use state::{ManifestState, VersionEdit};
