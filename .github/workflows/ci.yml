@@ -36,27 +36,41 @@ jobs:
           elif new_import not in text:
               raise SystemExit("SST test import pattern not found")
 
-          old = '''        file.seek(SeekFrom::Start(
-              u64::try_from(SST_HEADER_SIZE + 5).unwrap_or(u64::MAX),
-          ))
-          .map_err(|source| Error::io("seek_test_sstable", Some(path.clone()), source))?;
-          file.write_all(&[0xff])
-              .map_err(|source| Error::io("corrupt_test_sstable", Some(path.clone()), source))?;'''
-          new = '''        let checksum_offset = u64::try_from(SST_HEADER_SIZE - 4).unwrap_or(u64::MAX);
-          file.seek(SeekFrom::Start(checksum_offset))
-              .map_err(|source| Error::io("seek_test_sstable", Some(path.clone()), source))?;
-          let mut checksum_byte = [0_u8; 1];
-          file.read_exact(&mut checksum_byte)
-              .map_err(|source| Error::io("read_test_sstable", Some(path.clone()), source))?;
-          checksum_byte[0] ^= 0xff;
-          file.seek(SeekFrom::Start(checksum_offset))
-              .map_err(|source| Error::io("seek_test_sstable", Some(path.clone()), source))?;
-          file.write_all(&checksum_byte)
-              .map_err(|source| Error::io("corrupt_test_sstable", Some(path.clone()), source))?;'''
-          if old in text:
-              text = text.replace(old, new, 1)
-          elif new not in text:
+          if "SST_HEADER_SIZE + 5" in text:
+              lines = text.splitlines()
+              marker = next(i for i, line in enumerate(lines) if "SST_HEADER_SIZE + 5" in line)
+              start = marker
+              while start >= 0 and "file.seek(SeekFrom::Start(" not in lines[start]:
+                  start -= 1
+              if start < 0:
+                  raise SystemExit("SST mutation start not found")
+              end = marker
+              while end < len(lines) and "corrupt_test_sstable" not in lines[end]:
+                  end += 1
+              if end >= len(lines):
+                  raise SystemExit("SST mutation end not found")
+              while end < len(lines) and ")?;" not in lines[end]:
+                  end += 1
+              if end >= len(lines):
+                  raise SystemExit("SST mutation terminator not found")
+              replacement = [
+                  "        let checksum_offset = u64::try_from(SST_HEADER_SIZE - 4).unwrap_or(u64::MAX);",
+                  "        file.seek(SeekFrom::Start(checksum_offset))",
+                  "            .map_err(|source| Error::io(\"seek_test_sstable\", Some(path.clone()), source))?;",
+                  "        let mut checksum_byte = [0_u8; 1];",
+                  "        file.read_exact(&mut checksum_byte)",
+                  "            .map_err(|source| Error::io(\"read_test_sstable\", Some(path.clone()), source))?;",
+                  "        checksum_byte[0] ^= 0xff;",
+                  "        file.seek(SeekFrom::Start(checksum_offset))",
+                  "            .map_err(|source| Error::io(\"seek_test_sstable\", Some(path.clone()), source))?;",
+                  "        file.write_all(&checksum_byte)",
+                  "            .map_err(|source| Error::io(\"corrupt_test_sstable\", Some(path.clone()), source))?;",
+              ]
+              lines[start : end + 1] = replacement
+              text = "\n".join(lines) + "\n"
+          elif "let checksum_offset = u64::try_from(SST_HEADER_SIZE - 4)" not in text:
               raise SystemExit("SST checksum mutation pattern not found")
+
           path.write_text(text)
           PY
       - run: cargo fmt --all
