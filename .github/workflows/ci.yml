@@ -18,258 +18,258 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Connect manual picker
+      - name: Connect manual picker structurally
         run: |
           python - <<'PY'
           from pathlib import Path
-          from textwrap import dedent
 
-          def replace_once(text: str, old: str, new: str, label: str) -> str:
-              old = dedent(old)
-              new = dedent(new)
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected one match, found {count}")
-              return text.replace(old, new, 1)
+          def one_index(lines, predicate, label, start=0):
+              matches = [i for i in range(start, len(lines)) if predicate(lines[i])]
+              if len(matches) != 1:
+                  raise SystemExit(f"{label}: expected one match, found {len(matches)}")
+              return matches[0]
 
           planner = Path("crates/forgedb-lsm/src/lib.rs")
-          text = planner.read_text()
-          text = replace_once(
-              text,
-              '''
-              pub enum CompactionReason {
-                  L0FileCount,
-                  LevelBytes,
-              }
-              ''',
-              '''
-              pub enum CompactionReason {
-                  L0FileCount,
-                  LevelBytes,
-                  ManualRange,
-              }
-              ''',
-              "manual reason",
+          lines = planner.read_text().splitlines()
+          enum_start = one_index(
+              lines,
+              lambda line: line.strip() == "pub enum CompactionReason {",
+              "CompactionReason enum",
           )
-          text = replace_once(text, "fn validate_layout(", "pub(super) fn validate_layout(", "layout visibility")
-          text = replace_once(text, "fn ranges_overlap(\n", "pub(super) fn ranges_overlap(\n", "range visibility")
-          text = replace_once(text, "fn extend_range(", "pub(super) fn extend_range(", "extend visibility")
-          planner.write_text(text)
+          enum_end = next(
+              (i for i in range(enum_start + 1, len(lines)) if lines[i].strip() == "}"),
+              None,
+          )
+          if enum_end is None:
+              raise SystemExit("CompactionReason enum end not found")
+          if not any(lines[i].strip() == "ManualRange," for i in range(enum_start, enum_end)):
+              level_bytes = one_index(
+                  lines,
+                  lambda line: line.strip() == "LevelBytes,",
+                  "LevelBytes variant",
+                  enum_start,
+              )
+              indent = lines[level_bytes][: len(lines[level_bytes]) - len(lines[level_bytes].lstrip())]
+              lines.insert(level_bytes + 1, f"{indent}ManualRange,")
+          for function in ["validate_layout", "ranges_overlap", "extend_range"]:
+              index = one_index(
+                  lines,
+                  lambda line, function=function: line.startswith(f"fn {function}(")
+                  or line.strip().startswith(f"fn {function}(") and not line.strip().startswith("pub"),
+                  f"{function} visibility",
+              )
+              prefix = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+              stripped = lines[index].lstrip()
+              lines[index] = f"{prefix}pub(super) {stripped}"
+          planner.write_text("\n".join(lines) + "\n")
 
           root = Path("crates/forgedb-lsm/src/root.rs")
-          text = root.read_text()
-          text = replace_once(text, "mod merge;\n", "mod manual;\nmod merge;\n", "manual module")
-          text = replace_once(
-              text,
-              "pub use merge::{\n",
-              "pub use manual::pick_manual_compaction;\npub use merge::{\n",
-              "manual export",
+          lines = root.read_text().splitlines()
+          merge_mod = one_index(lines, lambda line: line.strip() == "mod merge;", "merge module")
+          if not any(line.strip() == "mod manual;" for line in lines):
+              lines.insert(merge_mod, "mod manual;")
+          merge_export = one_index(
+              lines,
+              lambda line: line.strip() == "pub use merge::{",
+              "merge export",
           )
-          root.write_text(text)
+          if not any("pick_manual_compaction" in line for line in lines):
+              lines.insert(merge_export, "pub use manual::pick_manual_compaction;")
+          root.write_text("\n".join(lines) + "\n")
 
           manual = Path("crates/forgedb-lsm/src/manual.rs")
-          text = manual.read_text()
-          text = replace_once(
-              text,
-              '''
-                  build_manual_plan(
-                      0,
-                      1,
-                      level_zero,
-                      level_one,
-                      &selected_l0,
-                      &selected_l1,
-                      smallest,
-                      largest,
-                      score,
-                  )
-              ''',
-              '''
-                  build_manual_plan(BuildManualPlanRequest {
-                      source_level: 0,
-                      output_level: 1,
-                      source: level_zero,
-                      target: level_one,
-                      selected_source: &selected_l0,
-                      selected_target: &selected_l1,
-                      smallest_user_key: smallest,
-                      largest_user_key: largest,
-                      score,
-                  })
-              ''',
-              "manual L0 request",
-          )
-          text = replace_once(
-              text,
-              '''
-                  build_manual_plan(
-                      score.level,
-                      output_level,
-                      source,
-                      target,
-                      &selected_source,
-                      &selected_target,
-                      smallest,
-                      largest,
-                      score,
-                  )
-              ''',
-              '''
-                  build_manual_plan(BuildManualPlanRequest {
-                      source_level: score.level,
-                      output_level,
-                      source,
-                      target,
-                      selected_source: &selected_source,
-                      selected_target: &selected_target,
-                      smallest_user_key: smallest,
-                      largest_user_key: largest,
-                      score,
-                  })
-              ''',
-              "manual level request",
-          )
-          text = replace_once(
-              text,
-              '''
-              #[allow(clippy::too_many_arguments)]
-              fn build_manual_plan(
-                  source_level: usize,
-                  output_level: usize,
-                  source: &[TableMeta],
-                  target: &[TableMeta],
-                  selected_source: &BTreeSet<u64>,
-                  selected_target: &BTreeSet<u64>,
-                  smallest_user_key: Vec<u8>,
-                  largest_user_key: Vec<u8>,
-                  score: CompactionScore,
-              ) -> Result<CompactionPlan> {
-                  let source_files = source
-              ''',
-              '''
-              struct BuildManualPlanRequest<'a> {
-                  source_level: usize,
-                  output_level: usize,
-                  source: &'a [TableMeta],
-                  target: &'a [TableMeta],
-                  selected_source: &'a BTreeSet<u64>,
-                  selected_target: &'a BTreeSet<u64>,
-                  smallest_user_key: Vec<u8>,
-                  largest_user_key: Vec<u8>,
-                  score: CompactionScore,
-              }
+          lines = manual.read_text().splitlines()
+          calls = [i for i, line in enumerate(lines) if line.strip() == "build_manual_plan("]
+          if len(calls) != 2:
+              raise SystemExit(f"manual build call count: {len(calls)}")
 
-              fn build_manual_plan(request: BuildManualPlanRequest<'_>) -> Result<CompactionPlan> {
-                  let BuildManualPlanRequest {
-                      source_level,
-                      output_level,
-                      source,
-                      target,
-                      selected_source,
-                      selected_target,
-                      smallest_user_key,
-                      largest_user_key,
-                      score,
-                  } = request;
-                  let source_files = source
-              ''',
-              "typed manual build request",
+          def replace_call(lines, start, fields):
+              end = next(
+                  (i for i in range(start + 1, len(lines)) if lines[i].strip() == ")"),
+                  None,
+              )
+              if end is None:
+                  raise SystemExit("manual build call end not found")
+              indent = lines[start][: len(lines[start]) - len(lines[start].lstrip())]
+              body_indent = indent + "    "
+              replacement = [f"{indent}build_manual_plan(BuildManualPlanRequest {{"]
+              replacement.extend(f"{body_indent}{field}" for field in fields)
+              replacement.append(f"{indent}}})")
+              lines[start : end + 1] = replacement
+
+          replace_call(
+              lines,
+              calls[1],
+              [
+                  "source_level: score.level,",
+                  "output_level,",
+                  "source,",
+                  "target,",
+                  "selected_source: &selected_source,",
+                  "selected_target: &selected_target,",
+                  "smallest_user_key: smallest,",
+                  "largest_user_key: largest,",
+                  "score,",
+              ],
           )
-          if "allow(clippy::too_many_arguments)" in text:
-              raise SystemExit("manual picker still contains lint allowance")
-          manual.write_text(text)
+          replace_call(
+              lines,
+              calls[0],
+              [
+                  "source_level: 0,",
+                  "output_level: 1,",
+                  "source: level_zero,",
+                  "target: level_one,",
+                  "selected_source: &selected_l0,",
+                  "selected_target: &selected_l1,",
+                  "smallest_user_key: smallest,",
+                  "largest_user_key: largest,",
+                  "score,",
+              ],
+          )
+
+          allow_index = one_index(
+              lines,
+              lambda line: line.strip() == "#[allow(clippy::too_many_arguments)]",
+              "manual lint allowance",
+          )
+          source_line = one_index(
+              lines,
+              lambda line: line.strip() == "let source_files = source",
+              "manual source file construction",
+              allow_index,
+          )
+          typed_header = [
+              "struct BuildManualPlanRequest<'a> {",
+              "    source_level: usize,",
+              "    output_level: usize,",
+              "    source: &'a [TableMeta],",
+              "    target: &'a [TableMeta],",
+              "    selected_source: &'a BTreeSet<u64>,",
+              "    selected_target: &'a BTreeSet<u64>,",
+              "    smallest_user_key: Vec<u8>,",
+              "    largest_user_key: Vec<u8>,",
+              "    score: CompactionScore,",
+              "}",
+              "",
+              "fn build_manual_plan(request: BuildManualPlanRequest<'_>) -> Result<CompactionPlan> {",
+              "    let BuildManualPlanRequest {",
+              "        source_level,",
+              "        output_level,",
+              "        source,",
+              "        target,",
+              "        selected_source,",
+              "        selected_target,",
+              "        smallest_user_key,",
+              "        largest_user_key,",
+              "        score,",
+              "    } = request;",
+          ]
+          lines[allow_index:source_line] = typed_header
+          if any("allow(clippy::too_many_arguments)" in line for line in lines):
+              raise SystemExit("manual lint allowance remains")
+          manual.write_text("\n".join(lines) + "\n")
 
           database = Path("crates/forgedb/src/database_compaction.rs")
-          text = database.read_text()
-          text = replace_once(
-              text,
-              '''
-                      let decision = forgedb_lsm::pick_compaction(
-                          &levels,
-                          forgedb_lsm::CompactionConfig {
-                              l0_compaction_trigger: self.options.l0_compaction_trigger,
-                              level1_target_size: self.options.level1_target_size,
-                              level_size_multiplier: self.options.level_size_multiplier,
-                              max_compaction_bytes: self.options.max_compaction_bytes,
-                          },
-                      )?;
-              ''',
-              '''
-                      let decision = forgedb_lsm::pick_manual_compaction(
-                          &levels,
-                          forgedb_lsm::CompactionConfig {
-                              l0_compaction_trigger: self.options.l0_compaction_trigger,
-                              level1_target_size: self.options.level1_target_size,
-                              level_size_multiplier: self.options.level_size_multiplier,
-                              max_compaction_bytes: self.options.max_compaction_bytes,
-                          },
-                          start,
-                          end,
-                      )?;
-              ''',
-              "database manual picker",
+          lines = database.read_text().splitlines()
+          decision_start = one_index(
+              lines,
+              lambda line: line.strip() == "let decision = forgedb_lsm::pick_compaction(",
+              "background picker call",
           )
-          text = replace_once(
-              text,
-              '''
-                      if !plan_overlaps_requested_range(&plan, start, end) {
-                          return Ok(());
-                      }
-
-              ''',
-              "",
+          decision_end = next(
+              (i for i in range(decision_start + 1, len(lines)) if lines[i].strip() == ")?;"),
+              None,
+          )
+          if decision_end is None:
+              raise SystemExit("picker call end not found")
+          indent = lines[decision_start][: len(lines[decision_start]) - len(lines[decision_start].lstrip())]
+          body = indent + "    "
+          config = body + "    "
+          lines[decision_start : decision_end + 1] = [
+              f"{indent}let decision = forgedb_lsm::pick_manual_compaction(",
+              f"{body}&levels,",
+              f"{body}forgedb_lsm::CompactionConfig {{",
+              f"{config}l0_compaction_trigger: self.options.l0_compaction_trigger,",
+              f"{config}level1_target_size: self.options.level1_target_size,",
+              f"{config}level_size_multiplier: self.options.level_size_multiplier,",
+              f"{config}max_compaction_bytes: self.options.max_compaction_bytes,",
+              f"{body}}},",
+              f"{body}start,",
+              f"{body}end,",
+              f"{indent})?;",
+          ]
+          range_if = one_index(
+              lines,
+              lambda line: line.strip() == "if !plan_overlaps_requested_range(&plan, start, end) {",
               "obsolete range filter",
           )
-          start_marker = "fn plan_overlaps_requested_range("
-          end_marker = "fn selected_compaction_inputs("
-          start_index = text.find(start_marker)
-          end_index = text.find(end_marker)
-          if start_index < 0 or end_index <= start_index:
-              raise SystemExit("obsolete range helper boundaries not found")
-          text = text[:start_index] + text[end_index:]
+          range_end = next(
+              (i for i in range(range_if + 1, len(lines)) if lines[i].strip() == "}"),
+              None,
+          )
+          if range_end is None:
+              raise SystemExit("obsolete range filter end not found")
+          del lines[range_if : range_end + 1]
+          if range_if < len(lines) and lines[range_if].strip() == "":
+              del lines[range_if]
 
-          test = dedent('''
+          helper_start = one_index(
+              lines,
+              lambda line: line.strip().startswith("fn plan_overlaps_requested_range("),
+              "obsolete range helper",
+          )
+          helper_end = one_index(
+              lines,
+              lambda line: line.strip().startswith("fn selected_compaction_inputs("),
+              "selected inputs helper",
+              helper_start + 1,
+          )
+          del lines[helper_start:helper_end]
 
-              #[test]
-              fn manual_range_compacts_requested_l0_file_below_pressure_trigger() -> Result<()> {
-                  let directory = temporary_directory("manual-range")?;
-                  let options = Options {
-                      l0_compaction_trigger: 10,
-                      l0_slowdown_trigger: 11,
-                      l0_stop_trigger: 12,
-                      target_sst_size: 1024,
-                      data_block_size: 1024,
-                      ..Options::default()
-                  };
-                  let database = StreamingDatabase::open(&directory, options)?;
-                  database.put(b"alpha", b"one", WriteOptions::sync())?;
-                  database.flush()?;
-                  database.put(b"middle", b"two", WriteOptions::sync())?;
-                  database.flush()?;
-
-                  database.compact_range(Some(b"m"), Some(b"z"))?;
-                  assert_eq!(database.get(b"alpha")?, Some(b"one".to_vec()));
-                  assert_eq!(database.get(b"middle")?, Some(b"two".to_vec()));
-                  {
-                      let state = database.inner.lock_state()?;
-                      let levels = state.version.metadata_levels();
-                      assert_eq!(levels[0].len(), 1);
-                      assert_eq!(levels[0][0].smallest_user_key, b"alpha");
-                      assert_eq!(levels[1].len(), 1);
-                      assert_eq!(levels[1][0].smallest_user_key, b"middle");
-                  }
-                  database.close()?;
-                  fs::remove_dir_all(&directory).map_err(|source| {
-                      Error::io("remove_test_directory", Some(directory), source)
-                  })?;
-                  Ok(())
-              }
-          ''')
-          module_end = text.rfind("\n}")
-          if module_end < 0:
-              raise SystemExit("database compaction test module end not found")
-          text = text[:module_end] + test + text[module_end:]
-          database.write_text(text)
+          if not any("manual_range_compacts_requested_l0_file" in line for line in lines):
+              module_end = len(lines) - 1
+              if lines[module_end].strip() != "}":
+                  raise SystemExit("database compaction module end not found")
+              test = [
+                  "",
+                  "    #[test]",
+                  "    fn manual_range_compacts_requested_l0_file_below_pressure_trigger() -> Result<()> {",
+                  "        let directory = temporary_directory(\"manual-range\")?;",
+                  "        let options = Options {",
+                  "            l0_compaction_trigger: 10,",
+                  "            l0_slowdown_trigger: 11,",
+                  "            l0_stop_trigger: 12,",
+                  "            target_sst_size: 1024,",
+                  "            data_block_size: 1024,",
+                  "            ..Options::default()",
+                  "        };",
+                  "        let database = StreamingDatabase::open(&directory, options)?;",
+                  "        database.put(b\"alpha\", b\"one\", WriteOptions::sync())?;",
+                  "        database.flush()?;",
+                  "        database.put(b\"middle\", b\"two\", WriteOptions::sync())?;",
+                  "        database.flush()?;",
+                  "",
+                  "        database.compact_range(Some(b\"m\"), Some(b\"z\"))?;",
+                  "        assert_eq!(database.get(b\"alpha\")?, Some(b\"one\".to_vec()));",
+                  "        assert_eq!(database.get(b\"middle\")?, Some(b\"two\".to_vec()));",
+                  "        {",
+                  "            let state = database.inner.lock_state()?;",
+                  "            let levels = state.version.metadata_levels();",
+                  "            assert_eq!(levels[0].len(), 1);",
+                  "            assert_eq!(levels[0][0].smallest_user_key, b\"alpha\");",
+                  "            assert_eq!(levels[1].len(), 1);",
+                  "            assert_eq!(levels[1][0].smallest_user_key, b\"middle\");",
+                  "        }",
+                  "        database.close()?;",
+                  "        fs::remove_dir_all(&directory).map_err(|source| {",
+                  "            Error::io(\"remove_test_directory\", Some(directory), source)",
+                  "        })?;",
+                  "        Ok(())",
+                  "    }",
+              ]
+              lines[module_end:module_end] = test
+          database.write_text("\n".join(lines) + "\n")
           PY
       - run: cargo fmt --all
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
