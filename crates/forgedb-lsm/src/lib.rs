@@ -172,13 +172,12 @@ fn highest_score(
                 limit: u64::MAX,
                 observed: u64::MAX,
             })?;
-            let trigger = u64::try_from(config.l0_compaction_trigger).map_err(|_| {
-                Error::ResourceLimit {
+            let trigger =
+                u64::try_from(config.l0_compaction_trigger).map_err(|_| Error::ResourceLimit {
                     resource: "l0_compaction_trigger",
                     limit: u64::MAX,
                     observed: u64::MAX,
-                }
-            })?;
+                })?;
             (file_count >= trigger).then_some(CompactionScore {
                 level,
                 numerator: file_count,
@@ -262,23 +261,20 @@ fn pick_l0_to_l1(levels: &[Vec<TableMeta>], score: CompactionScore) -> Result<Co
         }
     }
 
-    build_plan(
-        0,
-        1,
-        level_zero,
-        level_one,
-        &selected_l0,
-        &selected_l1,
-        smallest,
-        largest,
+    build_plan(BuildPlanRequest {
+        source_level: 0,
+        output_level: 1,
+        source: level_zero,
+        target: level_one,
+        selected_source: &selected_l0,
+        selected_target: &selected_l1,
+        smallest_user_key: smallest,
+        largest_user_key: largest,
         score,
-    )
+    })
 }
 
-fn pick_level_to_next(
-    levels: &[Vec<TableMeta>],
-    score: CompactionScore,
-) -> Result<CompactionPlan> {
+fn pick_level_to_next(levels: &[Vec<TableMeta>], score: CompactionScore) -> Result<CompactionPlan> {
     let source = levels.get(score.level).ok_or(Error::InternalInvariant {
         invariant: "I-COMPACTION-SOURCE-LEVEL",
         reason: "selected source level отсутствует".to_owned(),
@@ -318,31 +314,43 @@ fn pick_level_to_next(
         }
     }
 
-    build_plan(
-        score.level,
+    build_plan(BuildPlanRequest {
+        source_level: score.level,
         output_level,
         source,
         target,
-        &selected_source,
-        &selected_target,
-        smallest,
-        largest,
+        selected_source: &selected_source,
+        selected_target: &selected_target,
+        smallest_user_key: smallest,
+        largest_user_key: largest,
         score,
-    )
+    })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_plan(
+struct BuildPlanRequest<'a> {
     source_level: usize,
     output_level: usize,
-    source: &[TableMeta],
-    target: &[TableMeta],
-    selected_source: &BTreeSet<u64>,
-    selected_target: &BTreeSet<u64>,
+    source: &'a [TableMeta],
+    target: &'a [TableMeta],
+    selected_source: &'a BTreeSet<u64>,
+    selected_target: &'a BTreeSet<u64>,
     smallest_user_key: Vec<u8>,
     largest_user_key: Vec<u8>,
     score: CompactionScore,
-) -> Result<CompactionPlan> {
+}
+
+fn build_plan(request: BuildPlanRequest<'_>) -> Result<CompactionPlan> {
+    let BuildPlanRequest {
+        source_level,
+        output_level,
+        source,
+        target,
+        selected_source,
+        selected_target,
+        smallest_user_key,
+        largest_user_key,
+        score,
+    } = request;
     let source_files = source
         .iter()
         .filter(|file| selected_source.contains(&file.file_number))
@@ -384,9 +392,7 @@ fn validate_layout(levels: &[Vec<TableMeta>]) -> Result<()> {
                     "file number и file size должны быть ненулевыми",
                 ));
             }
-            if file.smallest_user_key.is_empty()
-                || file.smallest_user_key > file.largest_user_key
-            {
+            if file.smallest_user_key.is_empty() || file.smallest_user_key > file.largest_user_key {
                 return Err(Error::corruption(
                     "compaction layout",
                     "некорректный user-key range SSTable",
@@ -424,11 +430,13 @@ fn validate_layout(levels: &[Vec<TableMeta>]) -> Result<()> {
 
 fn total_bytes(files: &[TableMeta]) -> Result<u64> {
     files.iter().try_fold(0_u64, |total, file| {
-        total.checked_add(file.file_size).ok_or(Error::ResourceLimit {
-            resource: "level_bytes",
-            limit: u64::MAX,
-            observed: u64::MAX,
-        })
+        total
+            .checked_add(file.file_size)
+            .ok_or(Error::ResourceLimit {
+                resource: "level_bytes",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            })
     })
 }
 
@@ -437,15 +445,22 @@ fn selected_bytes(files: &[TableMeta], selected: &BTreeSet<u64>) -> Result<u64> 
         .iter()
         .filter(|file| selected.contains(&file.file_number))
         .try_fold(0_u64, |total, file| {
-            total.checked_add(file.file_size).ok_or(Error::ResourceLimit {
-                resource: "compaction_input_bytes",
-                limit: u64::MAX,
-                observed: u64::MAX,
-            })
+            total
+                .checked_add(file.file_size)
+                .ok_or(Error::ResourceLimit {
+                    resource: "compaction_input_bytes",
+                    limit: u64::MAX,
+                    observed: u64::MAX,
+                })
         })
 }
 
-fn ranges_overlap(left_start: &[u8], left_end: &[u8], right_start: &[u8], right_end: &[u8]) -> bool {
+fn ranges_overlap(
+    left_start: &[u8],
+    left_end: &[u8],
+    right_start: &[u8],
+    right_end: &[u8],
+) -> bool {
     left_start <= right_end && right_start <= left_end
 }
 
