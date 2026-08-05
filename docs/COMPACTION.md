@@ -4,7 +4,7 @@
 
 ## Текущее состояние
 
-`v0.3.0` предоставляет immutable VersionSet, L0 newest-first reads, validated L1+ invariants, snapshots и bounded SST cursors. Физические L1+ files пока отсутствуют. MANIFEST V1 хранит только L0 metadata.
+`v0.3.0` предоставляет immutable VersionSet, L0 newest-first reads, validated L1+ invariants, snapshots и bounded SST cursors. В `v0.4.0` уже добавлены deterministic picker, explicit MANIFEST V2 contract и bounded snapshot-aware merge. Physical installation L1+ пока не активирована.
 
 ## Цели v0.4.0
 
@@ -61,21 +61,73 @@ target(Ln) = target(L1) * level_size_multiplier^(n-1)
 3. вычислить полный input range и bytes;
 4. вернуть blocker при превышении configured limit.
 
-Compaction pointer и расширение source range будут добавлены до завершения milestone.
+Compaction pointer сохраняется в MANIFEST V2. Расширение source range будет добавлено до завершения milestone.
 
-## Merge retention
+## Bounded merge
 
-Для каждого user key output merge обязан:
+`CompactionMerge` объединяет sorted sources через binary heap.
 
-- сохранить newest version;
-- сохранить versions, которые могут быть видимы active snapshots;
-- не удалять tombstone без bottommost proof;
-- не разделять versions одного user key между outputs некорректно;
-- сохранять internal-key ordering.
+Memory bound merge-слоя:
+
+```text
+O(number_of_sources + max_versions_per_user_key)
+```
+
+Каждый source предоставляет только current entry через `CompactionCursor`. Merge не materialize-ит весь input range.
+
+Проверки:
+
+- число sources ограничено до heap initialization;
+- каждый source обязан выдавать internal keys строго по возрастанию;
+- duplicate sequence одного logical key между sources является corruption;
+- число versions одного logical key ограничено;
+- checked counters не используют wrapping arithmetic;
+- после первой ошибки iterator прекращает выдачу.
+
+Logical key включает column family ID и user key.
+
+## Snapshot retention
+
+При отсутствии active snapshots:
+
+- сохраняется только newest version;
+- newest tombstone сохраняется, если output не bottommost;
+- newest tombstone и все shadowed versions удаляются, если output bottommost.
+
+При `oldest_active_snapshot = S`:
+
+- сохраняются все versions с `sequence > S`;
+- сохраняется первая version с `sequence <= S`;
+- более старые shadowed versions удаляются;
+- bottommost tombstone на snapshot floor можно удалить вместе со всеми более старыми versions, потому что ниже нет данных, которые могли бы воскреснуть.
+
+Эта политика консервативно сохраняет visibility любых active snapshots с sequence не меньше `S`.
+
+## Tombstone rules
+
+Tombstone нельзя удалить только по возрасту. Для текущего merge slice удаление разрешено только когда:
+
+1. output range доказан bottommost;
+2. tombstone не новее oldest active snapshot либо active snapshots отсутствуют;
+3. все более старые versions этого logical key одновременно исключаются из output.
+
+Physical compaction picker обязан предоставить bottommost proof до включения этого режима.
+
+## MANIFEST V2
+
+MANIFEST V1 не изменяется и остаётся active production format до migration slice. V2 contract добавляет:
+
+- exact level в add/delete records;
+- authoritative level count;
+- compaction pointers;
+- L1+ non-overlap validation;
+- minimum reader version 2.
+
+Fixed V1 fixture проверяет, что добавление V2 не меняет V1 reader semantics.
 
 ## Installation protocol
 
-MANIFEST V1 не поддерживает levels. Physical installation будет реализована только после MANIFEST V2:
+Physical installation будет реализована только после V1→V2 migration:
 
 1. построить outputs в `TEMP/`;
 2. sync каждого output;
@@ -89,16 +141,16 @@ MANIFEST V1 не поддерживает levels. Physical installation буде
 
 ## Failure policy
 
-- picker не изменяет filesystem;
+- picker и merge не изменяют filesystem;
 - partial output не становится live;
 - failure до MANIFEST sync оставляет outputs orphan/temp;
 - failure после MANIFEST sync обязан восстанавливать новый VersionSet;
 - background failure не скрывается от writes;
 - unsafe partial plan не используется.
 
-## Первый slice
+## Реализованные slices
 
-Crate `forgedb-lsm` реализует pure deterministic picker и tests:
+### Picker
 
 - no eligible level;
 - score selection и tie-break;
@@ -107,4 +159,23 @@ Crate `forgedb-lsm` реализует pure deterministic picker и tests:
 - explicit byte-limit blocker;
 - target overflow rejection.
 
-Следующий slice: MANIFEST V2 design, encoder/decoder, V1 fixtures и compatibility tests.
+### MANIFEST V2 contract
+
+- bounded header/frame codec;
+- levelled add/delete;
+- compaction pointers;
+- state validation;
+- V1 fixed fixture;
+- future-version rejection.
+
+### Merge
+
+- heap merge;
+- source ordering validation;
+- duplicate sequence rejection;
+- snapshot floor retention;
+- bottommost tombstone dropping;
+- bounded versions-per-key;
+- metrics для input/output/dropped entries и tombstones.
+
+Следующий slice: output splitting и sink protocol, затем V1→V2 migration и crash-safe physical installation.
