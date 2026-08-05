@@ -21,6 +21,16 @@ Input SST читаются block-at-a-time с обязательной checksum 
 
 Output SST полностью записываются, синхронизируются и публикуются до финального MANIFEST V2 edit. Финальный edit атомарно удаляет exact inputs, добавляет outputs и обновляет compaction pointer. Current immutable VersionSet меняется только после sync MANIFEST.
 
+## Process-crash boundaries
+
+В validation находится child-process matrix для трёх installation boundaries:
+
+- после sync и публикации output SST, но до финального MANIFEST edit;
+- после sync финального MANIFEST edit, но до in-memory Version swap;
+- после Version swap, но до удаления obsolete input SST.
+
+Матрица проверяет только process crash/forced termination. OS-crash и power-loss guarantees этим тестом не доказываются.
+
 ## Obsolete lifetime
 
 Старая Version удерживается readers через `Arc<VersionSet>`. Очередь obsolete files хранит только `Weak<VersionSet>`. Input SST нельзя удалить, пока Version удерживает reader, iterator или другой operation. `file_inventory()` не изменяет каталог; cleanup выполняется только mutating paths.
@@ -35,4 +45,4 @@ Crash до cleanup может оставить безопасный orphan SST. 
 
 Picker, merge, output splitting, MANIFEST V2 installation, snapshot preservation, reference-aware obsolete lifetime, write stalls, requested-range selection и bounded exhaustive original-source processing подтверждены clean read-only CI на Ubuntu stable, Windows stable и Rust 1.89.
 
-Installation failpoint/crash matrix, background scheduler и stall metrics остаются незавершёнными slices draft milestone.
+Installation process-crash matrix находится в активной проверке. Background scheduler и stall metrics остаются незавершёнными slices draft milestone.
