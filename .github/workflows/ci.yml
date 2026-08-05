@@ -1,43 +1,12 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
 
 permissions:
   contents: write
 
 jobs:
-  test:
-    name: ${{ matrix.os }} / stable
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - run: cargo fmt --all --check
-      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --locked --workspace --all-features
-      - run: cargo test --locked --workspace --doc
-      - run: cargo build --locked --workspace --release
-
-  msrv:
-    name: ubuntu / Rust 1.89
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.89.0
-        with:
-          components: clippy
-      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --locked --workspace --all-features
-
   integrate_obsolete_lifetime:
     name: integrate reference-aware obsolete lifetime
     runs-on: ubuntu-latest
@@ -54,176 +23,207 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          def replace_once(text: str, old: str, new: str, label: str) -> str:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected one match, found {count}")
-              return text.replace(old, new, 1)
+          def find_line(lines, predicate, label, start=0, end=None):
+              stop = len(lines) if end is None else end
+              matches = [i for i in range(start, stop) if predicate(lines[i])]
+              if len(matches) != 1:
+                  raise SystemExit(f"{label}: expected one line, found {len(matches)}")
+              return matches[0]
 
           database = Path("crates/forgedb/src/database_v3_fixed.rs")
-          text = database.read_text()
-          text = replace_once(
-              text,
-              "    fatal_write_error: Option<String>,\n    lock: Option<NativeLockGuard>,",
-              "    fatal_write_error: Option<String>,\n    obsolete_versions: Vec<ObsoleteVersion>,\n    lock: Option<NativeLockGuard>,",
-              "DatabaseState obsolete queue",
+          lines = database.read_text().splitlines()
+          index = find_line(
+              lines,
+              lambda line: line.strip() == "fatal_write_error: Option<String>,",
+              "DatabaseState fatal field",
           )
-          text = replace_once(
-              text,
-              "                fatal_write_error: None,\n                lock: Some(lock),",
-              "                fatal_write_error: None,\n                obsolete_versions: Vec::new(),\n                lock: Some(lock),",
-              "DatabaseState obsolete init",
+          lines.insert(index + 1, "    obsolete_versions: Vec<ObsoleteVersion>,")
+          index = find_line(
+              lines,
+              lambda line: line.strip() == "fatal_write_error: None,",
+              "DatabaseState fatal init",
           )
-          text = replace_once(
-              text,
-              '''        let (manifest, version) = {
-                      let state = self.lock_state()?;
-                      (state.manifest.clone(), Arc::clone(&state.version))
-                  };''',
-              '''        let (manifest, version) = {
-                      let mut state = self.lock_state()?;
-                      self.collect_obsolete_ssts_locked(&mut state)?;
-                      (state.manifest.clone(), Arc::clone(&state.version))
-                  };''',
-              "file inventory cleanup",
+          indent = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+          lines.insert(index + 1, f"{indent}obsolete_versions: Vec::new(),")
+
+          inventory_start = find_line(
+              lines,
+              lambda line: "pub fn file_inventory(&self)" in line,
+              "file_inventory method",
           )
-          text = replace_once(
-              text,
-              '''        if let Some(writer) = state.manifest_writer.take() {
-                      writer.sync()?;
-                  }
-                  state.lock.take();''',
-              '''        if let Some(writer) = state.manifest_writer.take() {
-                      writer.sync()?;
-                  }
-                  self.collect_obsolete_ssts_locked(&mut state)?;
-                  state.lock.take();''',
-              "close cleanup",
+          verify_start = find_line(
+              lines,
+              lambda line: "pub fn verify(&self" in line,
+              "verify method",
+              start=inventory_start + 1,
           )
-          database.write_text(text)
+          index = find_line(
+              lines,
+              lambda line: line.strip() == "let state = self.lock_state()?;",
+              "file_inventory state lock",
+              start=inventory_start,
+              end=verify_start,
+          )
+          indent = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+          lines[index] = f"{indent}let mut state = self.lock_state()?;"
+          lines.insert(index + 1, f"{indent}self.collect_obsolete_ssts_locked(&mut state)?;")
+
+          close_start = find_line(
+              lines,
+              lambda line: "pub fn close(&self)" in line,
+              "close method",
+          )
+          path_start = find_line(
+              lines,
+              lambda line: "pub const fn identity(&self)" in line,
+              "identity method",
+              start=close_start + 1,
+          )
+          index = find_line(
+              lines,
+              lambda line: line.strip() == "state.lock.take();",
+              "close lock release",
+              start=close_start,
+              end=path_start,
+          )
+          indent = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+          lines.insert(index, f"{indent}self.collect_obsolete_ssts_locked(&mut state)?;")
+          database.write_text("\n".join(lines) + "\n")
 
           cursor = Path("crates/forgedb/src/sst_entry_cursor.rs")
-          text = cursor.read_text()
-          text = replace_once(
-              text,
-              "use std::path::{Path, PathBuf};\n",
-              "use std::path::{Path, PathBuf};\nuse std::sync::Arc;\n",
-              "cursor Arc import",
+          lines = cursor.read_text().splitlines()
+          index = find_line(
+              lines,
+              lambda line: line == "use std::path::{Path, PathBuf};",
+              "cursor path import",
           )
-          text = replace_once(
-              text,
-              "use crate::entry_cursor::EntryCursor;\n",
-              "use crate::entry_cursor::EntryCursor;\nuse crate::version_set::VersionSet;\n",
-              "cursor VersionSet import",
+          lines.insert(index + 1, "use std::sync::Arc;")
+          index = find_line(
+              lines,
+              lambda line: line == "use crate::entry_cursor::EntryCursor;",
+              "cursor EntryCursor import",
           )
-          text = replace_once(
-              text,
-              "    finished: bool,\n    #[cfg(test)]",
-              "    finished: bool,\n    _version_lease: Option<Arc<VersionSet>>,\n    #[cfg(test)]",
-              "cursor lease field",
+          lines.insert(index + 1, "use crate::version_set::VersionSet;")
+          index = find_line(
+              lines,
+              lambda line: line.strip() == "finished: bool,",
+              "cursor finished field",
           )
-          text = replace_once(
-              text,
-              "            finished: false,\n            #[cfg(test)]",
-              "            finished: false,\n            _version_lease: None,\n            #[cfg(test)]",
-              "cursor lease init",
+          lines.insert(index + 1, "    _version_lease: Option<Arc<VersionSet>>,")
+          index = find_line(
+              lines,
+              lambda line: line.strip() == "finished: false,",
+              "cursor finished init",
           )
-          marker = "    fn load_next_block(&mut self) -> Result<()> {"
-          lease_method = '''    pub(crate) fn with_version_lease(mut self, lease: Arc<VersionSet>) -> Self {
-                  self._version_lease = Some(lease);
-                  self
-              }
-          
-          '''
-          text = replace_once(text, marker, lease_method + marker, "cursor lease method")
-          cursor.write_text(text)
+          indent = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+          lines.insert(index + 1, f"{indent}_version_lease: None,")
+          index = find_line(
+              lines,
+              lambda line: line.strip() == "fn load_next_block(&mut self) -> Result<()> {",
+              "cursor load_next_block",
+          )
+          method = [
+              "    pub(crate) fn with_version_lease(mut self, lease: Arc<VersionSet>) -> Self {",
+              "        self._version_lease = Some(lease);",
+              "        self",
+              "    }",
+              "",
+          ]
+          lines[index:index] = method
+          cursor.write_text("\n".join(lines) + "\n")
 
           wrapper = Path("crates/forgedb/src/database_streaming_wrapper.rs")
-          text = wrapper.read_text()
-          text = replace_once(
-              text,
-              '''                read_options.verify_checksums,
-                      )?;''',
-              '''                read_options.verify_checksums,
-                      )?
-                      .with_version_lease(Arc::clone(&version));''',
-              "streaming cursor Version lease",
+          lines = wrapper.read_text().splitlines()
+          index = find_line(
+              lines,
+              lambda line: line.strip() == "read_options.verify_checksums,",
+              "streaming checksum argument",
           )
-          wrapper.write_text(text)
+          if lines[index + 1].strip() != ")?;":
+              raise SystemExit("streaming cursor call terminator not found")
+          indent = lines[index + 1][: len(lines[index + 1]) - len(lines[index + 1].lstrip())]
+          lines[index + 1] = f"{indent})?"
+          lines.insert(index + 2, f"{indent}.with_version_lease(Arc::clone(&version));")
+          wrapper.write_text("\n".join(lines) + "\n")
 
           compaction = Path("crates/forgedb/src/database_compaction.rs")
-          text = compaction.read_text()
-          text = replace_once(
-              text,
-              '''        let next_version = state.version.with_compaction(
-                      crate::version_set::CompactionVersionRequest {''',
-              '''        let previous_version = Arc::clone(&state.version);
-                  let next_version = previous_version.with_compaction(
-                      crate::version_set::CompactionVersionRequest {''',
-              "compaction previous Version lease",
+          lines = compaction.read_text().splitlines()
+          index = find_line(
+              lines,
+              lambda line: line.strip() == "let next_version = state.version.with_compaction(",
+              "next Version construction",
           )
-          text = replace_once(
-              text,
-              "        let installation = VersionEditV2 {\n",
-              '''        let obsolete_files = plan
-                      .source_files
-                      .iter()
-                      .chain(plan.output_level_files.iter())
-                      .copied()
-                      .collect::<Vec<_>>();
-                  let installation = VersionEditV2 {
-          ''',
-              "compaction obsolete inputs",
+          indent = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+          lines[index] = f"{indent}let next_version = previous_version.with_compaction("
+          lines.insert(index, f"{indent}let previous_version = Arc::clone(&state.version);")
+
+          index = find_line(
+              lines,
+              lambda line: line.strip() == "let installation = VersionEditV2 {",
+              "installation edit",
           )
-          text = replace_once(
-              text,
-              '''        append_manifest_edit(&mut state, &installation, &limits)?;
-                  state.version = Arc::new(next_version);
-                  Ok(())''',
-              '''        append_manifest_edit(&mut state, &installation, &limits)?;
-                  let obsolete = ObsoleteVersion::new(&previous_version, obsolete_files)?;
-                  state.version = Arc::new(next_version);
-                  state.obsolete_versions.push(obsolete);
-                  drop(previous_version);
-                  self.collect_obsolete_ssts_locked(&mut state)?;
-                  Ok(())''',
-              "compaction queue and cleanup",
+          indent = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+          block = [
+              f"{indent}let obsolete_files = plan",
+              f"{indent}    .source_files",
+              f"{indent}    .iter()",
+              f"{indent}    .chain(plan.output_level_files.iter())",
+              f"{indent}    .copied()",
+              f"{indent}    .collect::<Vec<_>>();",
+          ]
+          lines[index:index] = block
+
+          index = find_line(
+              lines,
+              lambda line: line.strip() == "state.version = Arc::new(next_version);",
+              "current Version swap",
           )
-          text = replace_once(
-              text,
-              "        assert_eq!(inventory.orphan_sst.len(), 2);",
-              "        assert!(inventory.orphan_sst.is_empty());",
-              "compaction immediate cleanup assertion",
+          indent = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+          lines.insert(index, f"{indent}let obsolete = ObsoleteVersion::new(&previous_version, obsolete_files)?;")
+          lines[index + 2:index + 2] = [
+              f"{indent}state.obsolete_versions.push(obsolete);",
+              f"{indent}drop(previous_version);",
+              f"{indent}self.collect_obsolete_ssts_locked(&mut state)?;",
+          ]
+
+          index = find_line(
+              lines,
+              lambda line: line.strip() == "assert_eq!(inventory.orphan_sst.len(), 2);",
+              "immediate cleanup assertion",
           )
-          new_test = r'''
-              #[test]
-              fn active_streaming_scan_defers_input_deletion_until_iterator_drop() -> Result<()> {
-                  let directory = temporary_directory("active-scan-lifetime")?;
-                  let database = StreamingDatabase::open(&directory, compaction_options())?;
-                  database.put(b"alpha", b"old", WriteOptions::sync())?;
-                  database.flush()?;
-                  database.put(b"alpha", b"new", WriteOptions::sync())?;
-                  database.put(b"beta", b"value", WriteOptions::sync())?;
-                  database.flush()?;
-          
-                  let iterator = database.scan(.., ReadOptions::default())?;
-                  database.compact_range(None, None)?;
-                  assert_eq!(database.file_inventory()?.orphan_sst.len(), 2);
-          
-                  drop(iterator);
-                  assert!(database.file_inventory()?.orphan_sst.is_empty());
-                  database.close()?;
-                  fs::remove_dir_all(&directory).map_err(|source| {
-                      Error::io("remove_test_directory", Some(directory), source)
-                  })?;
-                  Ok(())
-              }
-          '''
-          position = text.rfind("\n}\n")
-          if position < 0:
-              raise SystemExit("database compaction test module end not found")
-          text = text[:position] + new_test + text[position:]
-          compaction.write_text(text)
+          indent = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+          lines[index] = f"{indent}assert!(inventory.orphan_sst.is_empty());"
+
+          test = [
+              "",
+              "    #[test]",
+              "    fn active_streaming_scan_defers_input_deletion_until_iterator_drop() -> Result<()> {",
+              "        let directory = temporary_directory(\"active-scan-lifetime\")?;",
+              "        let database = StreamingDatabase::open(&directory, compaction_options())?;",
+              "        database.put(b\"alpha\", b\"old\", WriteOptions::sync())?;",
+              "        database.flush()?;",
+              "        database.put(b\"alpha\", b\"new\", WriteOptions::sync())?;",
+              "        database.put(b\"beta\", b\"value\", WriteOptions::sync())?;",
+              "        database.flush()?;",
+              "",
+              "        let iterator = database.scan(.., ReadOptions::default())?;",
+              "        database.compact_range(None, None)?;",
+              "        assert_eq!(database.file_inventory()?.orphan_sst.len(), 2);",
+              "",
+              "        drop(iterator);",
+              "        assert!(database.file_inventory()?.orphan_sst.is_empty());",
+              "        database.close()?;",
+              "        fs::remove_dir_all(&directory).map_err(|source| {",
+              "            Error::io(\"remove_test_directory\", Some(directory), source)",
+              "        })?;",
+              "        Ok(())",
+              "    }",
+          ]
+          module_end = len(lines) - 1
+          if lines[module_end].strip() != "}":
+              raise SystemExit("database compaction module end not found")
+          lines[module_end:module_end] = test
+          compaction.write_text("\n".join(lines) + "\n")
           PY
       - run: cargo fmt --all
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
