@@ -11,7 +11,7 @@ use forgedb_fs::{
     read_identity,
 };
 use forgedb_manifest::{
-    CURRENT_FILE_NAME, ManifestState, ManifestWriter, VersionEdit, create_manifest, open_manifest,
+    CURRENT_FILE_NAME, LevelFile, ManifestStateV2, ManifestV2Writer, VersionEditV2,
 };
 use forgedb_sstable::{
     TableBuildOptions, TableBuildRequest, TableReader, build_table, sst_file_name,
@@ -21,6 +21,7 @@ use forgedb_wal::{
 };
 
 use crate::inventory::FileInventory;
+use crate::manifest_runtime::{RuntimeManifestRequest, open_runtime_manifest};
 use crate::iterator::{DbIterator, OwnedRange};
 use crate::mvcc_memtable::{MemLookup, MvccMemTable};
 use crate::snapshot::SnapshotRegistry;
@@ -45,8 +46,8 @@ struct DatabaseState {
     pending_flush: Option<PendingFlush>,
     flush_in_progress: bool,
     wal: Option<WalWriter<File>>,
-    manifest_writer: Option<ManifestWriter<File>>,
-    manifest: ManifestState,
+    manifest_writer: Option<ManifestV2Writer<File>>,
+    manifest: ManifestStateV2,
     version: Arc<VersionSet>,
     next_sequence: SequenceNumber,
     last_sequence: Option<SequenceNumber>,
@@ -119,21 +120,17 @@ impl Database {
         let limits = options.limits()?;
 
         let current_exists = directory.join(CURRENT_FILE_NAME).exists();
-        let (manifest_writer, manifest, _) = if current_exists {
-            let opened =
-                open_manifest(&filesystem, &directory, identity, &limits, options.read_only)?;
-            (opened.writer, opened.state, opened.replay)
-        } else if options.read_only {
-            return Err(Error::UnsupportedFormat {
-                component: "CURRENT/MANIFEST",
-                found: 0,
-                minimum_supported: 1,
-                maximum_supported: 1,
-            });
-        } else {
-            let (writer, state) = create_manifest(&filesystem, &directory, identity, 1, &limits)?;
-            (Some(writer), state, Default::default())
-        };
+        let runtime_manifest = open_runtime_manifest(RuntimeManifestRequest {
+            filesystem: &filesystem,
+            directory: &directory,
+            database_id: identity,
+            limits: &limits,
+            read_only: options.read_only,
+            current_exists,
+            level_count: options.level_count,
+        })?;
+        let manifest_writer = runtime_manifest.writer;
+        let manifest = runtime_manifest.state;
 
         require_manifest_wal(
             &filesystem,
@@ -200,12 +197,11 @@ impl Database {
         };
         recovered_last = maximum_sequence(recovered_last, current_summary.last_sequence);
 
-        let version = Arc::new(VersionSet::open(
+        let version = Arc::new(VersionSet::open_v2(
             &directory,
             identity,
             &manifest,
             &limits,
-            options.level_count,
             options.max_compaction_bytes,
         )?);
         let inventory = inventory_for(version.as_ref(), &manifest)?;
@@ -555,12 +551,12 @@ impl Database {
                 self.identity,
                 new_log_number,
             )?;
-            let rotation = VersionEdit {
+            let rotation = VersionEditV2 {
                 log_number: Some(new_log_number),
                 previous_log_number: Some(Some(old_log_number)),
                 next_file_number: Some(next_file_number),
                 last_sequence: Some(state.last_sequence),
-                ..VersionEdit::default()
+                ..VersionEditV2::default()
             };
             append_manifest_edit(&mut state, &rotation, limits)?;
             let frozen = std::mem::take(&mut state.mutable);
@@ -602,10 +598,10 @@ impl Database {
         let result = (|| -> Result<()> {
             let mut state = self.lock_state()?;
             validate_pending(&state, old_log_number, table_file_number)?;
-            let edit = VersionEdit {
+            let edit = VersionEditV2 {
                 previous_log_number: Some(None),
                 last_sequence: Some(state.last_sequence),
-                ..VersionEdit::default()
+                ..VersionEditV2::default()
             };
             append_manifest_edit(&mut state, &edit, limits)?;
             state.pending_flush = None;
@@ -678,11 +674,11 @@ impl Database {
             let next_version = state
                 .version
                 .with_l0(metadata.clone(), reader, limits)?;
-            let installation = VersionEdit {
+            let installation = VersionEditV2 {
                 previous_log_number: Some(None),
                 last_sequence: Some(state.last_sequence),
-                added_files: vec![metadata],
-                ..VersionEdit::default()
+                added_files: vec![LevelFile { level: 0, metadata }],
+                ..VersionEditV2::default()
             };
             append_manifest_edit(&mut state, &installation, limits)?;
             state.version = Arc::new(next_version);
@@ -753,7 +749,7 @@ fn recover_previous_wal(
     filesystem: &NativeFileSystem,
     directory: &Path,
     identity: DatabaseId,
-    manifest: &ManifestState,
+    manifest: &ManifestStateV2,
     limits: &Limits,
     memory_limit: usize,
     recovered_last: &mut Option<SequenceNumber>,
@@ -798,7 +794,7 @@ fn recover_previous_wal(
 
 fn append_manifest_edit(
     state: &mut DatabaseState,
-    edit: &VersionEdit,
+    edit: &VersionEditV2,
     limits: &Limits,
 ) -> Result<()> {
     let result = {
@@ -918,13 +914,13 @@ fn maximum_sequence(
     }
 }
 
-fn inventory_for(version: &VersionSet, manifest: &ManifestState) -> Result<FileInventory> {
+fn inventory_for(version: &VersionSet, manifest: &ManifestStateV2) -> Result<FileInventory> {
     let numbers = version
         .files_in_read_order()?
         .into_iter()
         .map(|table| table.metadata().file_number)
         .collect::<Vec<_>>();
-    FileInventory::build(version.directory(), manifest, numbers)
+    FileInventory::build_v2(version.directory(), manifest, numbers)
 }
 
 #[cfg(test)]

@@ -12,7 +12,6 @@ use forgedb_manifest::{
 pub(crate) struct RuntimeManifest {
     pub(crate) writer: Option<ManifestV2Writer<File>>,
     pub(crate) state: ManifestStateV2,
-    pub(crate) migrated_from_v1: bool,
 }
 
 pub(crate) struct RuntimeManifestRequest<'a> {
@@ -47,45 +46,24 @@ pub(crate) fn open_runtime_manifest(
                 maximum_supported: 2,
             });
         }
-        let (writer_v1, state_v1) =
-            create_manifest(filesystem, directory, database_id, 1, limits)?;
+        let (writer_v1, state_v1) = create_manifest(filesystem, directory, database_id, 1, limits)?;
         drop(writer_v1);
-        return migrate_runtime_manifest(
-            filesystem,
-            directory,
-            state_v1,
-            level_count,
-            limits,
-        );
+        return migrate_runtime_manifest(filesystem, directory, state_v1, level_count, limits);
     }
 
-    match open_manifest_any(
-        filesystem,
-        directory,
-        database_id,
-        limits,
-        read_only,
-    )? {
+    match open_manifest_any(filesystem, directory, database_id, limits, read_only)? {
         OpenManifestAny::V2(opened) => Ok(RuntimeManifest {
             writer: opened.writer,
             state: opened.state,
-            migrated_from_v1: false,
         }),
         OpenManifestAny::V1(opened) if read_only => Ok(RuntimeManifest {
             writer: None,
             state: bridge_manifest_v1_to_v2(&opened.state, level_count, limits)?,
-            migrated_from_v1: false,
         }),
         OpenManifestAny::V1(opened) => {
             let state_v1 = opened.state;
             drop(opened.writer);
-            migrate_runtime_manifest(
-                filesystem,
-                directory,
-                state_v1,
-                level_count,
-                limits,
-            )
+            migrate_runtime_manifest(filesystem, directory, state_v1, level_count, limits)
         }
     }
 }
@@ -97,11 +75,8 @@ fn migrate_runtime_manifest(
     level_count: usize,
     limits: &Limits,
 ) -> Result<RuntimeManifest> {
-    let manifest_number = next_available_manifest_number(
-        filesystem,
-        directory,
-        state_v1.next_file_number,
-    )?;
+    let manifest_number =
+        next_available_manifest_number(filesystem, directory, state_v1.next_file_number)?;
     let (writer, state) = migrate_manifest_v1_to_v2(
         filesystem,
         directory,
@@ -113,7 +88,6 @@ fn migrate_runtime_manifest(
     Ok(RuntimeManifest {
         writer: Some(writer),
         state,
-        migrated_from_v1: true,
     })
 }
 
@@ -148,12 +122,10 @@ mod tests {
         let filesystem = NativeFileSystem;
         let limits = Limits::default();
         let database_id = DatabaseId::random();
-        let (writer, state_v1) =
-            create_manifest(&filesystem, &directory, database_id, 1, &limits)?;
+        let (writer, state_v1) = create_manifest(&filesystem, &directory, database_id, 1, &limits)?;
         drop(writer);
-        let current_before = fs::read(directory.join("CURRENT")).map_err(|source| {
-            Error::io("read_current_before", Some(directory.clone()), source)
-        })?;
+        let current_before = fs::read(directory.join("CURRENT"))
+            .map_err(|source| Error::io("read_current_before", Some(directory.clone()), source))?;
 
         let runtime = open_runtime_manifest(RuntimeManifestRequest {
             filesystem: &filesystem,
@@ -165,7 +137,6 @@ mod tests {
             level_count: 4,
         })?;
         assert!(runtime.writer.is_none());
-        assert!(!runtime.migrated_from_v1);
         assert_eq!(runtime.state.manifest_number, state_v1.manifest_number);
         assert_eq!(
             fs::read(directory.join("CURRENT")).map_err(|source| Error::io(
@@ -199,7 +170,6 @@ mod tests {
             current_exists: true,
             level_count: 4,
         })?;
-        assert!(migrated.migrated_from_v1);
         assert!(migrated.writer.is_some());
         let migrated_number = migrated.state.manifest_number;
         drop(migrated);
@@ -213,15 +183,8 @@ mod tests {
             current_exists: true,
             level_count: 4,
         })?;
-        assert!(!direct.migrated_from_v1);
         assert_eq!(direct.state.manifest_number, migrated_number);
-        let opened = open_manifest_any(
-            &filesystem,
-            &directory,
-            database_id,
-            &limits,
-            true,
-        )?;
+        let opened = open_manifest_any(&filesystem, &directory, database_id, &limits, true)?;
         assert_eq!(opened.format_version(), MANIFEST_V2_FORMAT_VERSION);
         drop(opened);
         drop(direct);
@@ -246,17 +209,27 @@ mod tests {
             level_count: 4,
         })?;
         assert!(runtime.writer.is_some());
-        assert!(runtime.migrated_from_v1);
         assert!(directory.join(forgedb_wal::wal_file_name(1)).exists());
-        assert_eq!(filesystem.file_size(runtime.writer.as_ref().ok_or(
-            Error::InternalInvariant {
-                invariant: "I-RUNTIME-MANIFEST-TEST-WRITER",
-                reason: "new runtime manifest не содержит writer".to_owned(),
-            }
-        )?.path())?, runtime.writer.as_ref().ok_or(Error::InternalInvariant {
-            invariant: "I-RUNTIME-MANIFEST-TEST-WRITER",
-            reason: "new runtime manifest не содержит writer".to_owned(),
-        })?.bytes_written());
+        assert_eq!(
+            filesystem.file_size(
+                runtime
+                    .writer
+                    .as_ref()
+                    .ok_or(Error::InternalInvariant {
+                        invariant: "I-RUNTIME-MANIFEST-TEST-WRITER",
+                        reason: "new runtime manifest не содержит writer".to_owned(),
+                    })?
+                    .path()
+            )?,
+            runtime
+                .writer
+                .as_ref()
+                .ok_or(Error::InternalInvariant {
+                    invariant: "I-RUNTIME-MANIFEST-TEST-WRITER",
+                    reason: "new runtime manifest не содержит writer".to_owned(),
+                })?
+                .bytes_written()
+        );
         drop(runtime);
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;

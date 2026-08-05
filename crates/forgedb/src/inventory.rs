@@ -4,8 +4,7 @@ use std::path::Path;
 use forgedb_core::Result;
 use forgedb_fs::{FileSystem, IDENTITY_FILE_NAME, NativeFileSystem};
 use forgedb_manifest::{
-    CURRENT_FILE_NAME, ManifestState, ManifestStateV2, manifest_file_name,
-    parse_manifest_file_name,
+    CURRENT_FILE_NAME, ManifestStateV2, manifest_file_name, parse_manifest_file_name,
 };
 use forgedb_sstable::parse_sst_file_name;
 use forgedb_wal::{parse_wal_file_name, wal_file_name};
@@ -31,20 +30,6 @@ pub struct FileInventory {
 }
 
 impl FileInventory {
-    pub(crate) fn build(
-        directory: &Path,
-        manifest: &ManifestState,
-        live_sst_numbers: impl IntoIterator<Item = u64>,
-    ) -> Result<Self> {
-        Self::build_parts(
-            directory,
-            manifest.manifest_number,
-            manifest.log_number,
-            manifest.previous_log_number,
-            live_sst_numbers,
-        )
-    }
-
     pub(crate) fn build_v2(
         directory: &Path,
         manifest: &ManifestStateV2,

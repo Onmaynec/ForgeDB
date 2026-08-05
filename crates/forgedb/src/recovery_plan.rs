@@ -2,11 +2,12 @@ use std::path::{Path, PathBuf};
 
 use forgedb_core::{Error, Result};
 use forgedb_fs::{FileSystem, NativeFileSystem, read_identity};
-use forgedb_manifest::{manifest_file_name, open_manifest};
+use forgedb_manifest::{CURRENT_FILE_NAME, manifest_file_name};
 use forgedb_wal::wal_file_name;
 
 use crate::Options;
 use crate::inventory::FileInventory;
+use crate::manifest_runtime::{RuntimeManifestRequest, open_runtime_manifest};
 use crate::version_set::VersionSet;
 
 const LOCK_FILE_NAME: &str = "LOCK";
@@ -46,14 +47,21 @@ impl RecoveryPlan {
         let identity = read_identity(&filesystem, &database_path)?;
         let options = Options::default();
         let limits = options.limits()?;
-        let opened = open_manifest(&filesystem, &database_path, identity, &limits, true)?;
-        let manifest = opened.state;
-        let version = VersionSet::open(
+        let runtime = open_runtime_manifest(RuntimeManifestRequest {
+            filesystem: &filesystem,
+            directory: &database_path,
+            database_id: identity,
+            limits: &limits,
+            read_only: true,
+            current_exists: database_path.join(CURRENT_FILE_NAME).exists(),
+            level_count: options.level_count,
+        })?;
+        let manifest = runtime.state;
+        let version = VersionSet::open_v2(
             &database_path,
             identity,
             &manifest,
             &limits,
-            options.level_count,
             options.max_compaction_bytes,
         )?;
         let live_numbers = version
@@ -61,7 +69,7 @@ impl RecoveryPlan {
             .into_iter()
             .map(|table| table.metadata().file_number)
             .collect::<Vec<_>>();
-        let inventory = FileInventory::build(&database_path, &manifest, live_numbers)?;
+        let inventory = FileInventory::build_v2(&database_path, &manifest, live_numbers)?;
 
         let mut replay_wals = Vec::with_capacity(2);
         if let Some(previous) = manifest.previous_log_number {

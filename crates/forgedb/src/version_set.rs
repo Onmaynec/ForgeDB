@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use forgedb_core::{DatabaseId, Error, Limits, Result, SequenceNumber};
 use forgedb_fs::NativeFileSystem;
-use forgedb_manifest::{ManifestState, ManifestStateV2};
+use forgedb_manifest::ManifestStateV2;
 use forgedb_sstable::{TableMeta, TableReader};
 
 use crate::table_scan::{self, TableLookupRequest, TableSnapshotLookup};
@@ -37,38 +37,6 @@ pub(crate) struct VersionSet {
 }
 
 impl VersionSet {
-    pub(crate) fn open(
-        directory: &Path,
-        identity: DatabaseId,
-        manifest: &ManifestState,
-        limits: &Limits,
-        level_count: usize,
-        max_file_size: u64,
-    ) -> Result<Self> {
-        if level_count < 2 {
-            return Err(Error::invalid_argument(
-                "level_count",
-                "VersionSet требует минимум L0 и L1",
-            ));
-        }
-        let mut bridge = ManifestStateV2::initial(
-            identity,
-            manifest.manifest_number,
-            manifest.log_number,
-            level_count,
-        )?;
-        bridge.comparator = manifest.comparator.clone();
-        bridge.previous_log_number = manifest.previous_log_number;
-        bridge.next_file_number = manifest.next_file_number;
-        bridge.last_sequence = manifest.last_sequence;
-        let level_zero = bridge.levels.first_mut().ok_or(Error::InternalInvariant {
-            invariant: "I-VERSIONSET-BRIDGE-L0",
-            reason: "level-aware bridge не содержит L0".to_owned(),
-        })?;
-        *level_zero = manifest.l0_files.clone();
-        Self::open_v2(directory, identity, &bridge, limits, max_file_size)
-    }
-
     pub(crate) fn open_v2(
         directory: &Path,
         identity: DatabaseId,
