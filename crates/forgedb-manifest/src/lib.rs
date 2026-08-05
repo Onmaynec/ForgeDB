@@ -43,6 +43,6 @@ pub use log::{ManifestWriter, OpenManifest, ReplaySummary, open_manifest, replay
 pub use state::{ManifestState, VersionEdit};
 pub use v2::{
     CompactionPointer, DeletedLevelFile, LevelFile, MANIFEST_V2_FORMAT_VERSION,
-    MANIFEST_V2_MAX_LEVELS, MANIFEST_V2_MINIMUM_READER_VERSION, ManifestStateV2,
-    ManifestV2Codec, ManifestV2Header, VersionEditV2,
+    MANIFEST_V2_MAX_LEVELS, MANIFEST_V2_MINIMUM_READER_VERSION, ManifestStateV2, ManifestV2Codec,
+    ManifestV2Header, VersionEditV2,
 };

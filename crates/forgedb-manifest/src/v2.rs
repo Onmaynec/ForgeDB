@@ -1,8 +1,6 @@
 use std::collections::BTreeSet;
 
-use forgedb_core::{
-    DatabaseId, Error, InternalKeyComparator, Limits, Result, SequenceNumber,
-};
+use forgedb_core::{DatabaseId, Error, InternalKeyComparator, Limits, Result, SequenceNumber};
 use forgedb_sstable::TableMeta;
 
 use crate::checksum::crc32c;
@@ -408,13 +406,13 @@ impl ManifestStateV2 {
         for pointer in &edit.compaction_pointers {
             limits.validate_key(&pointer.user_key)?;
             let level = level_index(pointer.level, next.levels.len())?;
-            let target = next
-                .compaction_pointers
-                .get_mut(level)
-                .ok_or(Error::InternalInvariant {
-                    invariant: "I-MANIFEST-V2-COMPACTION-POINTER",
-                    reason: "validated pointer level отсутствует".to_owned(),
-                })?;
+            let target =
+                next.compaction_pointers
+                    .get_mut(level)
+                    .ok_or(Error::InternalInvariant {
+                        invariant: "I-MANIFEST-V2-COMPACTION-POINTER",
+                        reason: "validated pointer level отсутствует".to_owned(),
+                    })?;
             *target = Some(pointer.user_key.clone());
         }
 
@@ -578,10 +576,7 @@ impl ManifestV2Codec {
             ));
         }
         if frame.get(0..4) != Some(FRAME_MAGIC.as_slice()) {
-            return Err(Error::corruption(
-                "MANIFEST V2 frame",
-                "неверная сигнатура",
-            ));
+            return Err(Error::corruption("MANIFEST V2 frame", "неверная сигнатура"));
         }
         let version = read_u16(frame, 14, "MANIFEST V2 frame")?;
         if version != MANIFEST_V2_FORMAT_VERSION {
@@ -731,10 +726,7 @@ fn decode_payload(payload: &[u8], field_count: usize, limits: &Limits) -> Result
             .checked_add(8)
             .ok_or_else(|| Error::corruption("VersionEdit V2", "offset переполнен"))?;
         if field_header_end > payload.len() {
-            return Err(Error::corruption(
-                "VersionEdit V2",
-                "field header усечён",
-            ));
+            return Err(Error::corruption("VersionEdit V2", "field header усечён"));
         }
         let tag = payload[offset];
         if payload[offset + 1..offset + 4] != [0_u8; 3] {
@@ -743,11 +735,13 @@ fn decode_payload(payload: &[u8], field_count: usize, limits: &Limits) -> Result
                 "reserved field bytes не равны нулю",
             ));
         }
-        let length = usize::try_from(read_u32(payload, offset + 4, "VersionEdit V2")?)
-            .map_err(|_| Error::ResourceLimit {
-                resource: "manifest_v2_field_length",
-                limit: u64::try_from(limits.max_batch_size).unwrap_or(u64::MAX),
-                observed: u64::MAX,
+        let length =
+            usize::try_from(read_u32(payload, offset + 4, "VersionEdit V2")?).map_err(|_| {
+                Error::ResourceLimit {
+                    resource: "manifest_v2_field_length",
+                    limit: u64::try_from(limits.max_batch_size).unwrap_or(u64::MAX),
+                    observed: u64::MAX,
+                }
             })?;
         let value_end = field_header_end
             .checked_add(length)
@@ -804,13 +798,14 @@ fn decode_field(edit: &mut VersionEditV2, tag: u8, value: &[u8], limits: &Limits
                 ));
             }
             let sequence = exact_u64(value, "last_sequence")?;
-            edit.last_sequence = Some(if sequence == 0 {
-                None
-            } else {
-                Some(SequenceNumber::new(sequence).map_err(|_| {
-                    Error::corruption("VersionEdit V2", "last_sequence равен нулю")
-                })?)
-            });
+            edit.last_sequence =
+                Some(if sequence == 0 {
+                    None
+                } else {
+                    Some(SequenceNumber::new(sequence).map_err(|_| {
+                        Error::corruption("VersionEdit V2", "last_sequence равен нулю")
+                    })?)
+                });
         }
         TAG_ADD_FILE => edit.added_files.push(decode_level_file(value, limits)?),
         TAG_DELETE_FILE => edit.deleted_files.push(decode_deleted_file(value)?),
@@ -857,20 +852,18 @@ fn encode_level_file(file: &LevelFile, limits: &Limits) -> Result<Vec<u8>> {
             observed: u64::from(file.level),
         });
     }
-    let smallest = u32::try_from(file.metadata.smallest_user_key.len()).map_err(|_| {
-        Error::ResourceLimit {
+    let smallest =
+        u32::try_from(file.metadata.smallest_user_key.len()).map_err(|_| Error::ResourceLimit {
             resource: "manifest_v2_smallest_key_length",
             limit: u64::from(u32::MAX),
             observed: u64::try_from(file.metadata.smallest_user_key.len()).unwrap_or(u64::MAX),
-        }
-    })?;
-    let largest = u32::try_from(file.metadata.largest_user_key.len()).map_err(|_| {
-        Error::ResourceLimit {
+        })?;
+    let largest =
+        u32::try_from(file.metadata.largest_user_key.len()).map_err(|_| Error::ResourceLimit {
             resource: "manifest_v2_largest_key_length",
             limit: u64::from(u32::MAX),
             observed: u64::try_from(file.metadata.largest_user_key.len()).unwrap_or(u64::MAX),
-        }
-    })?;
+        })?;
     let capacity = TABLE_META_FIXED_SIZE
         .checked_add(file.metadata.smallest_user_key.len())
         .and_then(|value| value.checked_add(file.metadata.largest_user_key.len()))
@@ -908,20 +901,22 @@ fn decode_level_file(value: &[u8], limits: &Limits) -> Result<LevelFile> {
             observed: u64::from(level),
         });
     }
-    let smallest = usize::try_from(read_u32(value, 20, "VersionEdit V2 add file")?).map_err(
-        |_| Error::ResourceLimit {
-            resource: "manifest_v2_smallest_key_length",
-            limit: u64::try_from(limits.max_key_size).unwrap_or(u64::MAX),
-            observed: u64::MAX,
-        },
-    )?;
-    let largest = usize::try_from(read_u32(value, 24, "VersionEdit V2 add file")?).map_err(
-        |_| Error::ResourceLimit {
-            resource: "manifest_v2_largest_key_length",
-            limit: u64::try_from(limits.max_key_size).unwrap_or(u64::MAX),
-            observed: u64::MAX,
-        },
-    )?;
+    let smallest =
+        usize::try_from(read_u32(value, 20, "VersionEdit V2 add file")?).map_err(|_| {
+            Error::ResourceLimit {
+                resource: "manifest_v2_smallest_key_length",
+                limit: u64::try_from(limits.max_key_size).unwrap_or(u64::MAX),
+                observed: u64::MAX,
+            }
+        })?;
+    let largest =
+        usize::try_from(read_u32(value, 24, "VersionEdit V2 add file")?).map_err(|_| {
+            Error::ResourceLimit {
+                resource: "manifest_v2_largest_key_length",
+                limit: u64::try_from(limits.max_key_size).unwrap_or(u64::MAX),
+                observed: u64::MAX,
+            }
+        })?;
     if smallest > limits.max_key_size || largest > limits.max_key_size {
         return Err(Error::ResourceLimit {
             resource: "manifest_v2_key_length",
@@ -946,22 +941,14 @@ fn decode_level_file(value: &[u8], limits: &Limits) -> Result<LevelFile> {
         file_size: read_u64(value, 12, "VersionEdit V2 add file")?,
         smallest_user_key: value[TABLE_META_FIXED_SIZE..smallest_end].to_vec(),
         largest_user_key: value[smallest_end..end].to_vec(),
-        smallest_sequence: SequenceNumber::new(read_u64(
-            value,
-            28,
-            "VersionEdit V2 add file",
-        )?)
-        .map_err(|_| {
-            Error::corruption("VersionEdit V2 add file", "smallest_sequence равен нулю")
-        })?,
-        largest_sequence: SequenceNumber::new(read_u64(
-            value,
-            36,
-            "VersionEdit V2 add file",
-        )?)
-        .map_err(|_| {
-            Error::corruption("VersionEdit V2 add file", "largest_sequence равен нулю")
-        })?,
+        smallest_sequence: SequenceNumber::new(read_u64(value, 28, "VersionEdit V2 add file")?)
+            .map_err(|_| {
+                Error::corruption("VersionEdit V2 add file", "smallest_sequence равен нулю")
+            })?,
+        largest_sequence: SequenceNumber::new(read_u64(value, 36, "VersionEdit V2 add file")?)
+            .map_err(|_| {
+                Error::corruption("VersionEdit V2 add file", "largest_sequence равен нулю")
+            })?,
         entry_count: read_u64(value, 44, "VersionEdit V2 add file")?,
     };
     metadata.validate(limits)?;
@@ -1045,16 +1032,12 @@ fn decode_compaction_pointer(value: &[u8], limits: &Limits) -> Result<Compaction
         ));
     }
     let level = read_u32(value, 0, "VersionEdit V2 compaction pointer")?;
-    let key_length = usize::try_from(read_u32(
-        value,
-        4,
-        "VersionEdit V2 compaction pointer",
-    )?)
-    .map_err(|_| Error::ResourceLimit {
-        resource: "manifest_v2_compaction_pointer_length",
-        limit: u64::try_from(limits.max_key_size).unwrap_or(u64::MAX),
-        observed: u64::MAX,
-    })?;
+    let key_length = usize::try_from(read_u32(value, 4, "VersionEdit V2 compaction pointer")?)
+        .map_err(|_| Error::ResourceLimit {
+            resource: "manifest_v2_compaction_pointer_length",
+            limit: u64::try_from(limits.max_key_size).unwrap_or(u64::MAX),
+            observed: u64::MAX,
+        })?;
     if key_length == 0 || key_length > limits.max_key_size {
         return Err(Error::ResourceLimit {
             resource: "manifest_v2_compaction_pointer_length",
@@ -1300,8 +1283,7 @@ mod tests {
             Err(Error::UnsupportedFormat { .. })
         ));
 
-        let mut encoded_frame =
-            ManifestV2Codec::encode_edit_frame(&edit(), &Limits::default())?;
+        let mut encoded_frame = ManifestV2Codec::encode_edit_frame(&edit(), &Limits::default())?;
         encoded_frame[14..16].copy_from_slice(&3_u16.to_le_bytes());
         assert!(matches!(
             ManifestV2Codec::decode_edit_frame(&encoded_frame, &Limits::default()),
@@ -1414,13 +1396,10 @@ mod tests {
         let mut invalid = edit();
         invalid.added_files[0].level = u32::MAX;
         assert!(ManifestV2Codec::encode_edit_frame(&invalid, &Limits::default()).is_err());
-        assert!(ManifestStateV2::initial(
-            DatabaseId::random(),
-            1,
-            1,
-            MANIFEST_V2_MAX_LEVELS + 1
-        )
-        .is_err());
+        assert!(
+            ManifestStateV2::initial(DatabaseId::random(), 1, 1, MANIFEST_V2_MAX_LEVELS + 1)
+                .is_err()
+        );
         Ok(())
     }
 }

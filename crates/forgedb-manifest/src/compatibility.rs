@@ -13,19 +13,12 @@ const V1_FIXTURE: &str = include_str!("../fixtures/manifest-v1-minimal.hex");
 fn fixed_v1_fixture_replays_after_v2_contract_is_added() -> Result<()> {
     let directory = temporary_directory("v1-fixture")?;
     let path = directory.join("MANIFEST-000001");
-    fs::write(&path, decode_hex(V1_FIXTURE)?).map_err(|source| {
-        Error::io("write_manifest_fixture", Some(path.clone()), source)
-    })?;
-    let database_id = DatabaseId::from_bytes([
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-    ]);
-    let (state, summary) = replay_manifest(
-        &NativeFileSystem,
-        &path,
-        database_id,
-        1,
-        &Limits::default(),
-    )?;
+    fs::write(&path, decode_hex(V1_FIXTURE)?)
+        .map_err(|source| Error::io("write_manifest_fixture", Some(path.clone()), source))?;
+    let database_id =
+        DatabaseId::from_bytes([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+    let (state, summary) =
+        replay_manifest(&NativeFileSystem, &path, database_id, 1, &Limits::default())?;
     assert_eq!(state.database_id, database_id);
     assert_eq!(state.manifest_number, 1);
     assert_eq!(state.log_number, 1);
@@ -50,9 +43,8 @@ fn decode_hex(input: &str) -> Result<Vec<u8>> {
         .as_bytes()
         .chunks_exact(2)
         .map(|pair| {
-            let text = std::str::from_utf8(pair).map_err(|_| {
-                Error::corruption("MANIFEST V1 fixture", "hex fixture не ASCII")
-            })?;
+            let text = std::str::from_utf8(pair)
+                .map_err(|_| Error::corruption("MANIFEST V1 fixture", "hex fixture не ASCII"))?;
             u8::from_str_radix(text, 16).map_err(|_| {
                 Error::corruption("MANIFEST V1 fixture", "hex fixture содержит не-hex byte")
             })
