@@ -1,8 +1,10 @@
-//! Публичный API ForgeDB v0.1.0.
+//! Публичный API ForgeDB v0.2.0.
 //!
-//! Версия предоставляет durable WAL V1, mutable memtable, point get/put/delete,
-//! атомарный WriteBatch и восстановление после повторного открытия.
+//! Версия предоставляет durable WAL V1, mutable/immutable memtable, SSTable V1,
+//! MANIFEST V1, crash-safe flush, point get/put/delete, атомарный WriteBatch
+//! и восстановление после повторного открытия.
 
+#[path = "database_v2_fixed.rs"]
 mod database;
 mod memtable;
 mod options;
