@@ -21,7 +21,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Add V2 constructor and real SST level test
+      - name: Add shared V1/V2 physical open path
         shell: bash
         run: |
           python - <<'PY'
@@ -34,12 +34,48 @@ jobs:
               "use forgedb_manifest::{ManifestState, ManifestStateV2};",
           )
 
-          if "pub(crate) fn open_v2(" not in text:
-              marker = "    pub(crate) fn with_l0("
-              index = text.find(marker)
-              if index < 0:
-                  raise SystemExit("VersionSet with_l0 marker not found")
-              method = '''    pub(crate) fn open_v2(
+          open_start = text.find("    pub(crate) fn open(\n")
+          if open_start < 0:
+              raise SystemExit("VersionSet open marker not found")
+          next_method = text.find("    pub(crate) fn with_l0(", open_start)
+          existing_v2 = text.find("    pub(crate) fn open_v2(", open_start)
+          replacement_end = existing_v2 if existing_v2 >= 0 else next_method
+          if replacement_end < 0:
+              raise SystemExit("VersionSet next method marker not found")
+
+          shared = '''    pub(crate) fn open(
+              directory: &Path,
+              identity: DatabaseId,
+              manifest: &ManifestState,
+              limits: &Limits,
+              level_count: usize,
+              max_file_size: u64,
+          ) -> Result<Self> {
+              if level_count < 2 {
+                  return Err(Error::invalid_argument(
+                      "level_count",
+                      "VersionSet требует минимум L0 и L1",
+                  ));
+              }
+              let mut bridge = ManifestStateV2::initial(
+                  identity,
+                  manifest.manifest_number,
+                  manifest.log_number,
+                  level_count,
+              )?;
+              bridge.comparator = manifest.comparator.clone();
+              bridge.previous_log_number = manifest.previous_log_number;
+              bridge.next_file_number = manifest.next_file_number;
+              bridge.last_sequence = manifest.last_sequence;
+              let level_zero = bridge.levels.first_mut().ok_or(Error::InternalInvariant {
+                  invariant: "I-VERSIONSET-BRIDGE-L0",
+                  reason: "level-aware bridge не содержит L0".to_owned(),
+              })?;
+              *level_zero = manifest.l0_files.clone();
+              Self::open_v2(directory, identity, &bridge, limits, max_file_size)
+          }
+
+              pub(crate) fn open_v2(
                   directory: &Path,
                   identity: DatabaseId,
                   manifest: &ManifestStateV2,
@@ -78,7 +114,13 @@ jobs:
               }
 
           '''
-              text = text[:index] + method + text[index:]
+          if existing_v2 >= 0:
+              after_v2 = text.find("    pub(crate) fn with_l0(", existing_v2)
+              if after_v2 < 0:
+                  raise SystemExit("with_l0 after open_v2 not found")
+              text = text[:open_start] + shared + text[after_v2:]
+          else:
+              text = text[:open_start] + shared + text[next_method:]
 
           if "pub(crate) fn metadata_levels(&self)" not in text:
               marker = "    #[must_use]\n    pub(crate) fn file_count(&self)"
@@ -100,6 +142,15 @@ jobs:
 
           '''
               text = text[:index] + method + text[index:]
+
+          text = text.replace(
+              '''    pub(crate) fn file_count(&self) -> usize {
+                  self.levels.iter().map(Vec::len).sum()
+              }''',
+              '''    pub(crate) fn file_count(&self) -> usize {
+                  self.metadata_levels().iter().map(Vec::len).sum()
+              }''',
+          )
 
           test_name = "fn v2_version_set_opens_physical_l0_and_l1_files()"
           if test_name not in text:
@@ -234,7 +285,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add crates/forgedb/src/version_set.rs
-          git commit -m "feat(v0.4): open level-aware VersionSet from MANIFEST V2"
+          git commit -m "feat(v0.4): share V1 and V2 VersionSet open path"
           git push origin HEAD:${{ github.head_ref }}
 
   test:
