@@ -43,14 +43,8 @@ pub fn open_manifest_any<F: FileSystem>(
             component: "MANIFEST V2",
             found: 1,
             ..
-        }) => open_manifest(
-            filesystem,
-            directory,
-            database_id,
-            limits,
-            read_only,
-        )
-        .map(OpenManifestAny::V1),
+        }) => open_manifest(filesystem, directory, database_id, limits, read_only)
+            .map(OpenManifestAny::V1),
         Err(error) => Err(error),
     }
 }
@@ -162,43 +156,18 @@ mod tests {
         let filesystem = NativeFileSystem;
         let limits = Limits::default();
         let database_id = DatabaseId::random();
-        let (writer, v1) = create_manifest(
-            &filesystem,
-            &directory,
-            database_id,
-            1,
-            &limits,
-        )?;
+        let (writer, v1) = create_manifest(&filesystem, &directory, database_id, 1, &limits)?;
         drop(writer);
 
-        let opened_v1 = open_manifest_any(
-            &filesystem,
-            &directory,
-            database_id,
-            &limits,
-            true,
-        )?;
+        let opened_v1 = open_manifest_any(&filesystem, &directory, database_id, &limits, true)?;
         assert_eq!(opened_v1.format_version(), 1);
         drop(opened_v1);
 
-        let number =
-            next_available_manifest_number(&filesystem, &directory, v1.next_file_number)?;
-        let (writer, _) = migrate_manifest_v1_to_v2(
-            &filesystem,
-            &directory,
-            &v1,
-            number,
-            4,
-            &limits,
-        )?;
+        let number = next_available_manifest_number(&filesystem, &directory, v1.next_file_number)?;
+        let (writer, _) =
+            migrate_manifest_v1_to_v2(&filesystem, &directory, &v1, number, 4, &limits)?;
         drop(writer);
-        let opened_v2 = open_manifest_any(
-            &filesystem,
-            &directory,
-            database_id,
-            &limits,
-            true,
-        )?;
+        let opened_v2 = open_manifest_any(&filesystem, &directory, database_id, &limits, true)?;
         assert_eq!(opened_v2.format_version(), MANIFEST_V2_FORMAT_VERSION);
         drop(opened_v2);
 
