@@ -4,6 +4,84 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
+## [0.4.0] — Unreleased
+
+### Добавлено
+
+- Новый внутренний crate `forgedb-lsm` с deterministic compaction scoring и picker-ами.
+- L0→L1 overlap closure и Ln→Ln+1 target selection.
+- Отдельный manual range picker, не зависящий от background pressure в других диапазонах.
+- Bounded snapshot-aware heap merge с duplicate-sequence и source-order validation.
+- Snapshot-floor MVCC retention и bottommost tombstone rules.
+- Streaming output protocol `BeginFile → Entry* → FinishFile` без разделения versions одного logical key.
+- MANIFEST V2 с exact level add/delete records, level count и compaction pointers.
+- Fixed MANIFEST V1 fixture, exact V1/V2 dispatch и future-version rejection.
+- Crash-safe V1→V2 migration под exclusive database lock.
+- Production `Database` path на MANIFEST V2 и physical L1+ SSTables.
+- Public synchronous `Database::compact_range` с half-open range semantics.
+- Bounded exhaustive обработка всех исходных source SST диапазона с progress proof и hard limit 10 000 steps.
+- Durable compaction installation: file-number reservation, SST sync/rename, final atomic MANIFEST edit и immutable VersionSet swap.
+- Reference-aware obsolete SST queue на `Weak<VersionSet>`; streaming cursors удерживают `Arc` lease.
+- Bounded L0 write slowdown и stop threshold с `Error::Busy`.
+- Child-process process-crash matrix для installation boundaries до/после MANIFEST sync и перед obsolete cleanup.
+- Нормативные документы MANIFEST V2, compaction architecture и compatibility/migration policy.
+
+### Исправлено
+
+- `ManifestStateV2::initial` теперь вычисляет `next_file_number` как `max(manifest_number, log_number) + 1` и не допускает reuse active MANIFEST number.
+- `file_inventory()` больше не выполняет filesystem cleanup и остаётся строго read-only.
+- Compaction replacement отклоняет missing/duplicate inputs, output metadata mismatch, live file-number reuse и L1+ overlap.
+- Crash до final compaction edit не делает orphan output live.
+- Crash после final MANIFEST sync восстанавливает новый VersionSet даже до in-memory swap.
+- Active streaming iterator откладывает physical deletion input SST до освобождения старой Version.
+- Write slowdown выполняется вне database state lock и повторно проверяет stop threshold после delay.
+
+### Изменено
+
+- Workspace version повышена до `0.4.0`.
+- Active production MANIFEST writer изменён с V1 на V2.
+- Read-only V1 open использует in-memory bridge без mutation; read-write V1 open выполняет durable migration.
+- Flush installation записывает level-aware V2 edits.
+- Manual compaction newly created outputs не продвигает через все levels в том же вызове; следующий вызов может продолжить.
+- Obsolete cleanup запускается только mutating paths: write, flush, compaction и close.
+
+### Проверка
+
+Последние подтверждённые clean read-only gates:
+
+- production MANIFEST V2 runtime: run `31022988314`;
+- physical compaction installation: run `31024564376`;
+- obsolete lifetime: run `31025353818`;
+- write stalls: run `31025868894`;
+- read-only inventory: run `31026106815`;
+- requested-range picker: run `31026923116`;
+- bounded exhaustive manual source processing: run `31028055579`;
+- process-crash installation matrix: head `d2f7902650506bf287a68575f5d2fe1e874216e7`, run `31029335050`.
+
+Каждый gate прошёл Ubuntu stable, Windows stable и Ubuntu Rust 1.89. Stable jobs выполняют canonical rustfmt, strict Clippy `-D warnings`, workspace tests, doctests и release build.
+
+### Persisted-форматы
+
+| Формат | Active writer | Read support |
+|---|---:|---:|
+| IDENTITY | 1 | 1 |
+| Internal Key | 1 | 1 |
+| WAL | 1 | 1 |
+| SSTable | 1 | 1 |
+| MANIFEST | 2 | 1, 2 |
+| CURRENT | 1 | 1 |
+
+WAL V1, SSTable V1 и Internal Key V1 не изменены. MANIFEST V1 остаётся legacy read-compatible и мигрируется только при read-write open под lock.
+
+### Ограничения
+
+- Compaction синхронна и удерживает database state lock во время merge/build/install.
+- Background compaction scheduler и compaction/stall metrics ещё отсутствуют.
+- Slowdown delay не interruptible в пределах hard cap 50 ms.
+- Obsolete cleanup intent не persisted; process crash может оставить безопасный orphan SST.
+- Process-crash matrix не доказывает OS-crash или power-loss guarantees.
+- Disk-full и injected sync/rename failure matrix относятся к hardening milestone.
+
 ## [0.3.0] — 2026-08-05
 
 ### Добавлено
