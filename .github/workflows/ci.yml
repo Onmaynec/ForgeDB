@@ -1,164 +1,39 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  integrate_exhaustive_manual_compaction:
-    name: integrate bounded exhaustive manual compaction
-    runs-on: ubuntu-latest
+  test:
+    name: ${{ matrix.os }} / stable
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-        with:
-          ref: feature/v0.4.0-leveled-compaction
-          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Refactor compact range into bounded loop
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          def replace_once(text: str, old: str, new: str, label: str) -> str:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected one match, found {count}")
-              return text.replace(old, new, 1)
-
-          path = Path("crates/forgedb/src/database_compaction.rs")
-          text = path.read_text()
-          text = replace_once(
-              text,
-              "    /// Выполняет одну eligible leveled compaction, пересекающую заданный user-key range.\n",
-              "    /// Выполняет один installation step manual leveled compaction.\n",
-              "compact once docs",
-          )
-          text = replace_once(
-              text,
-              "    pub fn compact_range(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<()> {",
-              "    fn compact_range_once(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<bool> {",
-              "compact once signature",
-          )
-          text = replace_once(
-              text,
-              "            forgedb_lsm::CompactionDecision::None => return Ok(()),",
-              "            forgedb_lsm::CompactionDecision::None => return Ok(false),",
-              "no-plan result",
-          )
-          text = replace_once(
-              text,
-              "        self.collect_obsolete_ssts_locked(&mut state)?;\n        Ok(())\n    }\n\n    fn reserve_compaction_file_number(",
-              "        self.collect_obsolete_ssts_locked(&mut state)?;\n        Ok(true)\n    }\n\n    fn reserve_compaction_file_number(",
-              "successful step result",
-          )
-
-          text = replace_once(
-              text,
-              "            assert!(levels[0].is_empty());\n            assert_eq!(levels[1].len(), 1);",
-              "            let (last_level, preceding) = levels.split_last().ok_or(\n                Error::InternalInvariant {\n                    invariant: \"I-COMPACTION-TEST-LEVELS\",\n                    reason: \"VersionSet не содержит levels\".to_owned(),\n                },\n            )?;\n            assert!(preceding.iter().all(Vec::is_empty));\n            assert_eq!(last_level.len(), 1);",
-              "physical exhaustive layout assertion",
-          )
-          text = replace_once(
-              text,
-              "            assert_eq!(levels[1].len(), 1);\n            assert_eq!(levels[1][0].smallest_user_key, b\"middle\");",
-              "            let last_level = levels.last().ok_or(Error::InternalInvariant {\n                invariant: \"I-MANUAL-RANGE-TEST-LAST-LEVEL\",\n                reason: \"VersionSet не содержит last level\".to_owned(),\n            })?;\n            assert_eq!(last_level.len(), 1);\n            assert_eq!(last_level[0].smallest_user_key, b\"middle\");",
-              "manual range exhaustive assertion",
-          )
-
-          if "exhaustive_manual_range_processes_all_intersecting_seeds" not in text:
-              module_end = text.rfind("\n}")
-              if module_end < 0:
-                  raise SystemExit("database compaction test module end not found")
-              test = '''
-
-    #[test]
-    fn exhaustive_manual_range_processes_all_intersecting_seeds() -> Result<()> {
-        let directory = temporary_directory("exhaustive-range")?;
-        let options = Options {
-            l0_compaction_trigger: 10,
-            l0_slowdown_trigger: 11,
-            l0_stop_trigger: 12,
-            target_sst_size: 1024,
-            data_block_size: 1024,
-            ..Options::default()
-        };
-        let database = StreamingDatabase::open(&directory, options)?;
-        for (key, value) in [
-            (b"alpha".as_slice(), b"one".as_slice()),
-            (b"middle".as_slice(), b"two".as_slice()),
-            (b"zulu".as_slice(), b"three".as_slice()),
-        ] {
-            database.put(key, value, WriteOptions::sync())?;
-            database.flush()?;
-        }
-
-        database.compact_range(Some(b"a"), None)?;
-        let state = database.inner.lock_state()?;
-        let levels = state.version.metadata_levels();
-        let (last_level, preceding) = levels.split_last().ok_or(
-            Error::InternalInvariant {
-                invariant: "I-EXHAUSTIVE-COMPACTION-LEVELS",
-                reason: "VersionSet не содержит levels".to_owned(),
-            },
-        )?;
-        assert!(preceding.iter().all(Vec::is_empty));
-        assert_eq!(last_level.len(), 3);
-        drop(state);
-        assert_eq!(database.get(b"alpha")?, Some(b"one".to_vec()));
-        assert_eq!(database.get(b"middle")?, Some(b"two".to_vec()));
-        assert_eq!(database.get(b"zulu")?, Some(b"three".to_vec()));
-        database.close()?;
-        fs::remove_dir_all(&directory)
-            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
-        Ok(())
-    }
-'''
-              text = text[:module_end] + test + text[module_end:]
-          path.write_text(text)
-
-          wrapper = Path("crates/forgedb/src/database_compaction_wrapper.rs")
-          wrapper.write_text('''const MAX_MANUAL_COMPACTION_STEPS: usize = 10_000;
-const MANUAL_COMPACTION_LIMIT_U64: u64 = 10_000;
-const MANUAL_COMPACTION_OBSERVED_U64: u64 = 10_001;
-
-impl StreamingDatabase {
-    /// Exhaustively compact-ит пересекающие range SSTables с bounded числом steps.
-    ///
-    /// Каждый step выполняет полный durable installation protocol. Если safety
-    /// limit исчерпан, already-installed steps остаются committed, а вызов
-    /// возвращает явный `ResourceLimit` вместо потенциально бесконечного цикла.
-    pub fn compact_range(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<()> {
-        for _ in 0..MAX_MANUAL_COMPACTION_STEPS {
-            if !self.inner.compact_range_once(start, end)? {
-                return Ok(());
-            }
-        }
-        Err(Error::ResourceLimit {
-            resource: "manual_compaction_steps",
-            limit: MANUAL_COMPACTION_LIMIT_U64,
-            observed: MANUAL_COMPACTION_OBSERVED_U64,
-        })
-    }
-}
-''')
-          PY
-      - run: cargo fmt --all
+      - run: cargo fmt --all --check
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace --all-features
       - run: cargo test --locked --workspace --doc
       - run: cargo build --locked --workspace --release
-      - name: Commit exhaustive manual compaction
-        run: |
-          if git diff --quiet; then
-            echo "No changes"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/forgedb/src/database_compaction.rs crates/forgedb/src/database_compaction_wrapper.rs
-          git commit -m "feat(v0.4): exhaustively compact manual ranges within a hard bound"
-          git push origin HEAD:feature/v0.4.0-leveled-compaction
+
+  msrv:
+    name: ubuntu / Rust 1.89
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: clippy
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-features
