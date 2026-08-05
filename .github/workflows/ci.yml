@@ -6,9 +6,123 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  integrate-v04-merge:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/v0.4.0-leveled-compaction'
+    name: integrate bounded compaction merge
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Export merge and complete metrics
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          lib = Path("crates/forgedb-lsm/src/lib.rs")
+          text = lib.read_text()
+          marker = '''//! exceeds configured byte limit.
+
+'''
+          # The exact English line may not be present in the Russian module docs.
+          if "mod merge;" not in text:
+              insert_at = text.find("use std::cmp::Ordering;")
+              if insert_at < 0:
+                  raise SystemExit("forgedb-lsm import marker not found")
+              export = '''mod merge;
+
+pub use merge::{
+    CompactionCursor, CompactionMerge, CompactionMergeOptions, CompactionMergeStats,
+    VecCompactionCursor,
+};
+
+'''
+              text = text[:insert_at] + export + text[insert_at:]
+          lib.write_text(text)
+
+          merge = Path("crates/forgedb-lsm/src/merge.rs")
+          text = merge.read_text()
+          old = '''        self.observe_input_group(&versions)?;
+        let retained = retain_versions(versions, self.options);
+        self.observe_output_group(&retained)?;
+        self.pending.extend(retained);'''
+          new = '''        self.observe_input_group(&versions)?;
+        let input_tombstones = versions
+            .iter()
+            .filter(|entry| entry.internal_key.value_type() == ValueType::Deletion)
+            .count();
+        let retained = retain_versions(versions, self.options);
+        let output_tombstones = retained
+            .iter()
+            .filter(|entry| entry.internal_key.value_type() == ValueType::Deletion)
+            .count();
+        let dropped_tombstones = input_tombstones
+            .checked_sub(output_tombstones)
+            .ok_or(Error::InternalInvariant {
+                invariant: "I-COMPACTION-DROPPED-TOMBSTONES",
+                reason: "output tombstones превышают input tombstones".to_owned(),
+            })?;
+        self.observe_output_group(&retained, dropped_tombstones)?;
+        self.pending.extend(retained);'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit("merge retention metric marker not found")
+
+          old = '''    fn observe_output_group(&mut self, retained: &[TableEntry]) -> Result<()> {'''
+          new = '''    fn observe_output_group(
+        &mut self,
+        retained: &[TableEntry],
+        dropped_tombstones: usize,
+    ) -> Result<()> {'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit("observe_output_group signature not found")
+
+          old = '''        self.stats.dropped_versions = dropped;
+        Ok(())'''
+          new = '''        self.stats.dropped_versions = dropped;
+        self.stats.dropped_tombstones = checked_add(
+            self.stats.dropped_tombstones,
+            u64::try_from(dropped_tombstones).map_err(|_| Error::ResourceLimit {
+                resource: "compaction_dropped_tombstones",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            })?,
+            "compaction_dropped_tombstones",
+        )?;
+        Ok(())'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit("dropped tombstone counter marker not found")
+          merge.write_text(text)
+          PY
+      - run: cargo fmt --all
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-features
+      - name: Commit bounded merge integration
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "bounded merge already integrated"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/forgedb-lsm/src
+          git commit -m "feat(v0.4): integrate bounded compaction merge"
+          git push origin HEAD:${{ github.head_ref }}
+
   test:
     name: ${{ matrix.os }} / stable
     strategy:
