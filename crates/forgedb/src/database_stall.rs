@@ -20,7 +20,7 @@ impl Database {
             let state = self.lock_state()?;
             ensure_writer_healthy(&state)?;
             write_stall_decision(
-                state.version.metadata_levels()[0].len(),
+                l0_file_count(state.version.as_ref())?,
                 self.options.l0_slowdown_trigger,
                 self.options.l0_stop_trigger,
             )?
@@ -33,7 +33,7 @@ impl Database {
                 std::thread::sleep(delay);
                 let state = self.lock_state()?;
                 ensure_writer_healthy(&state)?;
-                let l0_files = state.version.metadata_levels()[0].len();
+                let l0_files = l0_file_count(state.version.as_ref())?;
                 if l0_files >= self.options.l0_stop_trigger {
                     return Err(l0_stop_error(self.options.l0_stop_trigger));
                 }
@@ -41,6 +41,17 @@ impl Database {
             }
         }
     }
+}
+
+fn l0_file_count(version: &VersionSet) -> Result<usize> {
+    version
+        .metadata_levels()
+        .first()
+        .map(Vec::len)
+        .ok_or(Error::InternalInvariant {
+            invariant: "I-WRITE-STALL-L0-PRESENT",
+            reason: "VersionSet не содержит L0".to_owned(),
+        })
 }
 
 fn write_stall_decision(
@@ -142,7 +153,7 @@ mod write_stall_tests {
             data_block_size: 1024,
             ..Options::default()
         };
-        let database = StreamingDatabase::open(&directory, options.clone())?;
+        let database = StreamingDatabase::open(&directory, options)?;
         database.put(b"alpha", b"one", WriteOptions::sync())?;
         database.flush()?;
         database.put(b"beta", b"two", WriteOptions::sync())?;
