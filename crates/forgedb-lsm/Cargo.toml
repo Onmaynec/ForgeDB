@@ -1,0 +1,16 @@
+[package]
+name = "forgedb-lsm"
+description = "LSM orchestration и deterministic compaction planning ForgeDB"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+forgedb-core = { path = "../forgedb-core" }
+forgedb-sstable = { path = "../forgedb-sstable" }
+
+[lints]
+workspace = true
