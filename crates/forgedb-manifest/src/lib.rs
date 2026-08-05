@@ -1,22 +1,23 @@
 //! Versioned MANIFEST contracts ForgeDB.
 //!
-//! Active database writer пока сохраняет MANIFEST V1. MANIFEST V2 определяет
-//! level-aware persisted contract, отдельный writer/replay и crash-safe
-//! migration snapshot. Database переключится на V2 только после integration
-//! recovery и compaction installation tests.
+//! MANIFEST V1 остаётся читаемым. MANIFEST V2 определяет level-aware
+//! persisted contract, отдельный writer/replay, crash-safe migration snapshot
+//! и strict format dispatch. Database integration выполняется только под
+//! exclusive database lock и после recovery tests.
 
 mod bootstrap;
 mod checksum;
 mod codec;
 #[cfg(test)]
 mod compatibility;
+mod dispatch;
 mod log;
 mod state;
 mod v2;
 mod v2_log;
 
 pub const CURRENT_FILE_NAME: &str = "CURRENT";
-/// Версия active Database writer до завершения V2 integration slice.
+/// Версия initial bootstrap writer. Existing database может открыть V1 или V2.
 pub const MANIFEST_FORMAT_VERSION: u16 = 1;
 pub const MANIFEST_HEADER_SIZE: usize = 64;
 pub const MANIFEST_FRAME_HEADER_SIZE: usize = 32;
@@ -41,6 +42,10 @@ pub fn parse_manifest_file_name(name: &str) -> Option<u64> {
 }
 
 pub use bootstrap::create_manifest;
+pub use dispatch::{
+    OpenManifestAny, bridge_manifest_v1_to_v2, next_available_manifest_number,
+    open_manifest_any,
+};
 pub use log::{ManifestWriter, OpenManifest, ReplaySummary, open_manifest, replay_manifest};
 pub use state::{ManifestState, VersionEdit};
 pub use v2::{
