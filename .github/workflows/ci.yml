@@ -6,9 +6,104 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  restore-manifest-wal-invariant:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/v0.3.0-full-lsm-read-path'
+    name: restore MANIFEST-owned WAL invariant
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Require every MANIFEST-owned WAL before replay
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/forgedb/src/database_v3_fixed.rs")
+          text = path.read_text()
+
+          open_marker = '''        let mut recovered_last = manifest.last_sequence;
+          let pending_flush = recover_previous_wal('''
+          open_replacement = '''        require_manifest_wal(
+              &filesystem,
+              &directory,
+              manifest.log_number,
+              "current WAL",
+          )?;
+          if let Some(previous_log_number) = manifest.previous_log_number {
+              require_manifest_wal(
+                  &filesystem,
+                  &directory,
+                  previous_log_number,
+                  "previous WAL",
+              )?;
+          }
+
+          let mut recovered_last = manifest.last_sequence;
+          let pending_flush = recover_previous_wal('''
+          if open_marker in text:
+              text = text.replace(open_marker, open_replacement, 1)
+          elif "require_manifest_wal(" not in text:
+              raise SystemExit("Database::open WAL validation marker not found")
+
+          helper_marker = '''fn ensure_writer_healthy(state: &DatabaseState) -> Result<()> {'''
+          helper = '''fn require_manifest_wal(
+              filesystem: &NativeFileSystem,
+              directory: &Path,
+              file_number: u64,
+              role: &'static str,
+          ) -> Result<()> {
+              let path = directory.join(wal_file_name(file_number));
+              match filesystem.open_sequential(&path) {
+                  Ok(file) => {
+                      drop(file);
+                      Ok(())
+                  }
+                  Err(Error::Io { source, .. }) if source.kind() == ErrorKind::NotFound => {
+                      Err(Error::corruption(
+                          role,
+                          format!(
+                              "MANIFEST ссылается на отсутствующий WAL {}",
+                              path.display()
+                          ),
+                      ))
+                  }
+                  Err(error) => Err(error),
+              }
+          }
+
+          fn ensure_writer_healthy(state: &DatabaseState) -> Result<()> {'''
+          if helper_marker in text:
+              text = text.replace(helper_marker, helper, 1)
+          elif "fn require_manifest_wal(" not in text:
+              raise SystemExit("WAL validation helper marker not found")
+
+          path.write_text(text)
+          PY
+      - run: cargo fmt --all
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked -p forgedb --test flush_recovery missing_manifest_owned_wal_blocks_open
+      - name: Commit invariant restoration
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "MANIFEST-owned WAL invariant already restored"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/forgedb/src/database_v3_fixed.rs
+          git commit -m "fix(v0.3): reject missing MANIFEST-owned WAL"
+          git push origin HEAD:${{ github.head_ref }}
+
   test:
     name: ${{ matrix.os }} / stable
     strategy:
