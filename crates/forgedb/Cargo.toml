@@ -11,6 +11,8 @@ repository.workspace = true
 [dependencies]
 forgedb-core = { path = "../forgedb-core" }
 forgedb-fs = { path = "../forgedb-fs" }
+forgedb-manifest = { path = "../forgedb-manifest" }
+forgedb-sstable = { path = "../forgedb-sstable" }
 forgedb-wal = { path = "../forgedb-wal" }
 
 [lints]

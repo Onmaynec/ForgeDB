@@ -2,8 +2,82 @@
 
 В этом файле перечисляются заметные изменения ForgeDB.
 
-До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через
-явную новую версию, ADR, compatibility tests и документированную migration policy.
+До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
+
+## [0.2.0] — release candidate
+
+### Добавлено
+
+- Crate `forgedb-sstable` с версионируемым форматом SSTable V1.
+- Фиксированные header/footer, checksummed data/index/filter/properties blocks.
+- Prefix compression с restart points и строгим bounded decoder.
+- Versioned Bloom filter без false negatives для добавленных ключей.
+- Полная проверка database UUID, file number, sequence range, offsets, lengths и CRC32C.
+- Crate `forgedb-manifest` с MANIFEST V1, VersionEdit и crash-safe CURRENT.
+- Единая монотонная нумерация WAL, SSTable и MANIFEST metadata.
+- Mutable/immutable memtable lifecycle для синхронного flush.
+- Двухфазный WAL rotation и SSTable installation protocol.
+- `Database::flush()` и point reads в порядке mutable → immutable → L0 от новых к старым.
+- Recovery current и previous WAL в разных memtable generations.
+- WAL-first bootstrap: initial WAL синхронизируется до публикации MANIFEST/CURRENT.
+- Strict idempotent creation для header-only orphan WAL после crash до rotation edit.
+- Fail-safe отказ от повторного использования WAL с complete frame или partial tail.
+- Deterministic cleanup только reserved bootstrap artifacts при отсутствии CURRENT.
+- Безопасное игнорирование unreferenced SSTable: orphan не включается в live state автоматически.
+- Удаление obsolete WAL только после успешного sync MANIFEST installation edit.
+- `flush_in_progress` и `Busy` для concurrent flush/close.
+- Fatal writer state после MANIFEST append/sync error.
+- `TableBuildRequest` для типизированного SSTable builder API без длинного позиционного списка аргументов.
+- Integration tests reopen-after-flush, deterministic SST checksum corruption, orphan SST, missing live WAL, WAL bootstrap/rotation retry и deterministic model.
+- Crash recovery matrix `docs/CRASH_RECOVERY_MATRIX_V0.2.md`.
+- Release notes `docs/releases/V0.2.0_DRAFT.md`.
+- Русские нормативные документы SSTable V1, MANIFEST V1 и CURRENT V1.
+
+### Исправлено
+
+- Previous и current WAL больше не смешиваются в одну mutable memtable после crash между rotation и installation.
+- Повторный crash не может исключить previous WAL из MANIFEST до установки соответствующего SSTable.
+- Отсутствующий MANIFEST-owned WAL больше не пересоздаётся пустым и блокирует open как corruption.
+- Header-only WAL, оставшийся до публикации CURRENT или rotation edit, может быть безопасно повторно использован.
+- Non-empty orphan WAL сохраняется и блокирует flush вместо удаления или truncate.
+- Windows bootstrap retry не зависит от replacement semantics `std::fs::rename`: reserved destination очищается до установки нового MANIFEST.
+- `Database::close()` публикует closed state только после успешного WAL/MANIFEST sync.
+- Старый небезопасный `database.rs` удалён; активна generation-safe state machine.
+- Рассинхронизированный `Cargo.lock` обновлён до полного workspace `0.2.0`.
+- Flaky corruption-тесты теперь гарантированно изменяют сохранённый CRC через XOR.
+- Удалены локальные `clone_on_copy` и `too_many_arguments` lint-исключения из `forgedb-sstable`.
+
+### Изменено
+
+- Workspace version повышена до `0.2.0`.
+- WAL получил canonical numbered generations.
+- Public `create_wal` идемпотентен только для строго проверенного header-only generation.
+- Public `create_manifest` гарантирует WAL-before-CURRENT bootstrap и запрещает reinitialize при существующем CURRENT.
+- Memtable различает `Missing`, `Value` и `Tombstone`.
+- Открытие базы проверяет все SSTables и WAL, на которые ссылается MANIFEST.
+- CI использует `actions/checkout@v6`, зафиксированный `Cargo.lock` и `--locked` для Clippy/tests/release build.
+- Все crates снова наследуют единый strict workspace lint policy.
+- Feature gate подтверждён на Ubuntu stable, Windows stable и Rust 1.89; публикация всё ещё требует отдельного release PR gate.
+
+### Persisted-форматы
+
+| Формат | Текущая версия | Чтение | Запись |
+|---|---:|---:|---:|
+| IDENTITY | 1 | 1 | 1 |
+| Internal Key | 1 | 1 | 1 |
+| WAL | 1 | 1 | 1 |
+| SSTable | 1 | 1 | 1 |
+| MANIFEST | 1 | 1 | 1 |
+| CURRENT | 1 | 1 | 1 |
+
+### Ограничения
+
+- Только L0; leveled compaction ещё отсутствует.
+- Range scan, snapshots и transactions ещё отсутствуют.
+- Flush синхронный; background worker и write stalls появятся позже.
+- SSTable reader версии 0.2 bounded-загружает файл в память.
+- Произвольные orphan/unknown-файлы не удаляются автоматически и пока не имеют отдельного CLI inventory report.
+- Версия ещё не опубликована: требуется отдельный зелёный release PR, annotated tag и GitHub Pre-release.
 
 ## [0.1.0] — 2026-08-03
 
@@ -29,7 +103,7 @@
 
 - Workspace version повышена до `0.1.0`.
 - `Database::close` синхронизирует WAL и освобождает системную блокировку.
-- Файловая абстракция получила синхронизированное `truncate_file`.
+- Файловая абстракция получила синхронизированный `truncate_file`.
 - Replay разрешает возрастающие sequence gaps, но запрещает пересечения и откат.
 
 ### Гарантии

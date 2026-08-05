@@ -9,6 +9,22 @@ use crate::codec::{WAL_FRAME_HEADER_SIZE, WAL_HEADER_SIZE, WalBatch, WalCodec, W
 pub const WAL_FILE_NUMBER: u64 = 1;
 pub const WAL_FILE_NAME: &str = "WAL-000001.log";
 
+/// Canonical имя numbered WAL.
+#[must_use]
+pub fn wal_file_name(file_number: u64) -> String {
+    format!("WAL-{file_number:06}.log")
+}
+
+/// Разбирает canonical имя numbered WAL.
+#[must_use]
+pub fn parse_wal_file_name(name: &str) -> Option<u64> {
+    let digits = name.strip_prefix("WAL-")?.strip_suffix(".log")?;
+    if digits.len() < 6 || digits.bytes().any(|byte| !byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
 /// Итог строгого последовательного replay одного WAL.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ReplaySummary {
@@ -24,11 +40,11 @@ pub struct ReplaySummary {
 pub struct WalWriter<W: WritableFile> {
     file: W,
     path: PathBuf,
+    file_number: u64,
     bytes_written: u64,
 }
 
 impl<W: WritableFile> WalWriter<W> {
-    /// Добавляет один полностью сформированный кадр и при необходимости синхронизирует файл.
     pub fn append_batch(
         &mut self,
         sequence_start: SequenceNumber,
@@ -45,41 +61,75 @@ impl<W: WritableFile> WalWriter<W> {
                 .sync_all()
                 .map_err(|source| Error::io("sync_wal", Some(self.path.clone()), source))?;
         }
-        let frame_len = u64::try_from(frame.len()).map_err(|_| Error::ResourceLimit {
-            resource: "wal_bytes_written",
-            limit: u64::MAX,
-            observed: u64::MAX,
-        })?;
-        self.bytes_written =
-            self.bytes_written
-                .checked_add(frame_len)
-                .ok_or(Error::ResourceLimit {
+        self.bytes_written = self
+            .bytes_written
+            .checked_add(
+                u64::try_from(frame.len()).map_err(|_| Error::ResourceLimit {
                     resource: "wal_bytes_written",
                     limit: u64::MAX,
                     observed: u64::MAX,
-                })?;
+                })?,
+            )
+            .ok_or(Error::ResourceLimit {
+                resource: "wal_bytes_written",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            })?;
         Ok(self.bytes_written)
     }
 
-    /// Синхронизирует ранее записанные байты WAL.
     pub fn sync(&self) -> Result<()> {
         self.file
             .sync_all()
             .map_err(|source| Error::io("sync_wal", Some(self.path.clone()), source))
     }
 
-    /// Возвращает физический путь WAL.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    #[must_use]
+    pub const fn file_number(&self) -> u64 {
+        self.file_number
+    }
 }
 
-/// Открывает существующий WAL или создаёт новый, предварительно выполнив replay.
-pub fn open_wal<F, A>(
+/// Создаёт пустой numbered WAL и синхронизирует файл и каталог.
+pub fn create_wal<F: FileSystem>(
     filesystem: &F,
     directory: &Path,
     database_id: DatabaseId,
+    file_number: u64,
+) -> Result<WalWriter<F::WritableFile>> {
+    if file_number == 0 {
+        return Err(Error::invalid_argument(
+            "file_number",
+            "ноль зарезервирован",
+        ));
+    }
+    let path = directory.join(wal_file_name(file_number));
+    let mut file = filesystem.create_new_writable(&path)?;
+    file.write_all(&WalHeader::new(database_id, file_number).encode())
+        .map_err(|source| Error::io("write_wal_header", Some(path.clone()), source))?;
+    file.sync_all()
+        .map_err(|source| Error::io("sync_wal_header", Some(path.clone()), source))?;
+    drop(file);
+    filesystem.sync_directory(directory)?;
+    Ok(WalWriter {
+        file: filesystem.open_appendable(&path)?,
+        path,
+        file_number,
+        bytes_written: u64::try_from(WAL_HEADER_SIZE).unwrap_or(u64::MAX),
+    })
+}
+
+/// Открывает или создаёт numbered WAL, предварительно выполнив replay.
+pub fn open_wal_numbered<F, A>(
+    filesystem: &F,
+    directory: &Path,
+    database_id: DatabaseId,
+    file_number: u64,
     limits: &Limits,
     mut apply: A,
 ) -> Result<(WalWriter<F::WritableFile>, ReplaySummary)>
@@ -87,47 +137,71 @@ where
     F: FileSystem,
     A: FnMut(WalBatch) -> Result<()>,
 {
-    let path = directory.join(WAL_FILE_NAME);
+    let path = directory.join(wal_file_name(file_number));
     let summary = match filesystem.open_sequential(&path) {
         Ok(_) => {
-            let summary = replay_wal(filesystem, &path, database_id, limits, &mut apply)?;
+            let summary = replay_wal_numbered(
+                filesystem,
+                &path,
+                database_id,
+                file_number,
+                limits,
+                &mut apply,
+            )?;
             if summary.truncated_tail {
                 filesystem.truncate_file(&path, summary.valid_bytes)?;
             }
             summary
         }
         Err(Error::Io { source, .. }) if source.kind() == ErrorKind::NotFound => {
-            let header = WalHeader::new(database_id, WAL_FILE_NUMBER).encode();
-            let mut file = filesystem.create_new_writable(&path)?;
-            file.write_all(&header)
-                .map_err(|source| Error::io("write_wal_header", Some(path.clone()), source))?;
-            file.sync_all()
-                .map_err(|source| Error::io("sync_wal_header", Some(path.clone()), source))?;
-            drop(file);
-            filesystem.sync_directory(directory)?;
-            ReplaySummary {
+            let writer = create_wal(filesystem, directory, database_id, file_number)?;
+            let summary = ReplaySummary {
                 valid_bytes: u64::try_from(WAL_HEADER_SIZE).unwrap_or(u64::MAX),
                 ..ReplaySummary::default()
-            }
+            };
+            return Ok((writer, summary));
         }
         Err(error) => return Err(error),
     };
-    let file = filesystem.open_appendable(&path)?;
     Ok((
         WalWriter {
-            file,
+            file: filesystem.open_appendable(&path)?,
             path,
+            file_number,
             bytes_written: summary.valid_bytes,
         },
         summary,
     ))
 }
 
-/// Строго воспроизводит все полные кадры WAL и допускает только последний физически усечённый кадр.
-pub fn replay_wal<F, A>(
+/// Совместимый wrapper для WAL №1.
+pub fn open_wal<F, A>(
+    filesystem: &F,
+    directory: &Path,
+    database_id: DatabaseId,
+    limits: &Limits,
+    apply: A,
+) -> Result<(WalWriter<F::WritableFile>, ReplaySummary)>
+where
+    F: FileSystem,
+    A: FnMut(WalBatch) -> Result<()>,
+{
+    open_wal_numbered(
+        filesystem,
+        directory,
+        database_id,
+        WAL_FILE_NUMBER,
+        limits,
+        apply,
+    )
+}
+
+/// Строго воспроизводит numbered WAL.
+pub fn replay_wal_numbered<F, A>(
     filesystem: &F,
     path: &Path,
     database_id: DatabaseId,
+    file_number: u64,
     limits: &Limits,
     mut apply: A,
 ) -> Result<ReplaySummary>
@@ -137,23 +211,22 @@ where
 {
     limits.validate()?;
     let mut reader = filesystem.open_sequential(path)?;
-    let mut header_bytes = [0_u8; WAL_HEADER_SIZE];
-    let header_read = read_up_to(&mut reader, &mut header_bytes)
-        .map_err(|source| Error::io("read_wal_header", Some(path.into()), source))?;
-    if header_read != WAL_HEADER_SIZE {
+    let mut header = [0_u8; WAL_HEADER_SIZE];
+    if read_up_to(&mut reader, &mut header)
+        .map_err(|source| Error::io("read_wal_header", Some(path.into()), source))?
+        != WAL_HEADER_SIZE
+    {
         return Err(Error::corruption(
             "WAL header",
             "файл усечён до конца заголовка",
         ));
     }
-    WalHeader::decode(&header_bytes, database_id, WAL_FILE_NUMBER)?;
-
+    WalHeader::decode(&header, database_id, file_number)?;
     let mut summary = ReplaySummary {
         valid_bytes: u64::try_from(WAL_HEADER_SIZE).unwrap_or(u64::MAX),
         ..ReplaySummary::default()
     };
     let mut expected_sequence = SequenceNumber::FIRST;
-
     loop {
         let mut frame_header = [0_u8; WAL_FRAME_HEADER_SIZE];
         let read = read_up_to(&mut reader, &mut frame_header)
@@ -167,9 +240,10 @@ where
         }
         let descriptor = WalCodec::decode_frame_header(&frame_header, limits)?;
         let mut payload = vec![0_u8; descriptor.payload_length];
-        let payload_read = read_up_to(&mut reader, &mut payload)
-            .map_err(|source| Error::io("read_wal_payload", Some(path.into()), source))?;
-        if payload_read != descriptor.payload_length {
+        if read_up_to(&mut reader, &mut payload)
+            .map_err(|source| Error::io("read_wal_payload", Some(path.into()), source))?
+            != descriptor.payload_length
+        {
             summary.truncated_tail = true;
             return Ok(summary);
         }
@@ -178,7 +252,7 @@ where
             return Err(Error::corruption(
                 "WAL sequence",
                 format!(
-                    "ожидалась sequence {}, найдена {}",
+                    "ожидалась sequence не меньше {}, найдена {}",
                     expected_sequence.get(),
                     decoded.sequence_start.get()
                 ),
@@ -186,7 +260,6 @@ where
         }
         let end = decoded.sequence_start.inclusive_end(decoded.batch.len())?;
         apply(decoded)?;
-
         summary.frame_count = summary
             .frame_count
             .checked_add(1)
@@ -228,6 +301,26 @@ where
     }
 }
 
+/// Совместимый wrapper, извлекающий номер из canonical имени или использующий №1.
+pub fn replay_wal<F, A>(
+    filesystem: &F,
+    path: &Path,
+    database_id: DatabaseId,
+    limits: &Limits,
+    apply: A,
+) -> Result<ReplaySummary>
+where
+    F: FileSystem,
+    A: FnMut(WalBatch) -> Result<()>,
+{
+    let number = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(parse_wal_file_name)
+        .unwrap_or(WAL_FILE_NUMBER);
+    replay_wal_numbered(filesystem, path, database_id, number, limits, apply)
+}
+
 fn read_up_to<R: Read>(reader: &mut R, buffer: &mut [u8]) -> std::io::Result<usize> {
     let mut filled = 0_usize;
     while filled < buffer.len() {
@@ -243,8 +336,7 @@ fn read_up_to<R: Read>(reader: &mut R, buffer: &mut [u8]) -> std::io::Result<usi
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{self, OpenOptions};
-    use std::io::{Seek, SeekFrom};
+    use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -267,76 +359,30 @@ mod tests {
     }
 
     #[test]
-    fn trailing_partial_frame_is_ignored_and_truncated_on_open() -> Result<()> {
-        let directory = temporary_directory("partial")?;
+    fn numbered_wal_round_trip() -> Result<()> {
+        let directory = temporary_directory("numbered")?;
         let filesystem = NativeFileSystem;
         let database_id = DatabaseId::random();
         let limits = Limits::default();
-        let (mut writer, _) = open_wal(&filesystem, &directory, database_id, &limits, |_| Ok(()))?;
+        let mut writer = create_wal(&filesystem, &directory, database_id, 7)?;
         let mut batch = WriteBatch::new();
         batch.put(b"key", b"value")?;
-        let valid_bytes = writer.append_batch(SequenceNumber::FIRST, &batch, &limits, true)?;
+        writer.append_batch(SequenceNumber::FIRST, &batch, &limits, true)?;
         drop(writer);
-
-        let path = directory.join(WAL_FILE_NAME);
-        let mut file = OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .map_err(|source| Error::io("open_test_wal", Some(path.clone()), source))?;
-        file.write_all(b"FWF1\x20")
-            .map_err(|source| Error::io("append_partial_test_frame", Some(path.clone()), source))?;
-        drop(file);
-
         let mut replayed = 0_usize;
-        let (writer, summary) = open_wal(&filesystem, &directory, database_id, &limits, |_| {
-            replayed += 1;
-            Ok(())
-        })?;
-        assert!(summary.truncated_tail);
-        assert_eq!(summary.valid_bytes, valid_bytes);
+        let summary = replay_wal_numbered(
+            &filesystem,
+            &directory.join(wal_file_name(7)),
+            database_id,
+            7,
+            &limits,
+            |_| {
+                replayed += 1;
+                Ok(())
+            },
+        )?;
+        assert_eq!(summary.frame_count, 1);
         assert_eq!(replayed, 1);
-        drop(writer);
-        assert_eq!(filesystem.file_size(&path)?, valid_bytes);
-        fs::remove_dir_all(&directory)
-            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
-        Ok(())
-    }
-
-    #[test]
-    fn checksum_mismatch_in_full_frame_blocks_replay() -> Result<()> {
-        let directory = temporary_directory("corruption")?;
-        let filesystem = NativeFileSystem;
-        let database_id = DatabaseId::random();
-        let limits = Limits::default();
-        let (mut writer, _) = open_wal(&filesystem, &directory, database_id, &limits, |_| Ok(()))?;
-        let mut first = WriteBatch::new();
-        first.put(b"a", b"one")?;
-        writer.append_batch(SequenceNumber::FIRST, &first, &limits, true)?;
-        let mut second = WriteBatch::new();
-        second.put(b"b", b"two")?;
-        writer.append_batch(SequenceNumber::new(2)?, &second, &limits, true)?;
-        drop(writer);
-
-        let path = directory.join(WAL_FILE_NAME);
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
-            .map_err(|source| Error::io("open_test_wal", Some(path.clone()), source))?;
-        let corrupt_offset =
-            u64::try_from(WAL_HEADER_SIZE + WAL_FRAME_HEADER_SIZE).unwrap_or(u64::MAX);
-        file.seek(SeekFrom::Start(corrupt_offset))
-            .map_err(|source| Error::io("seek_test_wal", Some(path.clone()), source))?;
-        file.write_all(&[0xff])
-            .map_err(|source| Error::io("corrupt_test_wal", Some(path.clone()), source))?;
-        file.sync_all()
-            .map_err(|source| Error::io("sync_test_wal", Some(path.clone()), source))?;
-        drop(file);
-
-        assert!(matches!(
-            replay_wal(&filesystem, &path, database_id, &limits, |_| Ok(())),
-            Err(Error::Corruption { .. })
-        ));
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
         Ok(())

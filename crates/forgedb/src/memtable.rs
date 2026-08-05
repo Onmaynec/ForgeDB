@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use forgedb_core::{BatchOperation, Error, Result, SequenceNumber, WriteBatch};
+#[cfg(test)]
+use forgedb_core::ValueType;
+use forgedb_core::{BatchOperation, Error, Limits, Result, SequenceNumber, WriteBatch};
+use forgedb_sstable::TableEntry;
 
 const ENTRY_OVERHEAD_BYTES: usize = 64;
 
@@ -10,26 +13,38 @@ struct MemEntry {
     value: Option<Vec<u8>>,
 }
 
+/// Результат point lookup в memtable.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum MemLookup {
+    Missing,
+    Tombstone,
+    Value(Vec<u8>),
+}
+
 /// Подготовленное атомарное изменение memtable.
 pub(crate) struct PreparedBatch {
     changes: Vec<(Vec<u8>, MemEntry)>,
     memory_usage: usize,
 }
 
-/// Первая корректная mutable memtable на базе BTreeMap.
-#[derive(Debug, Default)]
+/// Mutable или immutable memtable на базе BTreeMap.
+#[derive(Clone, Debug, Default)]
 pub(crate) struct MemTable {
     entries: BTreeMap<Vec<u8>, MemEntry>,
     memory_usage: usize,
 }
 
 impl MemTable {
-    /// Возвращает последнее видимое значение или отсутствие ключа/tombstone.
-    pub(crate) fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.entries.get(key).and_then(|entry| entry.value.clone())
+    pub(crate) fn get(&self, key: &[u8]) -> MemLookup {
+        match self.entries.get(key) {
+            None => MemLookup::Missing,
+            Some(entry) => match &entry.value {
+                Some(value) => MemLookup::Value(value.clone()),
+                None => MemLookup::Tombstone,
+            },
+        }
     }
 
-    /// Проверяет весь batch и рассчитывает итоговую память до изменения состояния.
     pub(crate) fn prepare(
         &self,
         sequence_start: SequenceNumber,
@@ -107,7 +122,6 @@ impl MemTable {
         })
     }
 
-    /// Делает ранее подготовленный batch видимым одной критической секцией.
     pub(crate) fn apply(&mut self, prepared: PreparedBatch) {
         for (key, entry) in prepared.changes {
             self.entries.insert(key, entry);
@@ -115,9 +129,47 @@ impl MemTable {
         self.memory_usage = prepared.memory_usage;
     }
 
+    #[must_use]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     #[cfg(test)]
+    #[must_use]
     pub(crate) fn memory_usage(&self) -> usize {
         self.memory_usage
+    }
+
+    #[must_use]
+    pub(crate) fn maximum_sequence(&self) -> Option<SequenceNumber> {
+        self.entries.values().map(|entry| entry.sequence).max()
+    }
+
+    /// Преобразует одно последнее состояние каждого user key в sorted SSTable entries.
+    pub(crate) fn table_entries(&self, limits: &Limits) -> Result<Vec<TableEntry>> {
+        let mut entries = Vec::with_capacity(self.entries.len());
+        for (key, entry) in &self.entries {
+            let table_entry = match &entry.value {
+                Some(value) => {
+                    TableEntry::value(key.clone(), entry.sequence, value.clone(), limits)?
+                }
+                None => TableEntry::tombstone(key.clone(), entry.sequence, limits)?,
+            };
+            entries.push(table_entry);
+        }
+        entries.sort_by(|left, right| left.internal_key.cmp(&right.internal_key));
+        Ok(entries)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn value_type(&self, key: &[u8]) -> Option<ValueType> {
+        self.entries.get(key).map(|entry| {
+            if entry.value.is_some() {
+                ValueType::Value
+            } else {
+                ValueType::Deletion
+            }
+        })
     }
 }
 
@@ -145,7 +197,7 @@ mod tests {
         batch.put(b"key", b"value")?;
         assert!(table.prepare(SequenceNumber::FIRST, &batch, 1).is_err());
         assert_eq!(table.memory_usage(), 0);
-        assert_eq!(table.get(b"key"), None);
+        assert_eq!(table.get(b"key"), MemLookup::Missing);
         Ok(())
     }
 
@@ -157,7 +209,8 @@ mod tests {
         batch.delete(b"key")?;
         let prepared = table.prepare(SequenceNumber::FIRST, &batch, 1024)?;
         table.apply(prepared);
-        assert_eq!(table.get(b"key"), None);
+        assert_eq!(table.get(b"key"), MemLookup::Tombstone);
+        assert_eq!(table.value_type(b"key"), Some(ValueType::Deletion));
         Ok(())
     }
 }
