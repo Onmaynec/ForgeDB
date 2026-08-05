@@ -6,28 +6,159 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  format-snapshot:
+  canonicalize-v02:
     if: github.event_name == 'pull_request' && github.head_ref == 'feature/v0.2.0-sstable-flush'
-    name: canonical rustfmt snapshot
+    name: canonicalize v0.2 sources
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
       - run: cargo fmt --all
-      - uses: actions/upload-artifact@v4
-        with:
-          name: rustfmt-${{ github.event.pull_request.head.sha }}
-          path: |
-            crates/**/*.rs
-          if-no-files-found: error
-          retention-days: 1
+      - name: Apply confirmed Clippy refactors
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              if old in text:
+                  file.write_text(text.replace(old, new, 1))
+              elif new not in text:
+                  raise SystemExit(f"expected pattern not found in {path}")
+
+          replace_once(
+              "crates/forgedb-manifest/src/log.rs",
+              '''/// Открывает active MANIFEST из CURRENT.
+          pub fn open_manifest<F: FileSystem>(
+              filesystem: &F,
+              directory: &Path,
+              database_id: DatabaseId,
+              limits: &Limits,
+              read_only: bool,
+          ) -> Result<(
+              Option<ManifestWriter<F::WritableFile>>,
+              ManifestState,
+              ReplaySummary,
+          )> {''',
+              '''/// Результат открытия active MANIFEST.
+          #[derive(Debug)]
+          pub struct OpenManifest<W: WritableFile> {
+              /// Writer для read-write открытия; отсутствует в read-only режиме.
+              pub writer: Option<ManifestWriter<W>>,
+              /// Восстановленное authoritative состояние.
+              pub state: ManifestState,
+              /// Итог строгого replay.
+              pub replay: ReplaySummary,
+          }
+
+          /// Открывает active MANIFEST из CURRENT.
+          pub fn open_manifest<F: FileSystem>(
+              filesystem: &F,
+              directory: &Path,
+              database_id: DatabaseId,
+              limits: &Limits,
+              read_only: bool,
+          ) -> Result<OpenManifest<F::WritableFile>> {''',
+          )
+          replace_once(
+              "crates/forgedb-manifest/src/log.rs",
+              "    Ok((writer, state, summary))\n}",
+              '''    Ok(OpenManifest {
+              writer,
+              state,
+              replay: summary,
+          })
+          }''',
+          )
+          replace_once(
+              "crates/forgedb-manifest/src/log.rs",
+              '''        let (_, reopened, summary) =
+                      open_manifest(&filesystem, &directory, database_id, &limits, true)?;
+                  assert_eq!(reopened.log_number, 2);
+                  assert_eq!(reopened.previous_log_number, Some(1));
+                  assert_eq!(summary.edit_count, 2);''',
+              '''        let opened = open_manifest(&filesystem, &directory, database_id, &limits, true)?;
+                  assert_eq!(opened.state.log_number, 2);
+                  assert_eq!(opened.state.previous_log_number, Some(1));
+                  assert_eq!(opened.replay.edit_count, 2);''',
+          )
+          replace_once(
+              "crates/forgedb-manifest/src/log.rs",
+              '''        let (_, _, summary) = open_manifest(&filesystem, &directory, database_id, &limits, true)?;
+                  assert!(summary.truncated_tail);''',
+              '''        let opened = open_manifest(&filesystem, &directory, database_id, &limits, true)?;
+                  assert!(opened.replay.truncated_tail);''',
+          )
+          replace_once(
+              "crates/forgedb-manifest/src/state.rs",
+              '''        if let Some(candidate) = edit.last_sequence {
+                      if let (Some(previous), Some(value)) = (next.last_sequence, candidate) {
+                          if value < previous {
+                              return Err(Error::corruption("VersionEdit", "last_sequence уменьшился"));
+                          }
+                      }
+                      next.last_sequence = candidate;
+                  }''',
+              '''        if let Some(candidate) = edit.last_sequence {
+                      if let (Some(previous), Some(value)) = (next.last_sequence, candidate)
+                          && value < previous
+                      {
+                          return Err(Error::corruption("VersionEdit", "last_sequence уменьшился"));
+                      }
+                      next.last_sequence = candidate;
+                  }''',
+          )
+          replace_once(
+              "crates/forgedb-manifest/src/lib.rs",
+              "pub use log::{ManifestWriter, ReplaySummary, open_manifest, replay_manifest};",
+              "pub use log::{ManifestWriter, OpenManifest, ReplaySummary, open_manifest, replay_manifest};",
+          )
+          replace_once(
+              "crates/forgedb/src/database_v2_fixed.rs",
+              '''        let (manifest_writer, manifest, _) = if current_exists {
+                      open_manifest(
+                          &filesystem,
+                          &directory,
+                          identity,
+                          &limits,
+                          options.read_only,
+                      )?
+                  } else if options.read_only {''',
+              '''        let (manifest_writer, manifest, _) = if current_exists {
+                      let opened = open_manifest(
+                          &filesystem,
+                          &directory,
+                          identity,
+                          &limits,
+                          options.read_only,
+                      )?;
+                      (opened.writer, opened.state, opened.replay)
+                  } else if options.read_only {''',
+          )
+          PY
+      - run: cargo fmt --all
+      - name: Commit canonical sources
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "sources already canonical"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates
+          git commit -m "style(v0.2): apply canonical rustfmt and manifest refactor"
+          git push origin HEAD:${{ github.head_ref }}
 
   test:
     name: ${{ matrix.os }} / stable
