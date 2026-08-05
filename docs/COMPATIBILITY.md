@@ -2,7 +2,7 @@
 
 ## Версия библиотеки
 
-Текущий development milestone: `v0.4.0`. Публичный API может изменяться до `v1.0.0`, но persisted-форматы меняются только через явную новую версию, fixtures, rejection tests и документированную migration policy.
+Текущий development milestone: `v0.4.0`. Публичный API может изменяться до `v1.0.0`, но persisted-форматы меняются только через явную новую version, fixtures, rejection tests и документированную migration policy.
 
 ## Поддерживаемый Rust
 
@@ -17,8 +17,8 @@
 | `WAL V1` | 1 | 1 | стабилен |
 | `SSTable V1` | 1 | 1 | стабилен |
 | `CURRENT V1` | 1 | 1 | стабилен |
-| `MANIFEST V1` | 1 | 1 | active production format |
-| `MANIFEST V2` | ещё не активирован | 2 contract codec | development, level-aware |
+| `MANIFEST V1` | нет | 1 | legacy read-compatible |
+| `MANIFEST V2` | 2 | 2 | active development writer, level-aware |
 
 Unknown future version каждого формата отклоняется. Reader не пытается интерпретировать future version как текущий layout.
 
@@ -26,19 +26,34 @@ Unknown future version каждого формата отклоняется. Rea
 
 ### V1
 
-MANIFEST V1 хранит только L0 metadata. Его binary layout и semantics не изменяются. В репозитории находится фиксированный fixture:
+MANIFEST V1 хранит только L0 metadata. Его binary layout и semantics не изменяются. Fixed fixture находится в:
 
 ```text
 crates/forgedb-manifest/fixtures/manifest-v1-minimal.hex
 ```
 
-Compatibility test replayed этот fixture существующим V1 reader, поэтому проверка не зависит от текущего encoder.
+Compatibility test replayed fixture существующим V1 decoder, поэтому доказательство не зависит от текущего encoder.
+
+Read-only open V1 создаёт только in-memory level-aware bridge и не изменяет каталог.
+
+Read-write open V1 выполняет migration под exclusive database lock:
+
+1. replay и validate V1;
+2. выбрать новый unified file number, пропуская existing MANIFEST/temp/WAL/SST names;
+3. записать полный V2 snapshot во временный MANIFEST;
+4. sync file;
+5. rename и sync directory;
+6. опубликовать новое имя через `CURRENT.tmp`;
+7. sync и atomic rename CURRENT;
+8. открыть V2 writer.
+
+Старый V1 MANIFEST остаётся obsolete и не перезаписывается.
 
 ### V2
 
 MANIFEST V2 добавляет:
 
-- level в add/delete file records;
+- exact level в add/delete file records;
 - authoritative level count;
 - compaction pointers;
 - L1+ sorted/non-overlap validation;
@@ -46,15 +61,19 @@ MANIFEST V2 добавляет:
 
 V2 имеет отдельные header/frame/edit versions и документирован в [`formats/MANIFEST_V2.md`](formats/MANIFEST_V2.md).
 
-Active database writer остаётся V1, пока не реализованы:
+V2 writer используется production Database path milestone v0.4. Physical compaction installation записывает только V2 records и не кодирует level metadata в V1 reserved bytes.
 
-1. snapshot migration V1 → V2;
-2. crash-safe новый MANIFEST и CURRENT replacement;
-3. open/recovery обоих форматов;
-4. fixtures и process-crash matrix migration;
-5. atomic compaction installation.
+## Migration crash outcomes
 
-Нельзя записывать level metadata в V1 tags или reserved bytes.
+До публикации нового CURRENT authoritative остаётся V1. После sync/rename CURRENT authoritative становится V2. Подозрительный existing temp/final MANIFEST не перезаписывается.
+
+Orphan V2 MANIFEST, не выбранный CURRENT, не открывается автоматически.
+
+## Compaction compatibility
+
+Compaction не меняет WAL V1, SSTable V1 или Internal Key V1. Outputs используют обычный SSTable V1 writer. Только level membership и add/delete metadata записываются в MANIFEST V2.
+
+Process crash до final compaction edit оставляет old Version live и output SST orphan. Process crash после final MANIFEST sync восстанавливает new Version; input SST могут остаться безопасными orphan files.
 
 ## Совместимость WAL
 
@@ -69,6 +88,8 @@ WAL V1 привязан к database identity, canonical file number, little-endi
 - Ubuntu с MSRV Rust 1.89.
 
 Native lock, directory sync и truncation имеют platform-specific реализации. Другие платформы не считаются поддерживаемыми без отдельного CI и crash-тестов.
+
+Process-crash compaction matrix проходит Linux и Windows. Это не означает одинаковые OS-crash или power-loss guarantees.
 
 ## Endianness и размер указателя
 
