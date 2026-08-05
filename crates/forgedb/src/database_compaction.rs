@@ -36,7 +36,7 @@ impl Database {
         }
 
         let levels = state.version.metadata_levels();
-        let decision = forgedb_lsm::pick_compaction(
+        let decision = forgedb_lsm::pick_manual_compaction(
             &levels,
             forgedb_lsm::CompactionConfig {
                 l0_compaction_trigger: self.options.l0_compaction_trigger,
@@ -44,6 +44,8 @@ impl Database {
                 level_size_multiplier: self.options.level_size_multiplier,
                 max_compaction_bytes: self.options.max_compaction_bytes,
             },
+            start,
+            end,
         )?;
         let plan = match decision {
             forgedb_lsm::CompactionDecision::None => return Ok(()),
@@ -59,10 +61,6 @@ impl Database {
             }
             forgedb_lsm::CompactionDecision::Plan(plan) => plan,
         };
-        if !plan_overlaps_requested_range(&plan, start, end) {
-            return Ok(());
-        }
-
         let inputs = selected_compaction_inputs(state.version.as_ref(), &plan)?;
         let mut cursors: Vec<Box<dyn forgedb_lsm::CompactionCursor>> =
             Vec::with_capacity(inputs.len());
@@ -302,20 +300,6 @@ fn validate_compaction_range(
     Ok(())
 }
 
-fn plan_overlaps_requested_range(
-    plan: &forgedb_lsm::CompactionPlan,
-    start: Option<&[u8]>,
-    end: Option<&[u8]>,
-) -> bool {
-    if start.is_some_and(|start| plan.largest_user_key.as_slice() < start) {
-        return false;
-    }
-    if end.is_some_and(|end| plan.smallest_user_key.as_slice() >= end) {
-        return false;
-    }
-    true
-}
-
 fn selected_compaction_inputs(
     version: &VersionSet,
     plan: &forgedb_lsm::CompactionPlan,
@@ -526,6 +510,41 @@ mod database_compaction_tests {
         assert_eq!(database.file_inventory()?.orphan_sst.len(), 2);
         database.put(b"cleanup-trigger", b"value", WriteOptions::sync())?;
         assert!(database.file_inventory()?.orphan_sst.is_empty());
+        database.close()?;
+        fs::remove_dir_all(&directory).map_err(|source| {
+            Error::io("remove_test_directory", Some(directory), source)
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn manual_range_compacts_requested_l0_file_below_pressure_trigger() -> Result<()> {
+        let directory = temporary_directory("manual-range")?;
+        let options = Options {
+            l0_compaction_trigger: 10,
+            l0_slowdown_trigger: 11,
+            l0_stop_trigger: 12,
+            target_sst_size: 1024,
+            data_block_size: 1024,
+            ..Options::default()
+        };
+        let database = StreamingDatabase::open(&directory, options)?;
+        database.put(b"alpha", b"one", WriteOptions::sync())?;
+        database.flush()?;
+        database.put(b"middle", b"two", WriteOptions::sync())?;
+        database.flush()?;
+
+        database.compact_range(Some(b"m"), Some(b"z"))?;
+        assert_eq!(database.get(b"alpha")?, Some(b"one".to_vec()));
+        assert_eq!(database.get(b"middle")?, Some(b"two".to_vec()));
+        {
+            let state = database.inner.lock_state()?;
+            let levels = state.version.metadata_levels();
+            assert_eq!(levels[0].len(), 1);
+            assert_eq!(levels[0][0].smallest_user_key, b"alpha");
+            assert_eq!(levels[1].len(), 1);
+            assert_eq!(levels[1][0].smallest_user_key, b"middle");
+        }
         database.close()?;
         fs::remove_dir_all(&directory).map_err(|source| {
             Error::io("remove_test_directory", Some(directory), source)

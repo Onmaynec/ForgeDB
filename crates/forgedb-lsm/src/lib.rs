@@ -85,6 +85,7 @@ impl CompactionConfig {
 pub enum CompactionReason {
     L0FileCount,
     LevelBytes,
+    ManualRange,
 }
 
 /// Точный rational score без floating-point rounding.
@@ -382,7 +383,7 @@ fn build_plan(request: BuildPlanRequest<'_>) -> Result<CompactionPlan> {
     })
 }
 
-fn validate_layout(levels: &[Vec<TableMeta>]) -> Result<()> {
+pub(super) fn validate_layout(levels: &[Vec<TableMeta>]) -> Result<()> {
     let mut numbers = BTreeSet::new();
     for (level, files) in levels.iter().enumerate() {
         for file in files {
@@ -455,7 +456,7 @@ fn selected_bytes(files: &[TableMeta], selected: &BTreeSet<u64>) -> Result<u64> 
         })
 }
 
-fn ranges_overlap(
+pub(super) fn ranges_overlap(
     left_start: &[u8],
     left_end: &[u8],
     right_start: &[u8],
@@ -464,7 +465,7 @@ fn ranges_overlap(
     left_start <= right_end && right_start <= left_end
 }
 
-fn extend_range(smallest: &mut Vec<u8>, largest: &mut Vec<u8>, file: &TableMeta) {
+pub(super) fn extend_range(smallest: &mut Vec<u8>, largest: &mut Vec<u8>, file: &TableMeta) {
     if file.smallest_user_key < *smallest {
         *smallest = file.smallest_user_key.clone();
     }

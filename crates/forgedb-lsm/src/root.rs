@@ -1,10 +1,12 @@
 //! LSM orchestration ForgeDB: compaction planning, bounded merge и output splitting.
 
+mod manual;
 mod merge;
 mod output;
 #[path = "lib.rs"]
 mod planner;
 
+pub use manual::pick_manual_compaction;
 pub use merge::{
     CompactionCursor, CompactionMerge, CompactionMergeOptions, CompactionMergeStats,
     VecCompactionCursor,

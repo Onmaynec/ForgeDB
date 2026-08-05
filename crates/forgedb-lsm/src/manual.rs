@@ -112,17 +112,17 @@ fn manual_l0_plan(
             break;
         }
     }
-    build_manual_plan(
-        0,
-        1,
-        level_zero,
-        level_one,
-        &selected_l0,
-        &selected_l1,
-        smallest,
-        largest,
+    build_manual_plan(BuildManualPlanRequest {
+        source_level: 0,
+        output_level: 1,
+        source: level_zero,
+        target: level_one,
+        selected_source: &selected_l0,
+        selected_target: &selected_l1,
+        smallest_user_key: smallest,
+        largest_user_key: largest,
         score,
-    )
+    })
 }
 
 fn manual_level_plan(
@@ -170,31 +170,43 @@ fn manual_level_plan(
             extend_range(&mut smallest, &mut largest, file);
         }
     }
-    build_manual_plan(
-        score.level,
+    build_manual_plan(BuildManualPlanRequest {
+        source_level: score.level,
         output_level,
         source,
         target,
-        &selected_source,
-        &selected_target,
-        smallest,
-        largest,
+        selected_source: &selected_source,
+        selected_target: &selected_target,
+        smallest_user_key: smallest,
+        largest_user_key: largest,
         score,
-    )
+    })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_manual_plan(
+struct BuildManualPlanRequest<'a> {
     source_level: usize,
     output_level: usize,
-    source: &[TableMeta],
-    target: &[TableMeta],
-    selected_source: &BTreeSet<u64>,
-    selected_target: &BTreeSet<u64>,
+    source: &'a [TableMeta],
+    target: &'a [TableMeta],
+    selected_source: &'a BTreeSet<u64>,
+    selected_target: &'a BTreeSet<u64>,
     smallest_user_key: Vec<u8>,
     largest_user_key: Vec<u8>,
     score: CompactionScore,
-) -> Result<CompactionPlan> {
+}
+
+fn build_manual_plan(request: BuildManualPlanRequest<'_>) -> Result<CompactionPlan> {
+    let BuildManualPlanRequest {
+        source_level,
+        output_level,
+        source,
+        target,
+        selected_source,
+        selected_target,
+        smallest_user_key,
+        largest_user_key,
+        score,
+    } = request;
     let source_files = source
         .iter()
         .filter(|file| selected_source.contains(&file.file_number))
@@ -284,10 +296,7 @@ mod tests {
     #[test]
     fn range_selects_intersecting_l0_seed_below_background_trigger() -> Result<()> {
         let levels = vec![
-            vec![
-                table(10, 100, b"a", b"b"),
-                table(11, 100, b"m", b"n"),
-            ],
+            vec![table(10, 100, b"a", b"b"), table(11, 100, b"m", b"n")],
             Vec::new(),
             Vec::new(),
         ];
