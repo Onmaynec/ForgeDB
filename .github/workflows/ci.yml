@@ -22,8 +22,11 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          from textwrap import dedent
 
           def replace_once(text: str, old: str, new: str, label: str) -> str:
+              old = dedent(old)
+              new = dedent(new)
               count = text.count(old)
               if count != 1:
                   raise SystemExit(f"{label}: expected one match, found {count}")
@@ -33,15 +36,19 @@ jobs:
           text = planner.read_text()
           text = replace_once(
               text,
-              '''pub enum CompactionReason {
+              '''
+              pub enum CompactionReason {
                   L0FileCount,
                   LevelBytes,
-              }''',
-              '''pub enum CompactionReason {
+              }
+              ''',
+              '''
+              pub enum CompactionReason {
                   L0FileCount,
                   LevelBytes,
                   ManualRange,
-              }''',
+              }
+              ''',
               "manual reason",
           )
           text = replace_once(text, "fn validate_layout(", "pub(super) fn validate_layout(", "layout visibility")
@@ -64,59 +71,68 @@ jobs:
           text = manual.read_text()
           text = replace_once(
               text,
-              '''    build_manual_plan(
-                  0,
-                  1,
-                  level_zero,
-                  level_one,
-                  &selected_l0,
-                  &selected_l1,
-                  smallest,
-                  largest,
-                  score,
-              )''',
-              '''    build_manual_plan(BuildManualPlanRequest {
-                  source_level: 0,
-                  output_level: 1,
-                  source: level_zero,
-                  target: level_one,
-                  selected_source: &selected_l0,
-                  selected_target: &selected_l1,
-                  smallest_user_key: smallest,
-                  largest_user_key: largest,
-                  score,
-              })''',
+              '''
+                  build_manual_plan(
+                      0,
+                      1,
+                      level_zero,
+                      level_one,
+                      &selected_l0,
+                      &selected_l1,
+                      smallest,
+                      largest,
+                      score,
+                  )
+              ''',
+              '''
+                  build_manual_plan(BuildManualPlanRequest {
+                      source_level: 0,
+                      output_level: 1,
+                      source: level_zero,
+                      target: level_one,
+                      selected_source: &selected_l0,
+                      selected_target: &selected_l1,
+                      smallest_user_key: smallest,
+                      largest_user_key: largest,
+                      score,
+                  })
+              ''',
               "manual L0 request",
           )
           text = replace_once(
               text,
-              '''    build_manual_plan(
-                  score.level,
-                  output_level,
-                  source,
-                  target,
-                  &selected_source,
-                  &selected_target,
-                  smallest,
-                  largest,
-                  score,
-              )''',
-              '''    build_manual_plan(BuildManualPlanRequest {
-                  source_level: score.level,
-                  output_level,
-                  source,
-                  target,
-                  selected_source: &selected_source,
-                  selected_target: &selected_target,
-                  smallest_user_key: smallest,
-                  largest_user_key: largest,
-                  score,
-              })''',
+              '''
+                  build_manual_plan(
+                      score.level,
+                      output_level,
+                      source,
+                      target,
+                      &selected_source,
+                      &selected_target,
+                      smallest,
+                      largest,
+                      score,
+                  )
+              ''',
+              '''
+                  build_manual_plan(BuildManualPlanRequest {
+                      source_level: score.level,
+                      output_level,
+                      source,
+                      target,
+                      selected_source: &selected_source,
+                      selected_target: &selected_target,
+                      smallest_user_key: smallest,
+                      largest_user_key: largest,
+                      score,
+                  })
+              ''',
               "manual level request",
           )
           text = replace_once(
               text,
-              '''#[allow(clippy::too_many_arguments)]
+              '''
+              #[allow(clippy::too_many_arguments)]
               fn build_manual_plan(
                   source_level: usize,
                   output_level: usize,
@@ -128,8 +144,10 @@ jobs:
                   largest_user_key: Vec<u8>,
                   score: CompactionScore,
               ) -> Result<CompactionPlan> {
-                  let source_files = source''',
-              '''struct BuildManualPlanRequest<'a> {
+                  let source_files = source
+              ''',
+              '''
+              struct BuildManualPlanRequest<'a> {
                   source_level: usize,
                   output_level: usize,
                   source: &'a [TableMeta],
@@ -140,7 +158,7 @@ jobs:
                   largest_user_key: Vec<u8>,
                   score: CompactionScore,
               }
-              
+
               fn build_manual_plan(request: BuildManualPlanRequest<'_>) -> Result<CompactionPlan> {
                   let BuildManualPlanRequest {
                       source_level,
@@ -153,7 +171,8 @@ jobs:
                       largest_user_key,
                       score,
                   } = request;
-                  let source_files = source''',
+                  let source_files = source
+              ''',
               "typed manual build request",
           )
           if "allow(clippy::too_many_arguments)" in text:
@@ -164,35 +183,40 @@ jobs:
           text = database.read_text()
           text = replace_once(
               text,
-              '''        let decision = forgedb_lsm::pick_compaction(
-                      &levels,
-                      forgedb_lsm::CompactionConfig {
-                          l0_compaction_trigger: self.options.l0_compaction_trigger,
-                          level1_target_size: self.options.level1_target_size,
-                          level_size_multiplier: self.options.level_size_multiplier,
-                          max_compaction_bytes: self.options.max_compaction_bytes,
-                      },
-                  )?;''',
-              '''        let decision = forgedb_lsm::pick_manual_compaction(
-                      &levels,
-                      forgedb_lsm::CompactionConfig {
-                          l0_compaction_trigger: self.options.l0_compaction_trigger,
-                          level1_target_size: self.options.level1_target_size,
-                          level_size_multiplier: self.options.level_size_multiplier,
-                          max_compaction_bytes: self.options.max_compaction_bytes,
-                      },
-                      start,
-                      end,
-                  )?;''',
+              '''
+                      let decision = forgedb_lsm::pick_compaction(
+                          &levels,
+                          forgedb_lsm::CompactionConfig {
+                              l0_compaction_trigger: self.options.l0_compaction_trigger,
+                              level1_target_size: self.options.level1_target_size,
+                              level_size_multiplier: self.options.level_size_multiplier,
+                              max_compaction_bytes: self.options.max_compaction_bytes,
+                          },
+                      )?;
+              ''',
+              '''
+                      let decision = forgedb_lsm::pick_manual_compaction(
+                          &levels,
+                          forgedb_lsm::CompactionConfig {
+                              l0_compaction_trigger: self.options.l0_compaction_trigger,
+                              level1_target_size: self.options.level1_target_size,
+                              level_size_multiplier: self.options.level_size_multiplier,
+                              max_compaction_bytes: self.options.max_compaction_bytes,
+                          },
+                          start,
+                          end,
+                      )?;
+              ''',
               "database manual picker",
           )
           text = replace_once(
               text,
-              '''        if !plan_overlaps_requested_range(&plan, start, end) {
-                      return Ok(());
-                  }
-          
-          ''',
+              '''
+                      if !plan_overlaps_requested_range(&plan, start, end) {
+                          return Ok(());
+                      }
+
+              ''',
               "",
               "obsolete range filter",
           )
@@ -204,7 +228,8 @@ jobs:
               raise SystemExit("obsolete range helper boundaries not found")
           text = text[:start_index] + text[end_index:]
 
-          test = '''
+          test = dedent('''
+
               #[test]
               fn manual_range_compacts_requested_l0_file_below_pressure_trigger() -> Result<()> {
                   let directory = temporary_directory("manual-range")?;
@@ -221,7 +246,7 @@ jobs:
                   database.flush()?;
                   database.put(b"middle", b"two", WriteOptions::sync())?;
                   database.flush()?;
-          
+
                   database.compact_range(Some(b"m"), Some(b"z"))?;
                   assert_eq!(database.get(b"alpha")?, Some(b"one".to_vec()));
                   assert_eq!(database.get(b"middle")?, Some(b"two".to_vec()));
@@ -239,7 +264,7 @@ jobs:
                   })?;
                   Ok(())
               }
-          '''
+          ''')
           module_end = text.rfind("\n}")
           if module_end < 0:
               raise SystemExit("database compaction test module end not found")
