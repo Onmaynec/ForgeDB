@@ -18,18 +18,42 @@
 - Mutable/immutable memtable lifecycle для синхронного flush.
 - Двухфазный WAL rotation и SSTable installation protocol.
 - `Database::flush()` и point reads в порядке mutable → immutable → L0 от новых к старым.
-- Recovery текущего и previous WAL поколения через authoritative MANIFEST.
+- Recovery current и previous WAL в разных memtable generation.
+- WAL-first bootstrap: initial WAL синхронизируется до публикации MANIFEST/CURRENT.
+- Strict idempotent creation для header-only orphan WAL после crash до rotation edit.
+- Fail-safe отказ от повторного использования WAL с complete frame или partial tail.
+- Deterministic cleanup только reserved bootstrap artifacts при отсутствии CURRENT.
 - Безопасное игнорирование unreferenced SSTable: orphan не включается в live state автоматически.
 - Удаление obsolete WAL только после успешного sync MANIFEST installation edit.
-- Integration tests reopen-after-flush, SST checksum corruption, orphan SST и deterministic model.
+- `flush_in_progress` и `Busy` для concurrent flush/close.
+- Fatal writer state после MANIFEST append/sync error.
+- Integration tests reopen-after-flush, SST checksum corruption, orphan SST, missing live WAL, WAL bootstrap/rotation retry и deterministic model.
+- Crash recovery matrix `docs/CRASH_RECOVERY_MATRIX_V0.2.md`.
+- Draft release notes `docs/releases/V0.2.0_DRAFT.md`.
 - Русские нормативные документы SSTable V1, MANIFEST V1 и CURRENT V1.
+
+### Исправлено
+
+- Previous и current WAL больше не смешиваются в одну mutable memtable после crash между rotation и installation.
+- Повторный crash не может исключить previous WAL из MANIFEST до установки соответствующего SSTable.
+- Отсутствующий MANIFEST-owned WAL больше не пересоздаётся пустым и блокирует open как corruption.
+- Header-only WAL, оставшийся до публикации CURRENT или rotation edit, может быть безопасно повторно использован.
+- Non-empty orphan WAL сохраняется и блокирует flush вместо удаления или truncate.
+- Windows bootstrap retry не зависит от replacement semantics `std::fs::rename`: reserved destination очищается до установки нового MANIFEST.
+- `Database::close()` публикует closed state только после успешного WAL/MANIFEST sync.
+- Старый небезопасный `database.rs` удалён; активна generation-safe state machine.
+- Рассинхронизированный `Cargo.lock` обновлён до полного workspace `0.2.0`.
 
 ### Изменено
 
 - Workspace version повышена до `0.2.0`.
 - WAL получил canonical numbered generations.
+- Public `create_wal` идемпотентен только для строго проверенного header-only generation.
+- Public `create_manifest` гарантирует WAL-before-CURRENT bootstrap и запрещает reinitialize при существующем CURRENT.
 - Memtable различает `Missing`, `Value` и `Tombstone`.
-- Открытие базы проверяет все SSTables, на которые ссылается MANIFEST.
+- Открытие базы проверяет все SSTables и WAL, на которые ссылается MANIFEST.
+- CI использует `actions/checkout@v6` и `--locked` для clippy/tests/release build.
+- Статус инвариантов новой версии остаётся `draft` до подтверждённого зелёного release gate.
 
 ### Persisted-форматы
 
@@ -48,7 +72,8 @@
 - Range scan, snapshots и transactions ещё отсутствуют.
 - Flush синхронный; background worker и write stalls появятся позже.
 - SSTable reader версии 0.2 bounded-загружает файл в память.
-- Orphan-файлы не удаляются автоматически и пока не имеют отдельного CLI inventory report.
+- Произвольные orphan/unknown-файлы не удаляются автоматически и пока не имеют отдельного CLI inventory report.
+- GitHub-hosted CI private-репозитория сейчас заблокирован до checkout; версия не считается проверенной и не выпущена.
 
 ## [0.1.0] — 2026-08-03
 
@@ -74,7 +99,7 @@
 
 - Workspace version повышена до `0.1.0`.
 - `Database::close` синхронизирует WAL и освобождает системную блокировку.
-- Файловая абстракция получила синхронизированное `truncate_file`.
+- Файловая абстракция получила синхронизированный `truncate_file`.
 - Replay разрешает возрастающие sequence gaps, но запрещает пересечения и откат.
 
 ### Гарантии
