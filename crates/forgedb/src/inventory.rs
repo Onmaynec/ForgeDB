@@ -4,7 +4,8 @@ use std::path::Path;
 use forgedb_core::Result;
 use forgedb_fs::{FileSystem, IDENTITY_FILE_NAME, NativeFileSystem};
 use forgedb_manifest::{
-    CURRENT_FILE_NAME, ManifestState, manifest_file_name, parse_manifest_file_name,
+    CURRENT_FILE_NAME, ManifestState, ManifestStateV2, manifest_file_name,
+    parse_manifest_file_name,
 };
 use forgedb_sstable::parse_sst_file_name;
 use forgedb_wal::{parse_wal_file_name, wal_file_name};
@@ -35,12 +36,42 @@ impl FileInventory {
         manifest: &ManifestState,
         live_sst_numbers: impl IntoIterator<Item = u64>,
     ) -> Result<Self> {
+        Self::build_parts(
+            directory,
+            manifest.manifest_number,
+            manifest.log_number,
+            manifest.previous_log_number,
+            live_sst_numbers,
+        )
+    }
+
+    pub(crate) fn build_v2(
+        directory: &Path,
+        manifest: &ManifestStateV2,
+        live_sst_numbers: impl IntoIterator<Item = u64>,
+    ) -> Result<Self> {
+        Self::build_parts(
+            directory,
+            manifest.manifest_number,
+            manifest.log_number,
+            manifest.previous_log_number,
+            live_sst_numbers,
+        )
+    }
+
+    fn build_parts(
+        directory: &Path,
+        manifest_number: u64,
+        log_number: u64,
+        previous_log_number: Option<u64>,
+        live_sst_numbers: impl IntoIterator<Item = u64>,
+    ) -> Result<Self> {
         let filesystem = NativeFileSystem;
         let mut inventory = Self::default();
         let live_sst_numbers = live_sst_numbers.into_iter().collect::<BTreeSet<_>>();
-        let active_manifest = manifest_file_name(manifest.manifest_number);
-        let current_wal = wal_file_name(manifest.log_number);
-        let previous_wal = manifest.previous_log_number.map(wal_file_name);
+        let active_manifest = manifest_file_name(manifest_number);
+        let current_wal = wal_file_name(log_number);
+        let previous_wal = previous_log_number.map(wal_file_name);
         let mut seen = BTreeSet::<String>::new();
 
         for path in filesystem.list_dir(directory)? {
