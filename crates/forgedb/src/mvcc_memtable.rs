@@ -30,11 +30,7 @@ pub(crate) struct MvccMemTable {
 }
 
 impl MvccMemTable {
-    pub(crate) fn get_at(
-        &self,
-        user_key: &[u8],
-        snapshot: Option<SequenceNumber>,
-    ) -> MemLookup {
+    pub(crate) fn get_at(&self, user_key: &[u8], snapshot: Option<SequenceNumber>) -> MemLookup {
         let Some(snapshot) = snapshot else {
             return MemLookup::Missing;
         };
@@ -209,9 +205,11 @@ mod tests {
         let table = MvccMemTable::default();
         let mut batch = WriteBatch::new();
         batch.put(b"key", b"value")?;
-        assert!(table
-            .prepare(SequenceNumber::FIRST, &batch, &limits, 1)
-            .is_err());
+        assert!(
+            table
+                .prepare(SequenceNumber::FIRST, &batch, &limits, 1)
+                .is_err()
+        );
         assert_eq!(table.memory_usage(), 0);
         Ok(())
     }

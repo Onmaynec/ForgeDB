@@ -14,7 +14,7 @@ use forgedb_manifest::{
     CURRENT_FILE_NAME, ManifestState, ManifestWriter, VersionEdit, create_manifest, open_manifest,
 };
 use forgedb_sstable::{
-    TableBuildOptions, TableReader, build_table, sst_file_name,
+    TableBuildOptions, TableBuildRequest, TableReader, build_table, sst_file_name,
 };
 use forgedb_wal::{
     WalBatch, WalWriter, create_wal, open_wal_numbered, replay_wal_numbered, wal_file_name,
@@ -120,7 +120,9 @@ impl Database {
 
         let current_exists = directory.join(CURRENT_FILE_NAME).exists();
         let (manifest_writer, manifest, _) = if current_exists {
-            open_manifest(&filesystem, &directory, identity, &limits, options.read_only)?
+            let opened =
+                open_manifest(&filesystem, &directory, identity, &limits, options.read_only)?;
+            (opened.writer, opened.state, opened.replay)
         } else if options.read_only {
             return Err(Error::UnsupportedFormat {
                 component: "CURRENT/MANIFEST",
@@ -620,19 +622,22 @@ impl Database {
         }
 
         let build_result = (|| -> Result<_> {
+            let temporary_directory = self.directory.join(TEMP_DIRECTORY_NAME);
             let metadata = build_table(
                 filesystem,
-                &self.directory,
-                &self.directory.join(TEMP_DIRECTORY_NAME),
-                self.identity,
-                table_file_number,
-                &entries,
-                limits,
-                TableBuildOptions {
-                    data_block_size: self.options.data_block_size,
-                    restart_interval: self.options.restart_interval,
-                    bloom_bits_per_key: self.options.bloom_bits_per_key,
-                },
+                TableBuildRequest::new(
+                    &self.directory,
+                    &temporary_directory,
+                    self.identity,
+                    table_file_number,
+                    &entries,
+                    limits,
+                    TableBuildOptions {
+                        data_block_size: self.options.data_block_size,
+                        restart_interval: self.options.restart_interval,
+                        bloom_bits_per_key: self.options.bloom_bits_per_key,
+                    },
+                ),
             )?;
             let reader = TableReader::open(
                 filesystem,

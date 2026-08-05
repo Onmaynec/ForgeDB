@@ -219,12 +219,11 @@ pub(crate) fn validate_level_metadata(
         file.validate(limits)?;
     }
     if level_index == 0 {
-        if files
-            .windows(2)
-            .any(|pair| pair.first().zip(pair.get(1)).is_some_and(|(left, right)| {
-                left.file_number >= right.file_number
-            }))
-        {
+        if files.windows(2).any(|pair| {
+            pair.first()
+                .zip(pair.get(1))
+                .is_some_and(|(left, right)| left.file_number >= right.file_number)
+        }) {
             return Err(Error::corruption(
                 "VersionSet L0",
                 "L0 file numbers не строго возрастают",
@@ -262,11 +261,7 @@ pub(crate) fn validate_level_metadata(
 mod tests {
     use super::*;
 
-    fn metadata(
-        number: u64,
-        smallest: &[u8],
-        largest: &[u8],
-    ) -> Result<TableMeta> {
+    fn metadata(number: u64, smallest: &[u8], largest: &[u8]) -> Result<TableMeta> {
         Ok(TableMeta {
             file_number: number,
             file_size: 256,
@@ -280,29 +275,20 @@ mod tests {
 
     #[test]
     fn l1_rejects_overlapping_ranges() -> Result<()> {
-        let files = vec![
-            metadata(10, b"a", b"m")?,
-            metadata(11, b"m", b"z")?,
-        ];
+        let files = vec![metadata(10, b"a", b"m")?, metadata(11, b"m", b"z")?];
         assert!(validate_level_metadata(1, &files, &Limits::default()).is_err());
         Ok(())
     }
 
     #[test]
     fn l1_accepts_strictly_disjoint_ranges() -> Result<()> {
-        let files = vec![
-            metadata(10, b"a", b"m")?,
-            metadata(11, b"n", b"z")?,
-        ];
+        let files = vec![metadata(10, b"a", b"m")?, metadata(11, b"n", b"z")?];
         validate_level_metadata(1, &files, &Limits::default())
     }
 
     #[test]
     fn l0_requires_creation_order() -> Result<()> {
-        let files = vec![
-            metadata(20, b"a", b"z")?,
-            metadata(19, b"a", b"z")?,
-        ];
+        let files = vec![metadata(20, b"a", b"z")?, metadata(19, b"a", b"z")?];
         assert!(validate_level_metadata(0, &files, &Limits::default()).is_err());
         Ok(())
     }

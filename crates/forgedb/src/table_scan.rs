@@ -2,10 +2,12 @@ use std::cmp::Ordering;
 use std::fs;
 use std::path::Path;
 
-use forgedb_core::{DatabaseId, Error, InternalKey, InternalKeyCodec, Limits, Result, SequenceNumber, ValueType};
+use forgedb_core::{
+    DatabaseId, Error, InternalKey, InternalKeyCodec, Limits, Result, SequenceNumber, ValueType,
+};
 use forgedb_sstable::{
-    BLOCK_TRAILER_SIZE, CHECKSUM_TYPE_CRC32C, COMPRESSION_NONE, SST_FOOTER_SIZE,
-    SST_HEADER_SIZE, SSTABLE_FORMAT_VERSION, TableEntry, TableMeta,
+    BLOCK_TRAILER_SIZE, CHECKSUM_TYPE_CRC32C, COMPRESSION_NONE, SST_FOOTER_SIZE, SST_HEADER_SIZE,
+    SSTABLE_FORMAT_VERSION, TableEntry, TableMeta,
 };
 
 const SST_MAGIC: &[u8; 8] = b"FORGESST";
@@ -131,13 +133,8 @@ pub(crate) fn read_entries(
     let footer = bytes
         .get(footer_start..)
         .ok_or_else(|| corruption(path, "SSTable footer", "footer отсутствует"))?;
-    let (filter_handle, index_handle, properties_handle) = decode_footer(
-        path,
-        footer,
-        physical_size,
-        footer_offset,
-        verify_checksums,
-    )?;
+    let (filter_handle, index_handle, properties_handle) =
+        decode_footer(path, footer, physical_size, footer_offset, verify_checksums)?;
 
     let _filter = read_block(
         path,
@@ -177,13 +174,7 @@ pub(crate) fn read_entries(
     let mut entries = Vec::with_capacity(capacity);
     let mut previous: Option<InternalKey> = None;
     for (_, handle) in index {
-        let payload = read_block(
-            path,
-            &bytes,
-            handle,
-            "SSTable data block",
-            verify_checksums,
-        )?;
+        let payload = read_block(path, &bytes, handle, "SSTable data block", verify_checksums)?;
         for entry in decode_data_block(path, payload, limits)? {
             if previous
                 .as_ref()
@@ -256,9 +247,13 @@ fn decode_header(
     let id_slice = input
         .get(16..32)
         .ok_or_else(|| corruption(path, "SSTable header", "database UUID усечён"))?;
-    let id_bytes: [u8; 16] = id_slice
-        .try_into()
-        .map_err(|_| corruption(path, "SSTable header", "database UUID имеет неверную ширину"))?;
+    let id_bytes: [u8; 16] = id_slice.try_into().map_err(|_| {
+        corruption(
+            path,
+            "SSTable header",
+            "database UUID имеет неверную ширину",
+        )
+    })?;
     if DatabaseId::from_bytes(id_bytes) != expected_database_id {
         return Err(corruption(
             path,
@@ -322,8 +317,20 @@ fn decode_footer(
     let filter = decode_handle(path, input, 0, "SSTable filter handle")?;
     let index = decode_handle(path, input, 16, "SSTable index handle")?;
     let properties = decode_handle(path, input, 32, "SSTable properties handle")?;
-    validate_handle(path, filter, file_size, footer_offset, "SSTable filter handle")?;
-    validate_handle(path, index, file_size, footer_offset, "SSTable index handle")?;
+    validate_handle(
+        path,
+        filter,
+        file_size,
+        footer_offset,
+        "SSTable filter handle",
+    )?;
+    validate_handle(
+        path,
+        index,
+        file_size,
+        footer_offset,
+        "SSTable index handle",
+    )?;
     validate_handle(
         path,
         properties,
@@ -374,11 +381,13 @@ fn decode_index(
     let mut entries = Vec::with_capacity(count);
     let mut previous: Option<InternalKey> = None;
     for _ in 0..count {
-        let key_length = usize::try_from(read_u32(path, input, offset, "SSTable index")?)
-            .map_err(|_| Error::ResourceLimit {
-                resource: "sstable_index_key_length",
-                limit: u64::MAX,
-                observed: u64::MAX,
+        let key_length =
+            usize::try_from(read_u32(path, input, offset, "SSTable index")?).map_err(|_| {
+                Error::ResourceLimit {
+                    resource: "sstable_index_key_length",
+                    limit: u64::MAX,
+                    observed: u64::MAX,
+                }
             })?;
         offset = offset
             .checked_add(4)
@@ -422,7 +431,13 @@ fn decode_index(
             .get(key_end..handle_end)
             .ok_or_else(|| corruption(path, "SSTable index", "data handle усечён"))?;
         let handle = decode_handle(path, handle_bytes, 0, "SSTable data handle")?;
-        validate_handle(path, handle, file_size, footer_offset, "SSTable data handle")?;
+        validate_handle(
+            path,
+            handle,
+            file_size,
+            footer_offset,
+            "SSTable data handle",
+        )?;
         previous = Some(internal_key.clone());
         entries.push((internal_key, handle));
         offset = handle_end;
@@ -445,17 +460,14 @@ fn decode_data_block(path: &Path, payload: &[u8], limits: &Limits) -> Result<Vec
         .len()
         .checked_sub(4)
         .ok_or_else(|| corruption(path, "SSTable data block", "restart count отсутствует"))?;
-    let restart_count = usize::try_from(read_u32(
-        path,
-        payload,
-        count_offset,
-        "SSTable data block",
-    )?)
-    .map_err(|_| Error::ResourceLimit {
-        resource: "sstable_restart_count",
-        limit: u64::MAX,
-        observed: u64::MAX,
-    })?;
+    let restart_count =
+        usize::try_from(read_u32(path, payload, count_offset, "SSTable data block")?).map_err(
+            |_| Error::ResourceLimit {
+                resource: "sstable_restart_count",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            },
+        )?;
     if restart_count == 0 {
         return Err(corruption(
             path,
@@ -477,17 +489,12 @@ fn decode_data_block(path: &Path, payload: &[u8], limits: &Limits) -> Result<Vec
             .checked_mul(4)
             .and_then(|value| restart_start.checked_add(value))
             .ok_or_else(|| corruption(path, "SSTable data block", "restart offset переполнен"))?;
-        let restart = usize::try_from(read_u32(
-            path,
-            payload,
-            byte_offset,
-            "SSTable data block",
-        )?)
-        .map_err(|_| Error::ResourceLimit {
-            resource: "sstable_restart_offset",
-            limit: u64::try_from(restart_start).unwrap_or(u64::MAX),
-            observed: u64::MAX,
-        })?;
+        let restart = usize::try_from(read_u32(path, payload, byte_offset, "SSTable data block")?)
+            .map_err(|_| Error::ResourceLimit {
+                resource: "sstable_restart_offset",
+                limit: u64::try_from(restart_start).unwrap_or(u64::MAX),
+                observed: u64::MAX,
+            })?;
         if restart >= restart_start
             || previous_restart.is_some_and(|previous| restart <= previous)
             || (index == 0 && restart != 0)
@@ -639,7 +646,11 @@ fn read_block<'a>(
         .get(payload_end + 2..payload_end + 4)
         .ok_or_else(|| corruption(path, component, "reserved trailer усечён"))?;
     if reserved.iter().any(|byte| *byte != 0) {
-        return Err(corruption(path, component, "reserved trailer не равен нулю"));
+        return Err(corruption(
+            path,
+            component,
+            "reserved trailer не равен нулю",
+        ));
     }
     if compression != COMPRESSION_NONE {
         return Err(Error::UnsupportedFormat {
@@ -702,7 +713,11 @@ fn validate_handle(
         || end > footer_offset
         || end > file_size
     {
-        return Err(corruption(path, component, "block handle выходит за границы"));
+        return Err(corruption(
+            path,
+            component,
+            "block handle выходит за границы",
+        ));
     }
     Ok(())
 }
@@ -711,20 +726,14 @@ fn ensure_non_overlapping(path: &Path, handles: &[BlockHandle]) -> Result<()> {
     let mut sorted = handles.to_vec();
     sorted.sort_by_key(|handle| handle.offset);
     for pair in sorted.windows(2) {
-        let left = pair
-            .first()
-            .copied()
-            .ok_or(Error::InternalInvariant {
-                invariant: "I-SST-HANDLE-WINDOW",
-                reason: "окно handles не содержит left".to_owned(),
-            })?;
-        let right = pair
-            .get(1)
-            .copied()
-            .ok_or(Error::InternalInvariant {
-                invariant: "I-SST-HANDLE-WINDOW",
-                reason: "окно handles не содержит right".to_owned(),
-            })?;
+        let left = pair.first().copied().ok_or(Error::InternalInvariant {
+            invariant: "I-SST-HANDLE-WINDOW",
+            reason: "окно handles не содержит left".to_owned(),
+        })?;
+        let right = pair.get(1).copied().ok_or(Error::InternalInvariant {
+            invariant: "I-SST-HANDLE-WINDOW",
+            reason: "окно handles не содержит right".to_owned(),
+        })?;
         let left_end = left
             .offset
             .checked_add(left.length)
@@ -785,12 +794,7 @@ fn validate_metadata(path: &Path, metadata: &TableMeta, entries: &[TableEntry]) 
     Ok(())
 }
 
-fn decode_varint32(
-    path: &Path,
-    input: &[u8],
-    offset: &mut usize,
-    limit: usize,
-) -> Result<usize> {
+fn decode_varint32(path: &Path, input: &[u8], offset: &mut usize, limit: usize) -> Result<usize> {
     let mut value = 0_u32;
     for shift in (0..35).step_by(7) {
         if *offset >= limit {
@@ -854,11 +858,7 @@ fn read_u64(path: &Path, input: &[u8], offset: usize, component: &'static str) -
     Ok(u64::from_le_bytes(bytes))
 }
 
-fn corruption(
-    path: &Path,
-    component: &'static str,
-    reason: impl Into<String>,
-) -> Error {
+fn corruption(path: &Path, component: &'static str, reason: impl Into<String>) -> Error {
     Error::Corruption {
         file: Some(path.to_path_buf()),
         offset: None,

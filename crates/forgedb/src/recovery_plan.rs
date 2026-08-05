@@ -5,9 +5,9 @@ use forgedb_fs::{FileSystem, NativeFileSystem, read_identity};
 use forgedb_manifest::{manifest_file_name, open_manifest};
 use forgedb_wal::wal_file_name;
 
+use crate::Options;
 use crate::inventory::FileInventory;
 use crate::version_set::VersionSet;
-use crate::Options;
 
 const LOCK_FILE_NAME: &str = "LOCK";
 const ORPHAN_DIRECTORY_NAME: &str = ".forgedb-orphans";
@@ -46,13 +46,8 @@ impl RecoveryPlan {
         let identity = read_identity(&filesystem, &database_path)?;
         let options = Options::default();
         let limits = options.limits()?;
-        let (_, manifest, _) = open_manifest(
-            &filesystem,
-            &database_path,
-            identity,
-            &limits,
-            true,
-        )?;
+        let opened = open_manifest(&filesystem, &database_path, identity, &limits, true)?;
+        let manifest = opened.state;
         let version = VersionSet::open(
             &database_path,
             identity,
@@ -88,20 +83,21 @@ impl RecoveryPlan {
         replay_wals: Vec<String>,
         inventory: FileInventory,
     ) -> Self {
-        let mut planned_safe_cleanup = inventory
-            .obsolete
-            .iter()
-            .map(|name| format!("удалить obsolete file после повторной проверки: {name}"))
-            .chain(
-                inventory
-                    .temporary
-                    .iter()
-                    .map(|name| format!("удалить temporary artifact после проверки: {name}")),
-            )
-            .chain(inventory.orphan_sst.iter().map(|name| {
-                format!("переместить orphan SST в {ORPHAN_DIRECTORY_NAME}/: {name}")
-            }))
-            .collect::<Vec<_>>();
+        let mut planned_safe_cleanup =
+            inventory
+                .obsolete
+                .iter()
+                .map(|name| format!("удалить obsolete file после повторной проверки: {name}"))
+                .chain(
+                    inventory
+                        .temporary
+                        .iter()
+                        .map(|name| format!("удалить temporary artifact после проверки: {name}")),
+                )
+                .chain(inventory.orphan_sst.iter().map(|name| {
+                    format!("переместить orphan SST в {ORPHAN_DIRECTORY_NAME}/: {name}")
+                }))
+                .collect::<Vec<_>>();
         planned_safe_cleanup.sort();
 
         let mut warnings = Vec::new();
@@ -109,10 +105,13 @@ impl RecoveryPlan {
             warnings.push("обнаружены orphan SSTables; они не входят в live state".to_owned());
         }
         if !inventory.backup_artifacts.is_empty() {
-            warnings.push("обнаружены backup artifacts; normal recovery их не использует".to_owned());
+            warnings
+                .push("обнаружены backup artifacts; normal recovery их не использует".to_owned());
         }
         if !inventory.user_files.is_empty() {
-            warnings.push("обнаружены явно помеченные user files; cleanup их не затрагивает".to_owned());
+            warnings.push(
+                "обнаружены явно помеченные user files; cleanup их не затрагивает".to_owned(),
+            );
         }
         if !inventory.unknown.is_empty() {
             warnings.push("обнаружены unknown files; автоматическое удаление запрещено".to_owned());

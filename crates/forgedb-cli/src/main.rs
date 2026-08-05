@@ -112,7 +112,10 @@ fn run() -> Result<()> {
             println!("levels: {}", report.level_count);
             println!("live SSTables: {}", report.live_sstables);
             println!("entries checked: {}", report.entries_checked);
-            println!("oldest active snapshot: {:?}", report.oldest_active_snapshot);
+            println!(
+                "oldest active snapshot: {:?}",
+                report.oldest_active_snapshot
+            );
             for warning in report.warnings {
                 println!("warning: {warning}");
             }

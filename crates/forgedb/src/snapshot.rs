@@ -147,9 +147,15 @@ mod tests {
         let handle_id = DatabaseId::random();
         let newer = registry.register(identity, handle_id, Some(SequenceNumber::new(9)?))?;
         let older = registry.register(identity, handle_id, Some(SequenceNumber::new(3)?))?;
-        assert_eq!(registry.oldest_active_sequence()?, Some(SequenceNumber::new(3)?));
+        assert_eq!(
+            registry.oldest_active_sequence()?,
+            Some(SequenceNumber::new(3)?)
+        );
         drop(older);
-        assert_eq!(registry.oldest_active_sequence()?, Some(SequenceNumber::new(9)?));
+        assert_eq!(
+            registry.oldest_active_sequence()?,
+            Some(SequenceNumber::new(9)?)
+        );
         drop(newer);
         Ok(())
     }

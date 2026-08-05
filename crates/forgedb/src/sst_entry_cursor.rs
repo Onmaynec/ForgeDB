@@ -6,8 +6,8 @@ use forgedb_core::{
     DatabaseId, Error, InternalKey, InternalKeyCodec, Limits, Result, SequenceNumber, ValueType,
 };
 use forgedb_sstable::{
-    BLOCK_TRAILER_SIZE, CHECKSUM_TYPE_CRC32C, COMPRESSION_NONE, SST_FOOTER_SIZE,
-    SST_HEADER_SIZE, SSTABLE_FORMAT_VERSION, TableEntry, TableMeta,
+    BLOCK_TRAILER_SIZE, CHECKSUM_TYPE_CRC32C, COMPRESSION_NONE, SST_FOOTER_SIZE, SST_HEADER_SIZE,
+    SSTABLE_FORMAT_VERSION, TableEntry, TableMeta,
 };
 
 use crate::entry_cursor::EntryCursor;
@@ -103,13 +103,7 @@ impl SstEntryCursor {
 
         let mut file = File::open(path)
             .map_err(|source| Error::io("open_sstable_cursor", Some(path.to_path_buf()), source))?;
-        let header = read_exact_at(
-            &mut file,
-            path,
-            0,
-            SST_HEADER_SIZE,
-            "read_sstable_header",
-        )?;
+        let header = read_exact_at(&mut file, path, 0, SST_HEADER_SIZE, "read_sstable_header")?;
         decode_header(
             path,
             &header,
@@ -206,13 +200,14 @@ impl SstEntryCursor {
 
     fn load_next_block(&mut self) -> Result<()> {
         while self.next_block < self.data_handles.len() {
-            let handle = *self
-                .data_handles
-                .get(self.next_block)
-                .ok_or(Error::InternalInvariant {
-                    invariant: "I-SST-CURSOR-BLOCK-INDEX",
-                    reason: "index data block cursor вышел за границы".to_owned(),
-                })?;
+            let handle =
+                *self
+                    .data_handles
+                    .get(self.next_block)
+                    .ok_or(Error::InternalInvariant {
+                        invariant: "I-SST-CURSOR-BLOCK-INDEX",
+                        reason: "index data block cursor вышел за границы".to_owned(),
+                    })?;
             self.next_block = self.next_block.checked_add(1).ok_or(Error::ResourceLimit {
                 resource: "sstable_cursor_block_index",
                 limit: u64::MAX,
@@ -251,13 +246,14 @@ impl SstEntryCursor {
             self.position = 0;
             #[cfg(test)]
             {
-                self.blocks_loaded = self.blocks_loaded.checked_add(1).ok_or(
-                    Error::ResourceLimit {
-                        resource: "sstable_cursor_blocks_loaded",
-                        limit: u64::MAX,
-                        observed: u64::MAX,
-                    },
-                )?;
+                self.blocks_loaded =
+                    self.blocks_loaded
+                        .checked_add(1)
+                        .ok_or(Error::ResourceLimit {
+                            resource: "sstable_cursor_blocks_loaded",
+                            limit: u64::MAX,
+                            observed: u64::MAX,
+                        })?;
                 self.max_resident_entries = self.max_resident_entries.max(self.block_entries.len());
             }
             return Ok(());
@@ -276,14 +272,14 @@ impl SstEntryCursor {
             limit: u64::MAX,
             observed: u64::MAX,
         })?;
-        self.entries_seen = self
-            .entries_seen
-            .checked_add(block_count)
-            .ok_or(Error::ResourceLimit {
-                resource: "sstable_cursor_entry_count",
-                limit: self.metadata.entry_count,
-                observed: u64::MAX,
-            })?;
+        self.entries_seen =
+            self.entries_seen
+                .checked_add(block_count)
+                .ok_or(Error::ResourceLimit {
+                    resource: "sstable_cursor_entry_count",
+                    limit: self.metadata.entry_count,
+                    observed: u64::MAX,
+                })?;
         if self.entries_seen > self.metadata.entry_count {
             return Err(corruption(
                 &self.path,
@@ -424,7 +420,11 @@ fn read_block_from_file(
         .get(payload_end + 2..payload_end + 4)
         .ok_or_else(|| corruption(path, component, "reserved trailer усечён"))?;
     if reserved.iter().any(|byte| *byte != 0) {
-        return Err(corruption(path, component, "reserved trailer не равен нулю"));
+        return Err(corruption(
+            path,
+            component,
+            "reserved trailer не равен нулю",
+        ));
     }
     if compression != COMPRESSION_NONE {
         return Err(Error::UnsupportedFormat {
@@ -466,7 +466,11 @@ fn decode_header(
     verify_checksums: bool,
 ) -> Result<()> {
     if input.len() != SST_HEADER_SIZE || input.get(0..8) != Some(SST_MAGIC.as_slice()) {
-        return Err(corruption(path, "SSTable header", "неверная сигнатура или длина"));
+        return Err(corruption(
+            path,
+            "SSTable header",
+            "неверная сигнатура или длина",
+        ));
     }
     let version = read_u16(path, input, 8, "SSTable header")?;
     if version != SSTABLE_FORMAT_VERSION {
@@ -502,7 +506,13 @@ fn decode_header(
         .get(16..32)
         .ok_or_else(|| corruption(path, "SSTable header", "database UUID усечён"))?
         .try_into()
-        .map_err(|_| corruption(path, "SSTable header", "database UUID имеет неверную ширину"))?;
+        .map_err(|_| {
+            corruption(
+                path,
+                "SSTable header",
+                "database UUID имеет неверную ширину",
+            )
+        })?;
     if DatabaseId::from_bytes(id_bytes) != expected_database_id {
         return Err(corruption(
             path,
@@ -537,7 +547,11 @@ fn decode_footer(
     verify_checksums: bool,
 ) -> Result<(BlockHandle, BlockHandle, BlockHandle)> {
     if input.len() != SST_FOOTER_SIZE || input.get(56..64) != Some(FOOTER_MAGIC.as_slice()) {
-        return Err(corruption(path, "SSTable footer", "неверная сигнатура или длина"));
+        return Err(corruption(
+            path,
+            "SSTable footer",
+            "неверная сигнатура или длина",
+        ));
     }
     let version = read_u16(path, input, 48, "SSTable footer")?;
     if version != SSTABLE_FORMAT_VERSION {
@@ -563,8 +577,20 @@ fn decode_footer(
     let filter = decode_handle(path, input, 0, "SSTable filter handle")?;
     let index = decode_handle(path, input, 16, "SSTable index handle")?;
     let properties = decode_handle(path, input, 32, "SSTable properties handle")?;
-    validate_handle(path, filter, file_size, footer_offset, "SSTable filter handle")?;
-    validate_handle(path, index, file_size, footer_offset, "SSTable index handle")?;
+    validate_handle(
+        path,
+        filter,
+        file_size,
+        footer_offset,
+        "SSTable filter handle",
+    )?;
+    validate_handle(
+        path,
+        index,
+        file_size,
+        footer_offset,
+        "SSTable index handle",
+    )?;
     validate_handle(
         path,
         properties,
@@ -622,11 +648,13 @@ fn decode_index(
     let mut entries = Vec::with_capacity(count);
     let mut previous: Option<InternalKey> = None;
     for _ in 0..count {
-        let key_length = usize::try_from(read_u32(path, input, offset, "SSTable index")?)
-            .map_err(|_| Error::ResourceLimit {
-                resource: "sstable_index_key_length",
-                limit: u64::MAX,
-                observed: u64::MAX,
+        let key_length =
+            usize::try_from(read_u32(path, input, offset, "SSTable index")?).map_err(|_| {
+                Error::ResourceLimit {
+                    resource: "sstable_index_key_length",
+                    limit: u64::MAX,
+                    observed: u64::MAX,
+                }
             })?;
         offset = offset
             .checked_add(4)
@@ -670,7 +698,13 @@ fn decode_index(
             .get(key_end..handle_end)
             .ok_or_else(|| corruption(path, "SSTable index", "data handle усечён"))?;
         let handle = decode_handle(path, handle_bytes, 0, "SSTable data handle")?;
-        validate_handle(path, handle, file_size, footer_offset, "SSTable data handle")?;
+        validate_handle(
+            path,
+            handle,
+            file_size,
+            footer_offset,
+            "SSTable data handle",
+        )?;
         previous = Some(internal_key.clone());
         entries.push((internal_key, handle));
         offset = handle_end;
@@ -685,11 +719,7 @@ fn decode_index(
     Ok(entries)
 }
 
-fn decode_data_block(
-    path: &Path,
-    payload: &[u8],
-    limits: CursorLimits,
-) -> Result<Vec<TableEntry>> {
+fn decode_data_block(path: &Path, payload: &[u8], limits: CursorLimits) -> Result<Vec<TableEntry>> {
     if payload.len() < 8 {
         return Err(corruption(path, "SSTable data block", "block слишком мал"));
     }
@@ -697,17 +727,14 @@ fn decode_data_block(
         .len()
         .checked_sub(4)
         .ok_or_else(|| corruption(path, "SSTable data block", "restart count отсутствует"))?;
-    let restart_count = usize::try_from(read_u32(
-        path,
-        payload,
-        count_offset,
-        "SSTable data block",
-    )?)
-    .map_err(|_| Error::ResourceLimit {
-        resource: "sstable_restart_count",
-        limit: u64::MAX,
-        observed: u64::MAX,
-    })?;
+    let restart_count =
+        usize::try_from(read_u32(path, payload, count_offset, "SSTable data block")?).map_err(
+            |_| Error::ResourceLimit {
+                resource: "sstable_restart_count",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            },
+        )?;
     if restart_count == 0 {
         return Err(corruption(
             path,
@@ -729,17 +756,12 @@ fn decode_data_block(
             .checked_mul(4)
             .and_then(|value| restart_start.checked_add(value))
             .ok_or_else(|| corruption(path, "SSTable data block", "restart offset переполнен"))?;
-        let restart = usize::try_from(read_u32(
-            path,
-            payload,
-            byte_offset,
-            "SSTable data block",
-        )?)
-        .map_err(|_| Error::ResourceLimit {
-            resource: "sstable_restart_offset",
-            limit: u64::try_from(restart_start).unwrap_or(u64::MAX),
-            observed: u64::MAX,
-        })?;
+        let restart = usize::try_from(read_u32(path, payload, byte_offset, "SSTable data block")?)
+            .map_err(|_| Error::ResourceLimit {
+                resource: "sstable_restart_offset",
+                limit: u64::try_from(restart_start).unwrap_or(u64::MAX),
+                observed: u64::MAX,
+            })?;
         if restart >= restart_start
             || previous_restart.is_some_and(|previous| restart <= previous)
             || (index == 0 && restart != 0)
@@ -887,7 +909,11 @@ fn validate_handle(
         || end > footer_offset
         || end > file_size
     {
-        return Err(corruption(path, component, "block handle выходит за границы"));
+        return Err(corruption(
+            path,
+            component,
+            "block handle выходит за границы",
+        ));
     }
     Ok(())
 }
@@ -896,20 +922,14 @@ fn ensure_non_overlapping(path: &Path, handles: &[BlockHandle]) -> Result<()> {
     let mut sorted = handles.to_vec();
     sorted.sort_by_key(|handle| handle.offset);
     for pair in sorted.windows(2) {
-        let left = pair
-            .first()
-            .copied()
-            .ok_or(Error::InternalInvariant {
-                invariant: "I-SST-HANDLE-WINDOW",
-                reason: "окно handles не содержит left".to_owned(),
-            })?;
-        let right = pair
-            .get(1)
-            .copied()
-            .ok_or(Error::InternalInvariant {
-                invariant: "I-SST-HANDLE-WINDOW",
-                reason: "окно handles не содержит right".to_owned(),
-            })?;
+        let left = pair.first().copied().ok_or(Error::InternalInvariant {
+            invariant: "I-SST-HANDLE-WINDOW",
+            reason: "окно handles не содержит left".to_owned(),
+        })?;
+        let right = pair.get(1).copied().ok_or(Error::InternalInvariant {
+            invariant: "I-SST-HANDLE-WINDOW",
+            reason: "окно handles не содержит right".to_owned(),
+        })?;
         let left_end = left
             .offset
             .checked_add(left.length)
@@ -925,12 +945,7 @@ fn ensure_non_overlapping(path: &Path, handles: &[BlockHandle]) -> Result<()> {
     Ok(())
 }
 
-fn decode_varint32(
-    path: &Path,
-    input: &[u8],
-    offset: &mut usize,
-    limit: usize,
-) -> Result<usize> {
+fn decode_varint32(path: &Path, input: &[u8], offset: &mut usize, limit: usize) -> Result<usize> {
     let mut value = 0_u32;
     for shift in (0..35).step_by(7) {
         if *offset >= limit {
@@ -1022,7 +1037,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use forgedb_fs::NativeFileSystem;
-    use forgedb_sstable::{TableBuildOptions, build_table, sst_file_name};
+    use forgedb_sstable::{TableBuildOptions, TableBuildRequest, build_table, sst_file_name};
 
     use super::*;
 
@@ -1055,29 +1070,25 @@ mod tests {
             )?);
         }
         entries.sort_by(|left, right| left.internal_key.cmp(&right.internal_key));
+        let temporary_directory = directory.join("TEMP");
         let metadata = build_table(
             &NativeFileSystem,
-            &directory,
-            &directory.join("TEMP"),
-            identity,
-            7,
-            &entries,
-            &limits,
-            TableBuildOptions {
-                data_block_size: 1024,
-                restart_interval: 4,
-                bloom_bits_per_key: 10,
-            },
+            TableBuildRequest::new(
+                &directory,
+                &temporary_directory,
+                identity,
+                7,
+                &entries,
+                &limits,
+                TableBuildOptions {
+                    data_block_size: 1024,
+                    restart_interval: 4,
+                    bloom_bits_per_key: 10,
+                },
+            ),
         )?;
         let path = directory.join(sst_file_name(7));
-        let mut cursor = SstEntryCursor::open(
-            &path,
-            identity,
-            &metadata,
-            &limits,
-            u64::MAX,
-            true,
-        )?;
+        let mut cursor = SstEntryCursor::open(&path, identity, &metadata, &limits, u64::MAX, true)?;
         let mut observed = 0_usize;
         while cursor.current().is_some() {
             observed = observed.checked_add(1).ok_or(Error::ResourceLimit {

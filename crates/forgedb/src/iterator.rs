@@ -327,9 +327,7 @@ impl Iterator for DbIterator {
                     }));
                 };
                 match self.consume_item(item) {
-                    Ok(entry)
-                        if visible.is_none() && entry.internal_key.sequence() <= snapshot =>
-                    {
+                    Ok(entry) if visible.is_none() && entry.internal_key.sequence() <= snapshot => {
                         visible = Some(entry);
                     }
                     Ok(_) => {}

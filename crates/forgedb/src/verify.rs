@@ -79,11 +79,13 @@ pub(crate) fn verify_version(
                 options.verify_checksums,
             )?;
             entries_checked = entries_checked
-                .checked_add(u64::try_from(entries.len()).map_err(|_| Error::ResourceLimit {
-                    resource: "verify_entries_checked",
-                    limit: u64::MAX,
-                    observed: u64::MAX,
-                })?)
+                .checked_add(
+                    u64::try_from(entries.len()).map_err(|_| Error::ResourceLimit {
+                        resource: "verify_entries_checked",
+                        limit: u64::MAX,
+                        observed: u64::MAX,
+                    })?,
+                )
                 .ok_or(Error::ResourceLimit {
                     resource: "verify_entries_checked",
                     limit: u64::MAX,

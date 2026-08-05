@@ -85,16 +85,12 @@ mod tests {
         ];
         let mut cursor = VecEntryCursor::new(entries);
         assert_eq!(
-            cursor
-                .current()
-                .map(|entry| entry.internal_key.user_key()),
+            cursor.current().map(|entry| entry.internal_key.user_key()),
             Some(b"a".as_slice())
         );
         cursor.advance()?;
         assert_eq!(
-            cursor
-                .current()
-                .map(|entry| entry.internal_key.user_key()),
+            cursor.current().map(|entry| entry.internal_key.user_key()),
             Some(b"b".as_slice())
         );
         cursor.advance()?;

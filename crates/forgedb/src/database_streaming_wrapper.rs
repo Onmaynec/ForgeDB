@@ -210,8 +210,14 @@ mod streaming_wrapper_tests {
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(rows.len(), 260);
         assert!(rows.windows(2).all(|pair| pair[0].0 < pair[1].0));
-        assert_eq!(rows.first().map(|row| row.0.as_slice()), Some(b"key-0050"));
-        assert_eq!(rows.last().map(|row| row.0.as_slice()), Some(b"key-0309"));
+        assert_eq!(
+            rows.first().map(|row| row.0.as_slice()),
+            Some(b"key-0050".as_slice())
+        );
+        assert_eq!(
+            rows.last().map(|row| row.0.as_slice()),
+            Some(b"key-0309".as_slice())
+        );
 
         database.close()?;
         fs::remove_dir_all(&directory)
