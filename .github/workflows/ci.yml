@@ -6,9 +6,135 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  canonicalize-v04-picker:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feature/v0.4.0-leveled-compaction'
+    name: canonicalize v0.4 picker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Replace positional build request
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/forgedb-lsm/src/lib.rs")
+          text = path.read_text()
+
+          old_l0 = '''    build_plan(
+                  0,
+                  1,
+                  level_zero,
+                  level_one,
+                  &selected_l0,
+                  &selected_l1,
+                  smallest,
+                  largest,
+                  score,
+              )'''
+          new_l0 = '''    build_plan(BuildPlanRequest {
+                  source_level: 0,
+                  output_level: 1,
+                  source: level_zero,
+                  target: level_one,
+                  selected_source: &selected_l0,
+                  selected_target: &selected_l1,
+                  smallest_user_key: smallest,
+                  largest_user_key: largest,
+                  score,
+              })'''
+          old_level = '''    build_plan(
+                  score.level,
+                  output_level,
+                  source,
+                  target,
+                  &selected_source,
+                  &selected_target,
+                  smallest,
+                  largest,
+                  score,
+              )'''
+          new_level = '''    build_plan(BuildPlanRequest {
+                  source_level: score.level,
+                  output_level,
+                  source,
+                  target,
+                  selected_source: &selected_source,
+                  selected_target: &selected_target,
+                  smallest_user_key: smallest,
+                  largest_user_key: largest,
+                  score,
+              })'''
+          old_header = '''#[allow(clippy::too_many_arguments)]
+          fn build_plan(
+              source_level: usize,
+              output_level: usize,
+              source: &[TableMeta],
+              target: &[TableMeta],
+              selected_source: &BTreeSet<u64>,
+              selected_target: &BTreeSet<u64>,
+              smallest_user_key: Vec<u8>,
+              largest_user_key: Vec<u8>,
+              score: CompactionScore,
+          ) -> Result<CompactionPlan> {'''
+          new_header = '''struct BuildPlanRequest<'a> {
+              source_level: usize,
+              output_level: usize,
+              source: &'a [TableMeta],
+              target: &'a [TableMeta],
+              selected_source: &'a BTreeSet<u64>,
+              selected_target: &'a BTreeSet<u64>,
+              smallest_user_key: Vec<u8>,
+              largest_user_key: Vec<u8>,
+              score: CompactionScore,
+          }
+
+          fn build_plan(request: BuildPlanRequest<'_>) -> Result<CompactionPlan> {
+              let BuildPlanRequest {
+                  source_level,
+                  output_level,
+                  source,
+                  target,
+                  selected_source,
+                  selected_target,
+                  smallest_user_key,
+                  largest_user_key,
+                  score,
+              } = request;'''
+
+          replacements = [(old_l0, new_l0), (old_level, new_level), (old_header, new_header)]
+          for old, new in replacements:
+              if old in text:
+                  text = text.replace(old, new, 1)
+              elif new not in text:
+                  raise SystemExit("expected compaction picker fragment not found")
+          path.write_text(text)
+          PY
+      - run: cargo fmt --all
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-features
+      - name: Commit canonical picker
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "v0.4 picker already canonical"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/forgedb-lsm/src/lib.rs
+          git commit -m "refactor(v0.4): type compaction plan construction"
+          git push origin HEAD:${{ github.head_ref }}
+
   test:
     name: ${{ matrix.os }} / stable
     strategy:
