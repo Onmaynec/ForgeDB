@@ -523,6 +523,8 @@ mod database_compaction_tests {
         assert_eq!(database.file_inventory()?.orphan_sst.len(), 2);
 
         drop(iterator);
+        assert_eq!(database.file_inventory()?.orphan_sst.len(), 2);
+        database.put(b"cleanup-trigger", b"value", WriteOptions::sync())?;
         assert!(database.file_inventory()?.orphan_sst.is_empty());
         database.close()?;
         fs::remove_dir_all(&directory).map_err(|source| {

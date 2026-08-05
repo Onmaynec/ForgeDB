@@ -278,6 +278,7 @@ impl Database {
         self.apply_write_stall()?;
         let mut state = self.lock_state()?;
         ensure_writer_healthy(&state)?;
+        self.collect_obsolete_ssts_locked(&mut state)?;
         let sequence_start = state.next_sequence;
         let sequence_end = sequence_start.inclusive_end(batch.len())?;
         let next_sequence = sequence_end.checked_next()?;
@@ -451,8 +452,7 @@ impl Database {
     pub fn file_inventory(&self) -> Result<FileInventory> {
         self.ensure_open()?;
         let (manifest, version) = {
-            let mut state = self.lock_state()?;
-            self.collect_obsolete_ssts_locked(&mut state)?;
+            let state = self.lock_state()?;
             (state.manifest.clone(), Arc::clone(&state.version))
         };
         inventory_for(version.as_ref(), &manifest)
@@ -516,6 +516,7 @@ impl Database {
     fn prepare_flush(&self, filesystem: &NativeFileSystem, limits: &Limits) -> Result<FlushWork> {
         let mut state = self.lock_state()?;
         ensure_writer_healthy(&state)?;
+        self.collect_obsolete_ssts_locked(&mut state)?;
         if state.flush_in_progress {
             return Err(Error::Busy {
                 reason: "другой flush уже выполняется".to_owned(),
