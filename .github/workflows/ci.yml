@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   test:
@@ -37,3 +37,49 @@ jobs:
           components: clippy
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace --all-features
+
+  fix_initial_file_number:
+    name: fix MANIFEST V2 initial file number
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feature/v0.4.0-leveled-compaction
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Apply unified numbering fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/forgedb-manifest/src/v2.rs")
+          text = path.read_text()
+          old = '''        let next_file_number = initial_log_number
+              .checked_add(1)
+              .ok_or(Error::ResourceLimit {'''
+          new = '''        let next_file_number = manifest_number
+              .max(initial_log_number)
+              .checked_add(1)
+              .ok_or(Error::ResourceLimit {'''
+          if text.count(old) != 1:
+              raise SystemExit(f"initial next_file_number pattern count: {text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - run: cargo fmt --all
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-features
+      - run: cargo test --locked --workspace --doc
+      - run: cargo build --locked --workspace --release
+      - name: Commit unified numbering fix
+        run: |
+          if git diff --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/forgedb-manifest/src/v2.rs crates/forgedb/src
+          git commit -m "fix(v0.4): keep initial file numbers globally monotonic"
+          git push origin HEAD:feature/v0.4.0-leveled-compaction
