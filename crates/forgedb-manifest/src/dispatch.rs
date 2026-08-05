@@ -6,11 +6,11 @@ use forgedb_fs::FileSystem;
 use forgedb_sstable::sst_file_name;
 use forgedb_wal::wal_file_name;
 
-use crate::log::{ManifestWriter, OpenManifest, open_manifest};
-use crate::state::ManifestState;
-use crate::v2::{ManifestStateV2, MANIFEST_V2_FORMAT_VERSION};
-use crate::v2_log::{ManifestV2Writer, OpenManifestV2, open_manifest_v2};
+use crate::log::{OpenManifest, open_manifest};
 use crate::manifest_file_name;
+use crate::state::ManifestState;
+use crate::v2::{MANIFEST_V2_FORMAT_VERSION, ManifestStateV2};
+use crate::v2_log::{OpenManifestV2, open_manifest_v2};
 
 /// Active MANIFEST, определённый по persisted header version.
 #[derive(Debug)]
@@ -40,10 +40,10 @@ pub fn open_manifest_any<F: FileSystem>(
     match open_manifest_v2(filesystem, directory, database_id, limits, read_only) {
         Ok(opened) => Ok(OpenManifestAny::V2(opened)),
         Err(Error::UnsupportedFormat {
-            component,
+            component: "MANIFEST V2",
             found: 1,
             ..
-        }) if component == "MANIFEST V2" => open_manifest(
+        }) => open_manifest(
             filesystem,
             directory,
             database_id,
@@ -137,7 +137,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use forgedb_fs::{FileSystem, NativeFileSystem};
+    use forgedb_fs::NativeFileSystem;
 
     use super::*;
     use crate::{create_manifest, migrate_manifest_v1_to_v2};
@@ -181,11 +181,8 @@ mod tests {
         assert_eq!(opened_v1.format_version(), 1);
         drop(opened_v1);
 
-        let number = next_available_manifest_number(
-            &filesystem,
-            &directory,
-            v1.next_file_number,
-        )?;
+        let number =
+            next_available_manifest_number(&filesystem, &directory, v1.next_file_number)?;
         let (writer, _) = migrate_manifest_v1_to_v2(
             &filesystem,
             &directory,
