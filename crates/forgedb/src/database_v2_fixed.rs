@@ -146,12 +146,7 @@ impl Database {
 
         let mut mutable = MemTable::default();
         let current_path = directory.join(wal_file_name(manifest.log_number));
-        let current_wal_missing = !current_path.exists();
-        let may_recreate_initial_wal = manifest.previous_log_number.is_none()
-            && manifest.last_sequence.is_none()
-            && manifest.l0_files.is_empty()
-            && manifest.log_number == 1;
-        if current_wal_missing && current_exists && !may_recreate_initial_wal {
+        if current_exists && !current_path.exists() {
             return Err(Error::corruption(
                 "active WAL",
                 "MANIFEST ссылается на отсутствующий current WAL",
@@ -578,14 +573,15 @@ impl Database {
                 });
             }
         }
-        let temporary = self
-            .directory
-            .join(TEMP_DIRECTORY_NAME)
-            .join(temporary_sst_file_name(table_file_number));
+        let temporary_directory = self.directory.join(TEMP_DIRECTORY_NAME);
+        let temporary = temporary_directory.join(temporary_sst_file_name(table_file_number));
         let final_path = self.directory.join(sst_file_name(table_file_number));
         let removed_temp = remove_if_exists(&filesystem, &temporary)?;
         let removed_final = remove_if_exists(&filesystem, &final_path)?;
-        if removed_temp || removed_final {
+        if removed_temp {
+            filesystem.sync_directory(&temporary_directory)?;
+        }
+        if removed_final {
             filesystem.sync_directory(&self.directory)?;
         }
         Ok(())
@@ -919,7 +915,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_active_wal_with_persisted_sequence_is_corruption() -> Result<()> {
+    fn missing_active_wal_is_always_corruption() -> Result<()> {
         let directory = temporary_directory("missing-wal")?;
         let db = Database::open(&directory, Options::default())?;
         db.put(b"key", b"value", WriteOptions::sync())?;
