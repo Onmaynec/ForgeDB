@@ -4,7 +4,7 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
-## [0.2.0] — release candidate
+## [0.2.0] — 2026-08-05
 
 ### Добавлено
 
@@ -30,7 +30,7 @@
 - `TableBuildRequest` для типизированного SSTable builder API без длинного позиционного списка аргументов.
 - Integration tests reopen-after-flush, deterministic SST checksum corruption, orphan SST, missing live WAL, WAL bootstrap/rotation retry и deterministic model.
 - Crash recovery matrix `docs/CRASH_RECOVERY_MATRIX_V0.2.md`.
-- Release notes `docs/releases/V0.2.0_DRAFT.md`.
+- Release notes `docs/releases/V0.2.0.md`.
 - Русские нормативные документы SSTable V1, MANIFEST V1 и CURRENT V1.
 
 ### Исправлено
@@ -56,8 +56,8 @@
 - Memtable различает `Missing`, `Value` и `Tombstone`.
 - Открытие базы проверяет все SSTables и WAL, на которые ссылается MANIFEST.
 - CI использует `actions/checkout@v6`, зафиксированный `Cargo.lock` и `--locked` для Clippy/tests/release build.
-- Все crates снова наследуют единый strict workspace lint policy.
-- Feature gate подтверждён на Ubuntu stable, Windows stable и Rust 1.89; публикация всё ещё требует отдельного release PR gate.
+- Все crates наследуют единый strict workspace lint policy.
+- Release gate подтверждён на Ubuntu stable, Windows stable и Rust 1.89.
 
 ### Persisted-форматы
 
@@ -77,7 +77,6 @@
 - Flush синхронный; background worker и write stalls появятся позже.
 - SSTable reader версии 0.2 bounded-загружает файл в память.
 - Произвольные orphan/unknown-файлы не удаляются автоматически и пока не имеют отдельного CLI inventory report.
-- Версия ещё не опубликована: требуется отдельный зелёный release PR, annotated tag и GitHub Pre-release.
 
 ## [0.1.0] — 2026-08-03
 
