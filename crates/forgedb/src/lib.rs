@@ -1,8 +1,7 @@
-//! Публичный API ForgeDB v0.3.0.
+//! Публичный API ForgeDB v0.4.0.
 //!
-//! Версия добавляет immutable VersionSet, MVCC snapshots, snapshot-aware point reads,
-//! forward range scan, file inventory, recovery plan и deep verification поверх
-//! WAL/SSTable/MANIFEST V1.
+//! Development milestone добавляет leveled compaction contracts, MANIFEST V2,
+//! bounded merge/output splitting и crash-safe migration поверх full LSM read path.
 
 mod database_v3_fixed {
     include!("database_v3_fixed.rs");
@@ -11,6 +10,7 @@ mod database_v3_fixed {
 mod entry_cursor;
 mod inventory;
 mod iterator;
+mod manifest_runtime;
 mod mvcc_memtable;
 mod options;
 mod read_options;
