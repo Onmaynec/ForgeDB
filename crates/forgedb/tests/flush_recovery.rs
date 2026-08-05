@@ -95,3 +95,23 @@ fn orphan_sstable_does_not_override_manifest_state() -> Result<()> {
         .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
     Ok(())
 }
+
+#[test]
+fn missing_manifest_owned_wal_blocks_open() -> Result<()> {
+    let directory = temporary_directory("missing-active-wal")?;
+    let database = Database::open(&directory, Options::default())?;
+    database.put(b"durable", b"value", WriteOptions::sync())?;
+    database.close()?;
+
+    let wal_path = directory.join("WAL-000001.log");
+    fs::remove_file(&wal_path)
+        .map_err(|source| Error::io("remove_test_wal", Some(wal_path), source))?;
+
+    assert!(matches!(
+        Database::open(&directory, Options::default()),
+        Err(Error::Corruption { .. })
+    ));
+    fs::remove_dir_all(&directory)
+        .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+    Ok(())
+}
