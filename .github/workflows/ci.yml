@@ -22,10 +22,10 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-features
-      - run: cargo test --workspace --doc
-      - run: cargo build --workspace --release
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-features
+      - run: cargo test --locked --workspace --doc
+      - run: cargo build --locked --workspace --release
 
   msrv:
     name: ubuntu / Rust 1.89
@@ -35,5 +35,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.89.0
         with:
           components: clippy
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-features
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-features
