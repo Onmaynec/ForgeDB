@@ -1,8 +1,8 @@
 //! LSM orchestration ForgeDB: compaction planning и bounded merge.
 
+mod merge;
 #[path = "lib.rs"]
 mod planner;
-mod merge;
 
 pub use merge::{
     CompactionCursor, CompactionMerge, CompactionMergeOptions, CompactionMergeStats,

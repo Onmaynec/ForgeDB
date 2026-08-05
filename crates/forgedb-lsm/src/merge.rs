@@ -35,14 +35,11 @@ impl CompactionCursor for VecCompactionCursor {
 
     fn advance(&mut self) -> Result<()> {
         if self.position < self.entries.len() {
-            self.position = self
-                .position
-                .checked_add(1)
-                .ok_or(Error::ResourceLimit {
-                    resource: "compaction_cursor_position",
-                    limit: u64::MAX,
-                    observed: u64::MAX,
-                })?;
+            self.position = self.position.checked_add(1).ok_or(Error::ResourceLimit {
+                resource: "compaction_cursor_position",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            })?;
         }
         Ok(())
     }
@@ -260,10 +257,9 @@ impl CompactionMerge {
                 reason: "heap item исчез после успешного peek".to_owned(),
             })?;
             let entry = self.consume_item(item)?;
-            if versions
-                .last()
-                .is_some_and(|previous| previous.internal_key.sequence() == entry.internal_key.sequence())
-            {
+            if versions.last().is_some_and(|previous| {
+                previous.internal_key.sequence() == entry.internal_key.sequence()
+            }) {
                 return Err(Error::corruption(
                     "compaction merge",
                     "один logical key содержит duplicate sequence",
@@ -281,8 +277,23 @@ impl CompactionMerge {
         }
 
         self.observe_input_group(&versions)?;
+        let input_tombstones = versions
+            .iter()
+            .filter(|entry| entry.internal_key.value_type() == ValueType::Deletion)
+            .count();
         let retained = retain_versions(versions, self.options);
-        self.observe_output_group(&retained)?;
+        let output_tombstones = retained
+            .iter()
+            .filter(|entry| entry.internal_key.value_type() == ValueType::Deletion)
+            .count();
+        let dropped_tombstones =
+            input_tombstones
+                .checked_sub(output_tombstones)
+                .ok_or(Error::InternalInvariant {
+                    invariant: "I-COMPACTION-DROPPED-TOMBSTONES",
+                    reason: "output tombstones превышают input tombstones".to_owned(),
+                })?;
+        self.observe_output_group(&retained, dropped_tombstones)?;
         self.pending.extend(retained);
         Ok(true)
     }
@@ -298,14 +309,16 @@ impl CompactionMerge {
             })?,
             "compaction_input_entries",
         )?;
-        self.stats.peak_versions_per_user_key = self
-            .stats
-            .peak_versions_per_user_key
-            .max(versions.len());
+        self.stats.peak_versions_per_user_key =
+            self.stats.peak_versions_per_user_key.max(versions.len());
         Ok(())
     }
 
-    fn observe_output_group(&mut self, retained: &[TableEntry]) -> Result<()> {
+    fn observe_output_group(
+        &mut self,
+        retained: &[TableEntry],
+        dropped_tombstones: usize,
+    ) -> Result<()> {
         let output = u64::try_from(retained.len()).map_err(|_| Error::ResourceLimit {
             resource: "compaction_output_entries",
             limit: u64::MAX,
@@ -325,6 +338,15 @@ impl CompactionMerge {
                 reason: "output entries превышают input entries".to_owned(),
             })?;
         self.stats.dropped_versions = dropped;
+        self.stats.dropped_tombstones = checked_add(
+            self.stats.dropped_tombstones,
+            u64::try_from(dropped_tombstones).map_err(|_| Error::ResourceLimit {
+                resource: "compaction_dropped_tombstones",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            })?,
+            "compaction_dropped_tombstones",
+        )?;
         Ok(())
     }
 }
@@ -352,16 +374,12 @@ impl Iterator for CompactionMerge {
     }
 }
 
-fn retain_versions(
-    versions: Vec<TableEntry>,
-    options: CompactionMergeOptions,
-) -> Vec<TableEntry> {
+fn retain_versions(versions: Vec<TableEntry>, options: CompactionMergeOptions) -> Vec<TableEntry> {
     let mut retained = Vec::new();
     match options.oldest_snapshot {
         None => {
             if let Some(newest) = versions.into_iter().next()
-                && !(options.bottommost
-                    && newest.internal_key.value_type() == ValueType::Deletion)
+                && !(options.bottommost && newest.internal_key.value_type() == ValueType::Deletion)
             {
                 retained.push(newest);
             }
@@ -377,9 +395,7 @@ fn retain_versions(
                     continue;
                 }
                 floor_selected = true;
-                if !(options.bottommost
-                    && entry.internal_key.value_type() == ValueType::Deletion)
-                {
+                if !(options.bottommost && entry.internal_key.value_type() == ValueType::Deletion) {
                     retained.push(entry);
                 }
             }

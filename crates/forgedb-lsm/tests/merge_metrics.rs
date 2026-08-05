@@ -1,7 +1,5 @@
 use forgedb_core::{ColumnFamilyId, InternalKey, Limits, Result, SequenceNumber, ValueType};
-use forgedb_lsm::{
-    CompactionCursor, CompactionMerge, CompactionMergeOptions, VecCompactionCursor,
-};
+use forgedb_lsm::{CompactionCursor, CompactionMerge, CompactionMergeOptions, VecCompactionCursor};
 use forgedb_sstable::TableEntry;
 
 #[test]
@@ -10,8 +8,7 @@ fn bottommost_tombstone_drop_is_counted() -> Result<()> {
         table_entry(5, ValueType::Deletion, b"")?,
         table_entry(3, ValueType::Value, b"old")?,
     ];
-    let sources: Vec<Box<dyn CompactionCursor>> =
-        vec![Box::new(VecCompactionCursor::new(entries))];
+    let sources: Vec<Box<dyn CompactionCursor>> = vec![Box::new(VecCompactionCursor::new(entries))];
     let mut merge = CompactionMerge::new(
         sources,
         CompactionMergeOptions {
