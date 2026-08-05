@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::sync::{Arc, Weak};
+use std::sync::Weak;
 
 #[derive(Debug)]
 struct ObsoleteVersion {
