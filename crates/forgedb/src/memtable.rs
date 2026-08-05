@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use forgedb_core::{BatchOperation, Error, Limits, Result, SequenceNumber, WriteBatch};
 #[cfg(test)]
 use forgedb_core::ValueType;
+use forgedb_core::{BatchOperation, Error, Limits, Result, SequenceNumber, WriteBatch};
 use forgedb_sstable::TableEntry;
 
 const ENTRY_OVERHEAD_BYTES: usize = 64;
