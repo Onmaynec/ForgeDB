@@ -63,11 +63,13 @@ impl<W: WritableFile> WalWriter<W> {
         }
         self.bytes_written = self
             .bytes_written
-            .checked_add(u64::try_from(frame.len()).map_err(|_| Error::ResourceLimit {
-                resource: "wal_bytes_written",
-                limit: u64::MAX,
-                observed: u64::MAX,
-            })?)
+            .checked_add(
+                u64::try_from(frame.len()).map_err(|_| Error::ResourceLimit {
+                    resource: "wal_bytes_written",
+                    limit: u64::MAX,
+                    observed: u64::MAX,
+                })?,
+            )
             .ok_or(Error::ResourceLimit {
                 resource: "wal_bytes_written",
                 limit: u64::MAX,
@@ -101,7 +103,10 @@ pub fn create_wal<F: FileSystem>(
     file_number: u64,
 ) -> Result<WalWriter<F::WritableFile>> {
     if file_number == 0 {
-        return Err(Error::invalid_argument("file_number", "ноль зарезервирован"));
+        return Err(Error::invalid_argument(
+            "file_number",
+            "ноль зарезервирован",
+        ));
     }
     let path = directory.join(wal_file_name(file_number));
     let mut file = filesystem.create_new_writable(&path)?;
@@ -255,11 +260,14 @@ where
         }
         let end = decoded.sequence_start.inclusive_end(decoded.batch.len())?;
         apply(decoded)?;
-        summary.frame_count = summary.frame_count.checked_add(1).ok_or(Error::ResourceLimit {
-            resource: "wal_frame_count",
-            limit: u64::MAX,
-            observed: u64::MAX,
-        })?;
+        summary.frame_count = summary
+            .frame_count
+            .checked_add(1)
+            .ok_or(Error::ResourceLimit {
+                resource: "wal_frame_count",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            })?;
         summary.operation_count = summary
             .operation_count
             .checked_add(u64::try_from(descriptor.operation_count).map_err(|_| {

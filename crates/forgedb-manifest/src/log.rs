@@ -49,11 +49,13 @@ impl<W: WritableFile> ManifestWriter<W> {
             .map_err(|source| Error::io("sync_manifest", Some(self.path.clone()), source))?;
         self.bytes_written = self
             .bytes_written
-            .checked_add(u64::try_from(frame.len()).map_err(|_| Error::ResourceLimit {
-                resource: "manifest_bytes_written",
-                limit: u64::MAX,
-                observed: u64::MAX,
-            })?)
+            .checked_add(
+                u64::try_from(frame.len()).map_err(|_| Error::ResourceLimit {
+                    resource: "manifest_bytes_written",
+                    limit: u64::MAX,
+                    observed: u64::MAX,
+                })?,
+            )
             .ok_or(Error::ResourceLimit {
                 resource: "manifest_bytes_written",
                 limit: u64::MAX,
@@ -99,13 +101,12 @@ pub fn create_manifest<F: FileSystem>(
     filesystem.rename_atomic(&temporary, &final_path)?;
     filesystem.sync_directory(directory)?;
     write_current(filesystem, directory, &name)?;
-    let bytes_written = u64::try_from(MANIFEST_HEADER_SIZE + snapshot.len()).map_err(|_| {
-        Error::ResourceLimit {
+    let bytes_written =
+        u64::try_from(MANIFEST_HEADER_SIZE + snapshot.len()).map_err(|_| Error::ResourceLimit {
             resource: "manifest_bytes_written",
             limit: u64::MAX,
             observed: u64::MAX,
-        }
-    })?;
+        })?;
     Ok((
         ManifestWriter {
             file: filesystem.open_appendable(&final_path)?,
@@ -116,6 +117,17 @@ pub fn create_manifest<F: FileSystem>(
     ))
 }
 
+/// Результат открытия active MANIFEST.
+#[derive(Debug)]
+pub struct OpenManifest<W: WritableFile> {
+    /// Writer для read-write открытия; отсутствует в read-only режиме.
+    pub writer: Option<ManifestWriter<W>>,
+    /// Восстановленное authoritative состояние.
+    pub state: ManifestState,
+    /// Итог строгого replay.
+    pub replay: ReplaySummary,
+}
+
 /// Открывает active MANIFEST из CURRENT.
 pub fn open_manifest<F: FileSystem>(
     filesystem: &F,
@@ -123,11 +135,7 @@ pub fn open_manifest<F: FileSystem>(
     database_id: DatabaseId,
     limits: &Limits,
     read_only: bool,
-) -> Result<(
-    Option<ManifestWriter<F::WritableFile>>,
-    ManifestState,
-    ReplaySummary,
-)> {
+) -> Result<OpenManifest<F::WritableFile>> {
     limits.validate()?;
     let name = read_current(filesystem, directory)?;
     let number = parse_manifest_file_name(&name)
@@ -146,7 +154,11 @@ pub fn open_manifest<F: FileSystem>(
             bytes_written: summary.valid_bytes,
         })
     };
-    Ok((writer, state, summary))
+    Ok(OpenManifest {
+        writer,
+        state,
+        replay: summary,
+    })
 }
 
 /// Строго replayed complete edits; только последний физически неполный frame допустим.
@@ -231,11 +243,14 @@ pub fn replay_manifest<F: FileSystem>(
             initialized = true;
         }
         state = state.applied(&edit, limits)?;
-        summary.edit_count = summary.edit_count.checked_add(1).ok_or(Error::ResourceLimit {
-            resource: "manifest_edit_count",
-            limit: u64::MAX,
-            observed: u64::MAX,
-        })?;
+        summary.edit_count = summary
+            .edit_count
+            .checked_add(1)
+            .ok_or(Error::ResourceLimit {
+                resource: "manifest_edit_count",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            })?;
         summary.valid_bytes = summary
             .valid_bytes
             .checked_add(u64::try_from(descriptor.total_length).map_err(|_| {
@@ -288,10 +303,7 @@ fn read_current<F: FileSystem>(filesystem: &F, directory: &Path) -> Result<Strin
             observed: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
         });
     }
-    if bytes.is_empty()
-        || !bytes.ends_with(b"\n")
-        || bytes[..bytes.len() - 1].contains(&b'\n')
-    {
+    if bytes.is_empty() || !bytes.ends_with(b"\n") || bytes[..bytes.len() - 1].contains(&b'\n') {
         return Err(Error::corruption(
             "CURRENT",
             "файл должен содержать одну строку с завершающим LF",
@@ -478,11 +490,10 @@ mod tests {
             &limits,
         )?;
         drop(writer);
-        let (_, reopened, summary) =
-            open_manifest(&filesystem, &directory, database_id, &limits, true)?;
-        assert_eq!(reopened.log_number, 2);
-        assert_eq!(reopened.previous_log_number, Some(1));
-        assert_eq!(summary.edit_count, 2);
+        let opened = open_manifest(&filesystem, &directory, database_id, &limits, true)?;
+        assert_eq!(opened.state.log_number, 2);
+        assert_eq!(opened.state.previous_log_number, Some(1));
+        assert_eq!(opened.replay.edit_count, 2);
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
         Ok(())
@@ -504,9 +515,8 @@ mod tests {
         file.write_all(b"FMV1\x20")
             .map_err(|source| Error::io("append_partial_manifest", Some(path.clone()), source))?;
         drop(file);
-        let (_, _, summary) =
-            open_manifest(&filesystem, &directory, database_id, &limits, true)?;
-        assert!(summary.truncated_tail);
+        let opened = open_manifest(&filesystem, &directory, database_id, &limits, true)?;
+        assert!(opened.replay.truncated_tail);
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
         Ok(())

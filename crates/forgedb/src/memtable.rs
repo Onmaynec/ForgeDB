@@ -1,8 +1,6 @@
 use std::collections::BTreeMap;
 
-use forgedb_core::{
-    BatchOperation, Error, Limits, Result, SequenceNumber, ValueType, WriteBatch,
-};
+use forgedb_core::{BatchOperation, Error, Limits, Result, SequenceNumber, ValueType, WriteBatch};
 use forgedb_sstable::TableEntry;
 
 const ENTRY_OVERHEAD_BYTES: usize = 64;
@@ -99,13 +97,14 @@ impl MemTable {
                     },
                 )?;
             }
-            projected = projected
-                .checked_add(entry_size(key, entry)?)
-                .ok_or(Error::ResourceLimit {
-                    resource: "memtable_memory",
-                    limit: u64::try_from(memory_limit).unwrap_or(u64::MAX),
-                    observed: u64::MAX,
-                })?;
+            projected =
+                projected
+                    .checked_add(entry_size(key, entry)?)
+                    .ok_or(Error::ResourceLimit {
+                        resource: "memtable_memory",
+                        limit: u64::try_from(memory_limit).unwrap_or(u64::MAX),
+                        observed: u64::MAX,
+                    })?;
             if projected > memory_limit {
                 return Err(Error::ResourceLimit {
                     resource: "memtable_memory",
@@ -148,7 +147,9 @@ impl MemTable {
         let mut entries = Vec::with_capacity(self.entries.len());
         for (key, entry) in &self.entries {
             let table_entry = match &entry.value {
-                Some(value) => TableEntry::value(key.clone(), entry.sequence, value.clone(), limits)?,
+                Some(value) => {
+                    TableEntry::value(key.clone(), entry.sequence, value.clone(), limits)?
+                }
                 None => TableEntry::tombstone(key.clone(), entry.sequence, limits)?,
             };
             entries.push(table_entry);

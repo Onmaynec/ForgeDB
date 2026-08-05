@@ -31,5 +31,5 @@ pub fn parse_manifest_file_name(name: &str) -> Option<u64> {
 }
 
 pub use bootstrap::create_manifest;
-pub use log::{ManifestWriter, ReplaySummary, open_manifest, replay_manifest};
+pub use log::{ManifestWriter, OpenManifest, ReplaySummary, open_manifest, replay_manifest};
 pub use state::{ManifestState, VersionEdit};

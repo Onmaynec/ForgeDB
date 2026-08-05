@@ -27,12 +27,7 @@ pub fn create_manifest<F: FileSystem>(
         ));
     }
 
-    let bootstrap_wal = create_wal(
-        filesystem,
-        directory,
-        database_id,
-        initial_log_number,
-    )?;
+    let bootstrap_wal = create_wal(filesystem, directory, database_id, initial_log_number)?;
     cleanup_bootstrap_orphans(filesystem, directory)?;
     let result = create_manifest_file(
         filesystem,
@@ -109,13 +104,7 @@ mod tests {
         let filesystem = NativeFileSystem;
         let database_id = DatabaseId::random();
         let limits = Limits::default();
-        let (writer, _) = create_manifest(
-            &filesystem,
-            &directory,
-            database_id,
-            1,
-            &limits,
-        )?;
+        let (writer, _) = create_manifest(&filesystem, &directory, database_id, 1, &limits)?;
         drop(writer);
         assert!(directory.join(wal_file_name(1)).exists());
         assert!(directory.join(CURRENT_FILE_NAME).exists());
@@ -132,13 +121,7 @@ mod tests {
         let limits = Limits::default();
         drop(create_wal(&filesystem, &directory, database_id, 1)?);
         assert!(!directory.join(CURRENT_FILE_NAME).exists());
-        let (writer, _) = create_manifest(
-            &filesystem,
-            &directory,
-            database_id,
-            1,
-            &limits,
-        )?;
+        let (writer, _) = create_manifest(&filesystem, &directory, database_id, 1, &limits)?;
         drop(writer);
         assert!(directory.join(CURRENT_FILE_NAME).exists());
         fs::remove_dir_all(&directory)
@@ -153,22 +136,23 @@ mod tests {
         let database_id = DatabaseId::random();
         let limits = Limits::default();
         let manifest_name = manifest_file_name(INITIAL_MANIFEST_NUMBER);
-        fs::write(directory.join(&manifest_name), b"orphan")
-            .map_err(|source| Error::io("write_orphan_manifest", Some(directory.clone()), source))?;
-        fs::write(directory.join(format!("{manifest_name}.tmp")), b"orphan")
-            .map_err(|source| Error::io("write_orphan_manifest_temp", Some(directory.clone()), source))?;
-        fs::write(directory.join("CURRENT.tmp"), b"orphan")
-            .map_err(|source| Error::io("write_orphan_current_temp", Some(directory.clone()), source))?;
+        fs::write(directory.join(&manifest_name), b"orphan").map_err(|source| {
+            Error::io("write_orphan_manifest", Some(directory.clone()), source)
+        })?;
+        fs::write(directory.join(format!("{manifest_name}.tmp")), b"orphan").map_err(|source| {
+            Error::io(
+                "write_orphan_manifest_temp",
+                Some(directory.clone()),
+                source,
+            )
+        })?;
+        fs::write(directory.join("CURRENT.tmp"), b"orphan").map_err(|source| {
+            Error::io("write_orphan_current_temp", Some(directory.clone()), source)
+        })?;
         fs::write(directory.join("user.data"), b"keep")
             .map_err(|source| Error::io("write_user_file", Some(directory.clone()), source))?;
 
-        let (writer, _) = create_manifest(
-            &filesystem,
-            &directory,
-            database_id,
-            1,
-            &limits,
-        )?;
+        let (writer, _) = create_manifest(&filesystem, &directory, database_id, 1, &limits)?;
         drop(writer);
         assert!(directory.join(CURRENT_FILE_NAME).exists());
         assert!(directory.join("user.data").exists());
@@ -185,13 +169,7 @@ mod tests {
         let filesystem = NativeFileSystem;
         let database_id = DatabaseId::random();
         let limits = Limits::default();
-        let (writer, _) = create_manifest(
-            &filesystem,
-            &directory,
-            database_id,
-            1,
-            &limits,
-        )?;
+        let (writer, _) = create_manifest(&filesystem, &directory, database_id, 1, &limits)?;
         drop(writer);
         assert!(matches!(
             create_manifest(&filesystem, &directory, database_id, 1, &limits),

@@ -152,10 +152,16 @@ impl TableMeta {
     /// Проверяет bounded metadata до использования путей или allocation.
     pub fn validate(&self, limits: &Limits) -> Result<()> {
         if self.file_number == 0 {
-            return Err(Error::corruption("SSTable metadata", "file_number равен нулю"));
+            return Err(Error::corruption(
+                "SSTable metadata",
+                "file_number равен нулю",
+            ));
         }
         if self.file_size < u64::try_from(SST_HEADER_SIZE + SST_FOOTER_SIZE).unwrap_or(u64::MAX) {
-            return Err(Error::corruption("SSTable metadata", "file_size слишком мал"));
+            return Err(Error::corruption(
+                "SSTable metadata",
+                "file_size слишком мал",
+            ));
         }
         limits.validate_key(&self.smallest_user_key)?;
         limits.validate_key(&self.largest_user_key)?;
@@ -172,7 +178,10 @@ impl TableMeta {
             ));
         }
         if self.entry_count == 0 {
-            return Err(Error::corruption("SSTable metadata", "entry_count равен нулю"));
+            return Err(Error::corruption(
+                "SSTable metadata",
+                "entry_count равен нулю",
+            ));
         }
         Ok(())
     }
@@ -212,7 +221,10 @@ impl BlockHandle {
 
     fn decode(input: &[u8], component: &'static str) -> Result<Self> {
         if input.len() != 16 {
-            return Err(Error::corruption(component, "BlockHandle имеет неверную ширину"));
+            return Err(Error::corruption(
+                component,
+                "BlockHandle имеет неверную ширину",
+            ));
         }
         Ok(Self {
             offset: read_u64(input, 0, component)?,
@@ -232,7 +244,10 @@ impl BlockHandle {
             || end > footer_offset
             || end > file_size
         {
-            return Err(Error::corruption(component, "block handle выходит за границы файла"));
+            return Err(Error::corruption(
+                component,
+                "block handle выходит за границы файла",
+            ));
         }
         Ok(())
     }
@@ -351,7 +366,10 @@ impl TableReader {
         let filter = BloomFilter::decode(filter_payload, limits.max_batch_size)?;
         let index = decode_index(index_payload, limits, physical_size, footer_offset)?;
         if index.is_empty() {
-            return Err(Error::corruption("SSTable index", "index не содержит блоков"));
+            return Err(Error::corruption(
+                "SSTable index",
+                "index не содержит блоков",
+            ));
         }
         let properties = decode_properties(properties_payload, limits)?;
         validate_properties(
@@ -427,7 +445,10 @@ pub fn build_table<F: FileSystem>(
     options.validate()?;
     limits.validate()?;
     if file_number == 0 {
-        return Err(Error::invalid_argument("file_number", "ноль зарезервирован"));
+        return Err(Error::invalid_argument(
+            "file_number",
+            "ноль зарезервирован",
+        ));
     }
     if entries.is_empty() {
         return Err(Error::invalid_argument(
@@ -456,7 +477,12 @@ pub fn build_table<F: FileSystem>(
             invariant: "I-SST-NONEMPTY-SEQUENCE",
             reason: "непустой набор entries не имеет sequence".to_owned(),
         })?;
-    let header = encode_header(database_id, file_number, smallest_sequence, largest_sequence);
+    let header = encode_header(
+        database_id,
+        file_number,
+        smallest_sequence,
+        largest_sequence,
+    );
     let mut file = filesystem.create_writable(&temp_path)?;
     file.write_all(&header)
         .map_err(|source| Error::io("write_sstable_header", Some(temp_path.clone()), source))?;
@@ -477,11 +503,13 @@ pub fn build_table<F: FileSystem>(
             let payload = data_builder.finish()?;
             let handle = write_block(&mut file, &temp_path, &payload, &mut offset)?;
             index_entries.push((separator, handle));
-            data_block_count = data_block_count.checked_add(1).ok_or(Error::ResourceLimit {
-                resource: "sstable_data_block_count",
-                limit: u64::MAX,
-                observed: u64::MAX,
-            })?;
+            data_block_count = data_block_count
+                .checked_add(1)
+                .ok_or(Error::ResourceLimit {
+                    resource: "sstable_data_block_count",
+                    limit: u64::MAX,
+                    observed: u64::MAX,
+                })?;
             data_builder = DataBlockBuilder::new(options.restart_interval);
         }
         data_builder.add(&encoded_key, &entry.value)?;
@@ -494,11 +522,13 @@ pub fn build_table<F: FileSystem>(
         let payload = data_builder.finish()?;
         let handle = write_block(&mut file, &temp_path, &payload, &mut offset)?;
         index_entries.push((separator, handle));
-        data_block_count = data_block_count.checked_add(1).ok_or(Error::ResourceLimit {
-            resource: "sstable_data_block_count",
-            limit: u64::MAX,
-            observed: u64::MAX,
-        })?;
+        data_block_count = data_block_count
+            .checked_add(1)
+            .ok_or(Error::ResourceLimit {
+                resource: "sstable_data_block_count",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            })?;
     }
 
     let filter = BloomFilter::build(
@@ -620,11 +650,12 @@ fn decode_header(
         });
     }
     if usize::from(read_u16(input, 10, "SSTable header")?) != SST_HEADER_SIZE {
-        return Err(Error::corruption("SSTable header", "неверная header_length"));
+        return Err(Error::corruption(
+            "SSTable header",
+            "неверная header_length",
+        ));
     }
-    if read_u32(input, 12, "SSTable header")? != 0
-        || read_u32(input, 56, "SSTable header")? != 0
-    {
+    if read_u32(input, 12, "SSTable header")? != 0 || read_u32(input, 56, "SSTable header")? != 0 {
         return Err(Error::corruption(
             "SSTable header",
             "reserved fields должны быть нулевыми",
@@ -679,7 +710,10 @@ fn decode_footer(
     footer_offset: u64,
 ) -> Result<(BlockHandle, BlockHandle, BlockHandle)> {
     if input.len() != SST_FOOTER_SIZE {
-        return Err(Error::corruption("SSTable footer", "footer имеет неверную длину"));
+        return Err(Error::corruption(
+            "SSTable footer",
+            "footer имеет неверную длину",
+        ));
     }
     if input.get(56..64) != Some(FOOTER_MAGIC.as_slice()) {
         return Err(Error::corruption("SSTable footer", "неверная сигнатура"));
@@ -694,7 +728,10 @@ fn decode_footer(
         });
     }
     if read_u16(input, 50, "SSTable footer")? != 0 {
-        return Err(Error::corruption("SSTable footer", "flags должны быть нулевыми"));
+        return Err(Error::corruption(
+            "SSTable footer",
+            "flags должны быть нулевыми",
+        ));
     }
     if crc32c(&input[..52]) != read_u32(input, 52, "SSTable footer")? {
         return Err(Error::corruption("SSTable footer", "CRC32C не совпадает"));
@@ -746,14 +783,15 @@ fn write_block<W: WritableFile>(
     file.write_all(&trailer_prefix)
         .and_then(|_| file.write_all(&checksum.to_le_bytes()))
         .map_err(|source| Error::io("write_sstable_block_trailer", Some(path.into()), source))?;
-    let length_usize = payload
-        .len()
-        .checked_add(BLOCK_TRAILER_SIZE)
-        .ok_or(Error::ResourceLimit {
-            resource: "sstable_block_length",
-            limit: u64::MAX,
-            observed: u64::MAX,
-        })?;
+    let length_usize =
+        payload
+            .len()
+            .checked_add(BLOCK_TRAILER_SIZE)
+            .ok_or(Error::ResourceLimit {
+                resource: "sstable_block_length",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            })?;
     let length = u64::try_from(length_usize).map_err(|_| Error::ResourceLimit {
         resource: "sstable_block_length",
         limit: u64::MAX,
@@ -771,7 +809,11 @@ fn write_block<W: WritableFile>(
     Ok(handle)
 }
 
-fn read_block<'a>(bytes: &'a [u8], handle: BlockHandle, component: &'static str) -> Result<&'a [u8]> {
+fn read_block<'a>(
+    bytes: &'a [u8],
+    handle: BlockHandle,
+    component: &'static str,
+) -> Result<&'a [u8]> {
     let start = usize::try_from(handle.offset).map_err(|_| Error::ResourceLimit {
         resource: "sstable_block_offset",
         limit: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
@@ -795,8 +837,14 @@ fn read_block<'a>(bytes: &'a [u8], handle: BlockHandle, component: &'static str)
     let payload = &block[..payload_end];
     let compression = block[payload_end];
     let checksum_type = block[payload_end + 1];
-    if block[payload_end + 2..payload_end + 4].iter().any(|byte| *byte != 0) {
-        return Err(Error::corruption(component, "reserved trailer bytes не равны нулю"));
+    if block[payload_end + 2..payload_end + 4]
+        .iter()
+        .any(|byte| *byte != 0)
+    {
+        return Err(Error::corruption(
+            component,
+            "reserved trailer bytes не равны нулю",
+        ));
     }
     if compression != COMPRESSION_NONE {
         return Err(Error::UnsupportedFormat {
@@ -859,10 +907,13 @@ impl DataBlockBuilder {
         } else {
             shared_prefix(&self.previous_key, key)
         };
-        let unshared = key.len().checked_sub(shared).ok_or(Error::InternalInvariant {
-            invariant: "I-SST-PREFIX-LENGTH",
-            reason: "shared prefix больше key length".to_owned(),
-        })?;
+        let unshared = key
+            .len()
+            .checked_sub(shared)
+            .ok_or(Error::InternalInvariant {
+                invariant: "I-SST-PREFIX-LENGTH",
+                reason: "shared prefix больше key length".to_owned(),
+            })?;
         let entry = varint32_len(shared)?
             .checked_add(varint32_len(unshared)?)
             .and_then(|size| size.checked_add(varint32_len(value.len()).ok()?))
@@ -895,7 +946,8 @@ impl DataBlockBuilder {
     }
 
     fn add(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        let restart = self.entries_since_restart >= self.restart_interval || self.last_key.is_none();
+        let restart =
+            self.entries_since_restart >= self.restart_interval || self.last_key.is_none();
         let shared = if restart {
             let offset = u32::try_from(self.payload.len()).map_err(|_| Error::ResourceLimit {
                 resource: "sstable_restart_offset",
@@ -908,10 +960,13 @@ impl DataBlockBuilder {
         } else {
             shared_prefix(&self.previous_key, key)
         };
-        let unshared = key.len().checked_sub(shared).ok_or(Error::InternalInvariant {
-            invariant: "I-SST-PREFIX-LENGTH",
-            reason: "shared prefix больше key length".to_owned(),
-        })?;
+        let unshared = key
+            .len()
+            .checked_sub(shared)
+            .ok_or(Error::InternalInvariant {
+                invariant: "I-SST-PREFIX-LENGTH",
+                reason: "shared prefix больше key length".to_owned(),
+            })?;
         encode_varint32(shared, &mut self.payload)?;
         encode_varint32(unshared, &mut self.payload)?;
         encode_varint32(value.len(), &mut self.payload)?;
@@ -920,14 +975,14 @@ impl DataBlockBuilder {
         self.previous_key.clear();
         self.previous_key.extend_from_slice(key);
         self.last_key = Some(key.to_vec());
-        self.entries_since_restart = self
-            .entries_since_restart
-            .checked_add(1)
-            .ok_or(Error::ResourceLimit {
-                resource: "sstable_restart_interval",
-                limit: u64::MAX,
-                observed: u64::MAX,
-            })?;
+        self.entries_since_restart =
+            self.entries_since_restart
+                .checked_add(1)
+                .ok_or(Error::ResourceLimit {
+                    resource: "sstable_restart_interval",
+                    limit: u64::MAX,
+                    observed: u64::MAX,
+                })?;
         Ok(())
     }
 
@@ -955,16 +1010,14 @@ fn decode_data_block(payload: &[u8], limits: &Limits) -> Result<Vec<TableEntry>>
     if payload.len() < 8 {
         return Err(Error::corruption("SSTable data block", "block слишком мал"));
     }
-    let restart_count = usize::try_from(read_u32(
-        payload,
-        payload.len() - 4,
-        "SSTable data block",
-    )?)
-    .map_err(|_| Error::ResourceLimit {
-        resource: "sstable_restart_count",
-        limit: u64::MAX,
-        observed: u64::MAX,
-    })?;
+    let restart_count =
+        usize::try_from(read_u32(payload, payload.len() - 4, "SSTable data block")?).map_err(
+            |_| Error::ResourceLimit {
+                resource: "sstable_restart_count",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            },
+        )?;
     if restart_count == 0 {
         return Err(Error::corruption(
             "SSTable data block",
@@ -1050,7 +1103,8 @@ fn decode_data_block(payload: &[u8], limits: &Limits) -> Result<Vec<TableEntry>>
         if encoded_length > max_encoded_key || value_length > limits.max_value_size {
             return Err(Error::ResourceLimit {
                 resource: "sstable_entry_size",
-                limit: u64::try_from(max_encoded_key.max(limits.max_value_size)).unwrap_or(u64::MAX),
+                limit: u64::try_from(max_encoded_key.max(limits.max_value_size))
+                    .unwrap_or(u64::MAX),
                 observed: u64::try_from(encoded_length.max(value_length)).unwrap_or(u64::MAX),
             });
         }
@@ -1076,7 +1130,10 @@ fn decode_data_block(payload: &[u8], limits: &Limits) -> Result<Vec<TableEntry>>
         }
         previous_key = encoded_key;
         previous_internal = Some(internal_key.clone());
-        entries.push(TableEntry { internal_key, value });
+        entries.push(TableEntry {
+            internal_key,
+            value,
+        });
         offset = value_end;
     }
     if offset != restart_start {
@@ -1135,7 +1192,10 @@ fn decode_index(
         });
     }
     if read_u16(input, 6, "SSTable index")? != 0 {
-        return Err(Error::corruption("SSTable index", "flags должны быть нулевыми"));
+        return Err(Error::corruption(
+            "SSTable index",
+            "flags должны быть нулевыми",
+        ));
     }
     let count = usize::try_from(read_u32(input, 8, "SSTable index")?).map_err(|_| {
         Error::ResourceLimit {
@@ -1155,21 +1215,25 @@ fn decode_index(
     let mut entries = Vec::with_capacity(count);
     let mut previous: Option<InternalKey> = None;
     for _ in 0..count {
-        let key_length = usize::try_from(read_u32(input, offset, "SSTable index")?).map_err(
-            |_| Error::ResourceLimit {
-                resource: "sstable_index_key_length",
-                limit: u64::MAX,
-                observed: u64::MAX,
-            },
-        )?;
+        let key_length =
+            usize::try_from(read_u32(input, offset, "SSTable index")?).map_err(|_| {
+                Error::ResourceLimit {
+                    resource: "sstable_index_key_length",
+                    limit: u64::MAX,
+                    observed: u64::MAX,
+                }
+            })?;
         offset = offset
             .checked_add(4)
             .ok_or_else(|| Error::corruption("SSTable index", "offset переполнен"))?;
-        let max_encoded = limits.max_key_size.checked_add(25).ok_or(Error::ResourceLimit {
-            resource: "sstable_index_key_length",
-            limit: u64::MAX,
-            observed: u64::MAX,
-        })?;
+        let max_encoded = limits
+            .max_key_size
+            .checked_add(25)
+            .ok_or(Error::ResourceLimit {
+                resource: "sstable_index_key_length",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            })?;
         if key_length > max_encoded {
             return Err(Error::ResourceLimit {
                 resource: "sstable_index_key_length",
@@ -1236,24 +1300,28 @@ fn build_properties(
     let mut largest_sequence = 0_u64;
     for entry in entries {
         raw_key_bytes = raw_key_bytes
-            .checked_add(u64::try_from(entry.internal_key.user_key().len()).map_err(|_| {
-                Error::ResourceLimit {
-                    resource: "sstable_raw_key_bytes",
-                    limit: u64::MAX,
-                    observed: u64::MAX,
-                }
-            })?)
+            .checked_add(
+                u64::try_from(entry.internal_key.user_key().len()).map_err(|_| {
+                    Error::ResourceLimit {
+                        resource: "sstable_raw_key_bytes",
+                        limit: u64::MAX,
+                        observed: u64::MAX,
+                    }
+                })?,
+            )
             .ok_or(Error::ResourceLimit {
                 resource: "sstable_raw_key_bytes",
                 limit: u64::MAX,
                 observed: u64::MAX,
             })?;
         raw_value_bytes = raw_value_bytes
-            .checked_add(u64::try_from(entry.value.len()).map_err(|_| Error::ResourceLimit {
-                resource: "sstable_raw_value_bytes",
-                limit: u64::MAX,
-                observed: u64::MAX,
-            })?)
+            .checked_add(
+                u64::try_from(entry.value.len()).map_err(|_| Error::ResourceLimit {
+                    resource: "sstable_raw_value_bytes",
+                    limit: u64::MAX,
+                    observed: u64::MAX,
+                })?,
+            )
             .ok_or(Error::ResourceLimit {
                 resource: "sstable_raw_value_bytes",
                 limit: u64::MAX,
@@ -1372,11 +1440,13 @@ fn decode_properties(input: &[u8], limits: &Limits) -> Result<TableProperties> {
     let mut values = std::collections::BTreeMap::<u16, Vec<u8>>::new();
     for _ in 0..count {
         let tag = read_u16(input, offset, "SSTable properties")?;
-        let length = usize::try_from(read_u32(input, offset + 2, "SSTable properties")?)
-            .map_err(|_| Error::ResourceLimit {
-                resource: "sstable_property_length",
-                limit: u64::MAX,
-                observed: u64::MAX,
+        let length =
+            usize::try_from(read_u32(input, offset + 2, "SSTable properties")?).map_err(|_| {
+                Error::ResourceLimit {
+                    resource: "sstable_property_length",
+                    limit: u64::MAX,
+                    observed: u64::MAX,
+                }
             })?;
         offset = offset
             .checked_add(6)
@@ -1466,7 +1536,9 @@ fn validate_properties(
         || properties.largest_sequence != header.largest_sequence.get()
         || properties.index_size != index_size
         || properties.filter_size != filter_size
-        || properties.value_count.saturating_add(properties.tombstone_count)
+        || properties
+            .value_count
+            .saturating_add(properties.tombstone_count)
             != properties.entry_count
         || properties.data_block_count == 0
     {
@@ -1723,9 +1795,19 @@ mod tests {
 
     fn entries(limits: &Limits) -> Result<Vec<TableEntry>> {
         let mut entries = vec![
-            TableEntry::value(b"alpha".to_vec(), SequenceNumber::new(3)?, b"one".to_vec(), limits)?,
+            TableEntry::value(
+                b"alpha".to_vec(),
+                SequenceNumber::new(3)?,
+                b"one".to_vec(),
+                limits,
+            )?,
             TableEntry::tombstone(b"beta".to_vec(), SequenceNumber::new(2)?, limits)?,
-            TableEntry::value(b"gamma".to_vec(), SequenceNumber::new(1)?, b"three".to_vec(), limits)?,
+            TableEntry::value(
+                b"gamma".to_vec(),
+                SequenceNumber::new(1)?,
+                b"three".to_vec(),
+                limits,
+            )?,
         ];
         entries.sort_by(|left, right| left.internal_key.cmp(&right.internal_key));
         Ok(entries)
@@ -1793,8 +1875,10 @@ mod tests {
             .write(true)
             .open(&path)
             .map_err(|source| Error::io("open_test_sstable", Some(path.clone()), source))?;
-        file.seek(SeekFrom::Start(u64::try_from(SST_HEADER_SIZE + 5).unwrap_or(u64::MAX)))
-            .map_err(|source| Error::io("seek_test_sstable", Some(path.clone()), source))?;
+        file.seek(SeekFrom::Start(
+            u64::try_from(SST_HEADER_SIZE + 5).unwrap_or(u64::MAX),
+        ))
+        .map_err(|source| Error::io("seek_test_sstable", Some(path.clone()), source))?;
         file.write_all(&[0xff])
             .map_err(|source| Error::io("corrupt_test_sstable", Some(path.clone()), source))?;
         file.sync_all()

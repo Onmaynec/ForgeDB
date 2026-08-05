@@ -3,7 +3,7 @@ use forgedb_sstable::TableMeta;
 
 use crate::checksum::crc32c;
 use crate::state::VersionEdit;
-use crate::{MANIFEST_FRAME_HEADER_SIZE, MANIFEST_FORMAT_VERSION};
+use crate::{MANIFEST_FORMAT_VERSION, MANIFEST_FRAME_HEADER_SIZE};
 
 const FRAME_MAGIC: &[u8; 4] = b"FMV1";
 const RECORD_VERSION_EDIT: u8 = 1;
@@ -60,7 +60,10 @@ pub(crate) fn encode_edit_frame(edit: &VersionEdit, limits: &Limits) -> Result<V
     if let Some(sequence) = edit.last_sequence {
         fields.push((
             TAG_LAST_SEQUENCE,
-            sequence.map_or(0, |value| value.get()).to_le_bytes().to_vec(),
+            sequence
+                .map_or(0, |value| value.get())
+                .to_le_bytes()
+                .to_vec(),
         ));
     }
     for file in &edit.added_files {
@@ -197,13 +200,13 @@ pub(crate) fn decode_frame_header(
             observed: u64::try_from(total).unwrap_or(u64::MAX),
         });
     }
-    let field_count = usize::try_from(read_u32(input, 16, "MANIFEST frame")?).map_err(
-        |_| Error::ResourceLimit {
+    let field_count = usize::try_from(read_u32(input, 16, "MANIFEST frame")?).map_err(|_| {
+        Error::ResourceLimit {
             resource: "manifest_field_count",
             limit: u64::try_from(MAX_FIELDS).unwrap_or(u64::MAX),
             observed: u64::MAX,
-        },
-    )?;
+        }
+    })?;
     if field_count == 0 || field_count > MAX_FIELDS {
         return Err(Error::ResourceLimit {
             resource: "manifest_field_count",
@@ -260,13 +263,14 @@ pub(crate) fn decode_complete_frame(
                 "reserved field bytes не равны нулю",
             ));
         }
-        let length = usize::try_from(read_u32(payload, offset + 4, "VersionEdit")?).map_err(
-            |_| Error::ResourceLimit {
-                resource: "manifest_field_length",
-                limit: u64::try_from(limits.max_batch_size).unwrap_or(u64::MAX),
-                observed: u64::MAX,
-            },
-        )?;
+        let length =
+            usize::try_from(read_u32(payload, offset + 4, "VersionEdit")?).map_err(|_| {
+                Error::ResourceLimit {
+                    resource: "manifest_field_length",
+                    limit: u64::try_from(limits.max_batch_size).unwrap_or(u64::MAX),
+                    observed: u64::MAX,
+                }
+            })?;
         let value_end = field_header_end
             .checked_add(length)
             .ok_or_else(|| Error::corruption("VersionEdit", "field range переполнен"))?;
@@ -289,7 +293,10 @@ fn decode_field(edit: &mut VersionEdit, tag: u8, value: &[u8], limits: &Limits) 
     match tag {
         TAG_COMPARATOR => {
             if edit.comparator.is_some() || value.len() > MAX_COMPARATOR_BYTES {
-                return Err(Error::corruption("VersionEdit", "comparator повторён или oversized"));
+                return Err(Error::corruption(
+                    "VersionEdit",
+                    "comparator повторён или oversized",
+                ));
             }
             edit.comparator = Some(
                 std::str::from_utf8(value)
@@ -313,16 +320,20 @@ fn decode_field(edit: &mut VersionEdit, tag: u8, value: &[u8], limits: &Limits) 
         }
         TAG_LAST_SEQUENCE => {
             if edit.last_sequence.is_some() {
-                return Err(Error::corruption("VersionEdit", "last_sequence повторяется"));
+                return Err(Error::corruption(
+                    "VersionEdit",
+                    "last_sequence повторяется",
+                ));
             }
             let sequence = exact_u64(value, "last_sequence")?;
-            edit.last_sequence = Some(if sequence == 0 {
-                None
-            } else {
-                Some(SequenceNumber::new(sequence).map_err(|_| {
-                    Error::corruption("VersionEdit", "last_sequence равен нулю")
-                })?)
-            });
+            edit.last_sequence =
+                Some(if sequence == 0 {
+                    None
+                } else {
+                    Some(SequenceNumber::new(sequence).map_err(|_| {
+                        Error::corruption("VersionEdit", "last_sequence равен нулю")
+                    })?)
+                });
         }
         TAG_ADD_FILE => edit.added_files.push(decode_table_meta(value, limits)?),
         TAG_DELETE_FILE => edit
@@ -352,19 +363,16 @@ fn decode_field(edit: &mut VersionEdit, tag: u8, value: &[u8], limits: &Limits) 
 
 fn encode_table_meta(file: &TableMeta, limits: &Limits) -> Result<Vec<u8>> {
     file.validate(limits)?;
-    let smallest = u32::try_from(file.smallest_user_key.len()).map_err(|_| {
-        Error::ResourceLimit {
+    let smallest =
+        u32::try_from(file.smallest_user_key.len()).map_err(|_| Error::ResourceLimit {
             resource: "manifest_smallest_key_length",
             limit: u64::from(u32::MAX),
             observed: u64::try_from(file.smallest_user_key.len()).unwrap_or(u64::MAX),
-        }
-    })?;
-    let largest = u32::try_from(file.largest_user_key.len()).map_err(|_| {
-        Error::ResourceLimit {
-            resource: "manifest_largest_key_length",
-            limit: u64::from(u32::MAX),
-            observed: u64::try_from(file.largest_user_key.len()).unwrap_or(u64::MAX),
-        }
+        })?;
+    let largest = u32::try_from(file.largest_user_key.len()).map_err(|_| Error::ResourceLimit {
+        resource: "manifest_largest_key_length",
+        limit: u64::from(u32::MAX),
+        observed: u64::try_from(file.largest_user_key.len()).unwrap_or(u64::MAX),
     })?;
     let mut output = Vec::with_capacity(
         52_usize
@@ -391,20 +399,20 @@ fn decode_table_meta(value: &[u8], limits: &Limits) -> Result<TableMeta> {
             "record усечён или level не равен 0",
         ));
     }
-    let smallest = usize::try_from(read_u32(value, 20, "VersionEdit add file")?).map_err(
-        |_| Error::ResourceLimit {
+    let smallest = usize::try_from(read_u32(value, 20, "VersionEdit add file")?).map_err(|_| {
+        Error::ResourceLimit {
             resource: "manifest_smallest_key_length",
             limit: u64::try_from(limits.max_key_size).unwrap_or(u64::MAX),
             observed: u64::MAX,
-        },
-    )?;
-    let largest = usize::try_from(read_u32(value, 24, "VersionEdit add file")?).map_err(
-        |_| Error::ResourceLimit {
+        }
+    })?;
+    let largest = usize::try_from(read_u32(value, 24, "VersionEdit add file")?).map_err(|_| {
+        Error::ResourceLimit {
             resource: "manifest_largest_key_length",
             limit: u64::try_from(limits.max_key_size).unwrap_or(u64::MAX),
             observed: u64::MAX,
-        },
-    )?;
+        }
+    })?;
     if smallest > limits.max_key_size || largest > limits.max_key_size {
         return Err(Error::ResourceLimit {
             resource: "manifest_key_length",
@@ -430,9 +438,13 @@ fn decode_table_meta(value: &[u8], limits: &Limits) -> Result<TableMeta> {
         smallest_user_key: value[52..smallest_end].to_vec(),
         largest_user_key: value[smallest_end..end].to_vec(),
         smallest_sequence: SequenceNumber::new(read_u64(value, 28, "VersionEdit add file")?)
-            .map_err(|_| Error::corruption("VersionEdit add file", "smallest_sequence равен нулю"))?,
+            .map_err(|_| {
+                Error::corruption("VersionEdit add file", "smallest_sequence равен нулю")
+            })?,
         largest_sequence: SequenceNumber::new(read_u64(value, 36, "VersionEdit add file")?)
-            .map_err(|_| Error::corruption("VersionEdit add file", "largest_sequence равен нулю"))?,
+            .map_err(|_| {
+                Error::corruption("VersionEdit add file", "largest_sequence равен нулю")
+            })?,
         entry_count: read_u64(value, 44, "VersionEdit add file")?,
     };
     file.validate(limits)?;

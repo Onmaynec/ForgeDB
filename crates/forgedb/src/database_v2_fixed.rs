@@ -109,7 +109,14 @@ impl Database {
 
         let current_exists = directory.join(CURRENT_FILE_NAME).exists();
         let (manifest_writer, manifest, _) = if current_exists {
-            open_manifest(&filesystem, &directory, identity, &limits, options.read_only)?
+            let opened = open_manifest(
+                &filesystem,
+                &directory,
+                identity,
+                &limits,
+                options.read_only,
+            )?;
+            (opened.writer, opened.state, opened.replay)
         } else if options.read_only {
             return Err(Error::UnsupportedFormat {
                 component: "CURRENT/MANIFEST",
@@ -335,12 +342,7 @@ impl Database {
                 entries,
                 old_log_number,
                 table_file_number,
-            } => self.build_and_install_flush(
-                entries,
-                old_log_number,
-                table_file_number,
-                &limits,
-            ),
+            } => self.build_and_install_flush(entries, old_log_number, table_file_number, &limits),
         };
         if result.is_err() {
             self.clear_flush_in_progress();
@@ -419,20 +421,13 @@ impl Database {
                     limit: u64::MAX,
                     observed: u64::MAX,
                 })?;
-            let next_file_number = new_log_number
-                .checked_add(1)
-                .ok_or(Error::ResourceLimit {
-                    resource: "file_number",
-                    limit: u64::MAX,
-                    observed: u64::MAX,
-                })?;
+            let next_file_number = new_log_number.checked_add(1).ok_or(Error::ResourceLimit {
+                resource: "file_number",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            })?;
             let old_log_number = state.manifest.log_number;
-            let new_wal = create_wal(
-                &filesystem,
-                &self.directory,
-                self.identity,
-                new_log_number,
-            )?;
+            let new_wal = create_wal(&filesystem, &self.directory, self.identity, new_log_number)?;
             let rotation = VersionEdit {
                 log_number: Some(new_log_number),
                 previous_log_number: Some(Some(old_log_number)),
@@ -874,12 +869,7 @@ mod tests {
         let table_file_number = manifest.next_file_number;
         let current_log_number = table_file_number + 1;
         let next_file_number = current_log_number + 1;
-        let current_wal = create_wal(
-            &filesystem,
-            &directory,
-            identity,
-            current_log_number,
-        )?;
+        let current_wal = create_wal(&filesystem, &directory, identity, current_log_number)?;
         manifest_writer.append_edit(
             &mut manifest,
             &VersionEdit {

@@ -1,8 +1,6 @@
 use std::collections::BTreeSet;
 
-use forgedb_core::{
-    DatabaseId, Error, InternalKeyComparator, Limits, Result, SequenceNumber,
-};
+use forgedb_core::{DatabaseId, Error, InternalKeyComparator, Limits, Result, SequenceNumber};
 use forgedb_sstable::TableMeta;
 
 use crate::{INITIAL_MANIFEST_NUMBER, MINIMUM_READER_VERSION};
@@ -65,11 +63,13 @@ impl ManifestState {
             comparator: InternalKeyComparator::NAME.to_owned(),
             log_number: initial_log_number,
             previous_log_number: None,
-            next_file_number: initial_log_number.checked_add(1).ok_or(Error::ResourceLimit {
-                resource: "file_number",
-                limit: u64::MAX,
-                observed: u64::MAX,
-            })?,
+            next_file_number: initial_log_number
+                .checked_add(1)
+                .ok_or(Error::ResourceLimit {
+                    resource: "file_number",
+                    limit: u64::MAX,
+                    observed: u64::MAX,
+                })?,
             last_sequence: None,
             l0_files: Vec::new(),
             minimum_reader_version: MINIMUM_READER_VERSION,
@@ -215,13 +215,10 @@ impl ManifestState {
             next.next_file_number = number;
         }
         if let Some(candidate) = edit.last_sequence {
-            if let (Some(previous), Some(value)) = (next.last_sequence, candidate) {
-                if value < previous {
-                    return Err(Error::corruption(
-                        "VersionEdit",
-                        "last_sequence уменьшился",
-                    ));
-                }
+            if let (Some(previous), Some(value)) = (next.last_sequence, candidate)
+                && value < previous
+            {
+                return Err(Error::corruption("VersionEdit", "last_sequence уменьшился"));
             }
             next.last_sequence = candidate;
         }

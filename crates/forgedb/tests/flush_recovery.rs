@@ -3,9 +3,7 @@ use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use forgedb::{
-    Database, Error, Limits, Options, Result, SequenceNumber, WriteBatch, WriteOptions,
-};
+use forgedb::{Database, Error, Limits, Options, Result, SequenceNumber, WriteBatch, WriteOptions};
 use forgedb_fs::{NativeFileSystem, load_or_create_identity};
 use forgedb_manifest::CURRENT_FILE_NAME;
 use forgedb_wal::{create_wal, wal_file_name};

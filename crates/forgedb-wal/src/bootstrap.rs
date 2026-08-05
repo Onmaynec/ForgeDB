@@ -5,8 +5,7 @@ use forgedb_core::{DatabaseId, Error, Limits, Result};
 use forgedb_fs::FileSystem;
 
 use crate::log::{
-    WalWriter, create_wal as create_new_wal, open_wal_numbered, replay_wal_numbered,
-    wal_file_name,
+    WalWriter, create_wal as create_new_wal, open_wal_numbered, replay_wal_numbered, wal_file_name,
 };
 
 /// Создаёт новое WAL-поколение или повторно открывает только строго проверенный пустой файл.
