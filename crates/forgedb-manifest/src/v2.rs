@@ -141,7 +141,8 @@ impl ManifestStateV2 {
             ));
         }
         validate_level_count(level_count)?;
-        let next_file_number = initial_log_number
+        let next_file_number = manifest_number
+            .max(initial_log_number)
             .checked_add(1)
             .ok_or(Error::ResourceLimit {
                 resource: "file_number",
