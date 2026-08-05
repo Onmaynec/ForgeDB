@@ -6,87 +6,9 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  canonicalize-sstable-test:
-    if: github.event_name == 'pull_request' && github.head_ref == 'feature/v0.2.0-sstable-flush'
-    name: canonicalize SST checksum test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - name: Replace flaky corruption mutation
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("crates/forgedb-sstable/src/lib.rs")
-          text = path.read_text()
-          old_import = "use std::io::{Seek, SeekFrom, Write};"
-          new_import = "use std::io::{Read, Seek, SeekFrom, Write};"
-          if old_import in text:
-              text = text.replace(old_import, new_import, 1)
-          elif new_import not in text:
-              raise SystemExit("SST test import pattern not found")
-
-          if "SST_HEADER_SIZE + 5" in text:
-              lines = text.splitlines()
-              marker = next(i for i, line in enumerate(lines) if "SST_HEADER_SIZE + 5" in line)
-              start = marker
-              while start >= 0 and "file.seek(SeekFrom::Start(" not in lines[start]:
-                  start -= 1
-              if start < 0:
-                  raise SystemExit("SST mutation start not found")
-              end = marker
-              while end < len(lines) and "corrupt_test_sstable" not in lines[end]:
-                  end += 1
-              if end >= len(lines):
-                  raise SystemExit("SST mutation end not found")
-              while end < len(lines) and ")?;" not in lines[end]:
-                  end += 1
-              if end >= len(lines):
-                  raise SystemExit("SST mutation terminator not found")
-              replacement = [
-                  "        let checksum_offset = u64::try_from(SST_HEADER_SIZE - 4).unwrap_or(u64::MAX);",
-                  "        file.seek(SeekFrom::Start(checksum_offset))",
-                  "            .map_err(|source| Error::io(\"seek_test_sstable\", Some(path.clone()), source))?;",
-                  "        let mut checksum_byte = [0_u8; 1];",
-                  "        file.read_exact(&mut checksum_byte)",
-                  "            .map_err(|source| Error::io(\"read_test_sstable\", Some(path.clone()), source))?;",
-                  "        checksum_byte[0] ^= 0xff;",
-                  "        file.seek(SeekFrom::Start(checksum_offset))",
-                  "            .map_err(|source| Error::io(\"seek_test_sstable\", Some(path.clone()), source))?;",
-                  "        file.write_all(&checksum_byte)",
-                  "            .map_err(|source| Error::io(\"corrupt_test_sstable\", Some(path.clone()), source))?;",
-              ]
-              lines[start : end + 1] = replacement
-              text = "\n".join(lines) + "\n"
-          elif "let checksum_offset = u64::try_from(SST_HEADER_SIZE - 4)" not in text:
-              raise SystemExit("SST checksum mutation pattern not found")
-
-          path.write_text(text)
-          PY
-      - run: cargo fmt --all
-      - name: Commit canonical regression test
-        shell: bash
-        run: |
-          if git diff --quiet; then
-            echo "SST checksum test already canonical"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/forgedb-sstable/src/lib.rs
-          git commit -m "test(sstable): corrupt deterministic header checksum"
-          git push origin HEAD:${{ github.head_ref }}
-
   test:
     name: ${{ matrix.os }} / stable
     strategy:
