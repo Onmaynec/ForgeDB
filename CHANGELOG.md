@@ -4,6 +4,66 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
+## [0.4.0] — 2026-08-07
+
+### Добавлено
+
+- Physical leveled compaction L0 → L1 и Ln → Ln+1.
+- L0 overlap-closure picker и size-based picker для L1+.
+- MVCC retention на основе `oldest_active_snapshot_sequence`.
+- Conservative bottommost tombstone dropping.
+- Output splitting без разрыва versions одного user key.
+- Durable reservation output file numbers перед созданием compaction SSTables.
+- Atomic MANIFEST installation: delete inputs + add outputs одним VersionEdit.
+- Persisted L1+ metadata.
+- MANIFEST V2 с `ADD_LEVEL_FILE` и `DELETE_LEVEL_FILE`.
+- Чтение MANIFEST V1 и V2.
+- Crash-safe V1 → V2 rotation при writable open; read-only V1 open не мигрирует данные.
+- L0 slowdown/stop backpressure перед public writes.
+- Automatic synchronous compaction после `flush()`.
+- Public `Database::compact_range`.
+- CLI `compact <database> [start] [end-exclusive]`.
+- MANIFEST V1/V2 compatibility tests.
+- Reopen regression test после L0 → L1 compaction.
+- Unit tests snapshot boundary retention, bottommost tombstone и output splitting.
+- Документы `docs/COMPACTION.md`, `docs/formats/MANIFEST_V2.md`, ADR 0010 и `docs/releases/V0.4.0.md`.
+
+### Изменено
+
+- Workspace version повышена до `0.4.0`.
+- `VersionSet::open` восстанавливает physical L1+ из MANIFEST.
+- `ManifestState` валидирует unique file numbers между всеми уровнями и non-overlap L1+.
+- New databases записывают MANIFEST V2; writer v0.4 больше не создаёт новый V1 MANIFEST.
+- WAL и SSTable persisted formats остаются V1.
+- `flush()` после installation проверяет compaction pressure и может синхронно выполнить compaction.
+
+### Crash consistency
+
+- File numbers compaction outputs резервируются synced MANIFEST edit до создания файлов и не переиспользуются после crash.
+- Output SSTables полностью проходят temp/write/sync/rename/directory-sync до installation edit.
+- До synced installation authoritative остаются input files.
+- После synced installation authoritative являются output files в target level.
+- Unreferenced SST после crash не включается normal recovery автоматически.
+
+### Persisted-форматы
+
+| Формат | Текущая версия | Read support | Write support |
+|---|---:|---|---|
+| IDENTITY | 1 | 1 | 1 |
+| Internal Key | 1 | 1 | 1 |
+| WAL | 1 | 1 | 1 |
+| SSTable | 1 | 1 | 1 |
+| MANIFEST | 2 | 1, 2 | 2 |
+| CURRENT | 1 | 1 | 1 |
+
+### Ограничения
+
+- Compaction остаётся synchronous; background worker pool ещё не реализован.
+- Compaction job bounded `max_compaction_bytes`, но materialize-ит выбранные entries в пределах этого budget.
+- Physical input SST после compaction пока не удаляются автоматически: reference-aware Windows-safe obsolete reaper ещё не реализован.
+- Reverse iterator и transactions отсутствуют.
+- Compaction metrics и range tombstones отсутствуют.
+
 ## [0.3.0] — 2026-08-05
 
 ### Добавлено
