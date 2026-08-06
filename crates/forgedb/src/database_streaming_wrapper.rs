@@ -17,16 +17,19 @@ impl StreamingDatabase {
         value: impl AsRef<[u8]>,
         write_options: WriteOptions,
     ) -> Result<()> {
+        self.apply_write_stall()?;
         self.inner.put(key, value, write_options)
     }
 
     /// Добавляет MVCC tombstone.
     pub fn delete(&self, key: impl AsRef<[u8]>, write_options: WriteOptions) -> Result<()> {
+        self.apply_write_stall()?;
         self.inner.delete(key, write_options)
     }
 
     /// Применяет WriteBatch атомарно после выбранной WAL durability boundary.
     pub fn write(&self, batch: WriteBatch, write_options: WriteOptions) -> Result<()> {
+        self.apply_write_stall()?;
         self.inner.write(batch, write_options)
     }
 
@@ -119,9 +122,11 @@ impl StreamingDatabase {
         self.inner.scan(range, read_options)
     }
 
-    /// Синхронно переводит immutable memtable в установленный L0 SSTable.
+    /// Синхронно переводит immutable memtable в установленный L0 SSTable и при необходимости
+    /// выполняет synchronous leveled compaction до снижения compaction pressure.
     pub fn flush(&self) -> Result<()> {
-        self.inner.flush()
+        self.inner.flush()?;
+        self.compact_if_needed()
     }
 
     /// Возвращает неразрушающий file inventory.
@@ -179,6 +184,9 @@ mod streaming_wrapper_tests {
         let directory = temporary_directory("multi-file-range")?;
         let options = Options {
             data_block_size: 1024,
+            l0_compaction_trigger: 8,
+            l0_slowdown_trigger: 9,
+            l0_stop_trigger: 10,
             ..Options::default()
         };
         let database = StreamingDatabase::open(&directory, options)?;
@@ -222,6 +230,34 @@ mod streaming_wrapper_tests {
         );
 
         database.close()?;
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
+    #[test]
+    fn flush_trigger_compacts_l0_and_reopen_preserves_state() -> Result<()> {
+        let directory = temporary_directory("leveled-reopen")?;
+        let options = Options {
+            l0_compaction_trigger: 2,
+            l0_slowdown_trigger: 3,
+            l0_stop_trigger: 4,
+            target_sst_size: 1024 * 1024,
+            ..Options::default()
+        };
+        let database = StreamingDatabase::open(&directory, options.clone())?;
+        database.put(b"a", b"one", WriteOptions::sync())?;
+        database.flush()?;
+        database.put(b"b", b"two", WriteOptions::sync())?;
+        database.flush()?;
+        assert_eq!(database.get(b"a")?, Some(b"one".to_vec()));
+        assert_eq!(database.get(b"b")?, Some(b"two".to_vec()));
+        database.close()?;
+
+        let reopened = StreamingDatabase::open(&directory, options)?;
+        assert_eq!(reopened.get(b"a")?, Some(b"one".to_vec()));
+        assert_eq!(reopened.get(b"b")?, Some(b"two".to_vec()));
+        reopened.close()?;
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
         Ok(())
