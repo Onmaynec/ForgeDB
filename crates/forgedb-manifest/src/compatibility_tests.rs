@@ -59,16 +59,15 @@ fn read_only_open_keeps_manifest_v1_authoritative() -> Result<()> {
     let limits = Limits::default();
     write_v1_manifest(&directory, database_id, &limits)?;
 
-    let opened = open_manifest(
-        &NativeFileSystem,
-        &directory,
-        database_id,
-        &limits,
-        true,
-    )?;
+    let opened = open_manifest(&NativeFileSystem, &directory, database_id, &limits, true)?;
     assert_eq!(opened.replay.format_version, 1);
     assert!(opened.writer.is_none());
-    assert_eq!(fs::read_to_string(directory.join(CURRENT_FILE_NAME)).ok().as_deref(), Some("MANIFEST-000001\n"));
+    assert_eq!(
+        fs::read_to_string(directory.join(CURRENT_FILE_NAME))
+            .ok()
+            .as_deref(),
+        Some("MANIFEST-000001\n")
+    );
     assert!(!directory.join(manifest_file_name(2)).exists());
 
     fs::remove_dir_all(&directory)
@@ -83,20 +82,22 @@ fn writable_open_rotates_v1_to_new_v2_manifest() -> Result<()> {
     let limits = Limits::default();
     write_v1_manifest(&directory, database_id, &limits)?;
 
-    let opened = open_manifest(
-        &NativeFileSystem,
-        &directory,
-        database_id,
-        &limits,
-        false,
-    )?;
+    let opened = open_manifest(&NativeFileSystem, &directory, database_id, &limits, false)?;
     assert_eq!(opened.replay.format_version, 2);
     assert_eq!(opened.state.manifest_number, 2);
     assert_eq!(opened.state.next_file_number, 3);
-    assert_eq!(opened.writer.as_ref().map(|writer| writer.format_version()), Some(2));
+    assert_eq!(
+        opened.writer.as_ref().map(|writer| writer.format_version()),
+        Some(2)
+    );
     assert!(directory.join(manifest_file_name(1)).exists());
     assert!(directory.join(manifest_file_name(2)).exists());
-    assert_eq!(fs::read_to_string(directory.join(CURRENT_FILE_NAME)).ok().as_deref(), Some("MANIFEST-000002\n"));
+    assert_eq!(
+        fs::read_to_string(directory.join(CURRENT_FILE_NAME))
+            .ok()
+            .as_deref(),
+        Some("MANIFEST-000002\n")
+    );
 
     drop(opened);
     fs::remove_dir_all(&directory)
