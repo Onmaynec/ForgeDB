@@ -21,29 +21,61 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Нормализовать Rust-код
-        run: cargo fmt --all
-      - name: Проверить форматирование
-        run: cargo fmt --all --check
-      - name: Выполнить strict Clippy
-        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      - name: Выполнить workspace tests
-        run: cargo test --locked --workspace --all-features
-      - name: Выполнить doctests
-        run: cargo test --locked --workspace --doc
-      - name: Собрать release profile
-        run: cargo build --locked --workspace --release
-      - name: Опубликовать rustfmt-нормализацию
+      - name: Выполнить v0.4.0 gate и сохранить диагностический отчёт
+        id: gate
+        shell: bash
+        run: |
+          set +e
+          cargo fmt --all
+          cargo fmt --all --check > /tmp/fmt.log 2>&1
+          fmt_status=$?
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings > /tmp/clippy.log 2>&1
+          clippy_status=$?
+          cargo test --locked --workspace --all-features > /tmp/tests.log 2>&1
+          tests_status=$?
+          cargo test --locked --workspace --doc > /tmp/doctests.log 2>&1
+          doctests_status=$?
+          cargo build --locked --workspace --release > /tmp/build.log 2>&1
+          build_status=$?
+
+          mkdir -p docs/releases
+          {
+            echo '# v0.4.0 temporary CI gate report'
+            echo
+            echo "- rustfmt: $fmt_status"
+            echo "- clippy: $clippy_status"
+            echo "- workspace tests: $tests_status"
+            echo "- doctests: $doctests_status"
+            echo "- release build: $build_status"
+            echo
+            for item in fmt clippy tests doctests build; do
+              echo "## $item"
+              echo '```text'
+              tail -n 120 "/tmp/${item}.log"
+              echo '```'
+              echo
+            done
+          } > docs/releases/V0.4.0_CI_GATE.md
+
+          if [ "$fmt_status" -eq 0 ] && [ "$clippy_status" -eq 0 ] && [ "$tests_status" -eq 0 ] && [ "$doctests_status" -eq 0 ] && [ "$build_status" -eq 0 ]; then
+            echo 'ok=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ok=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Опубликовать rustfmt и gate report в validation branch
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates Cargo.toml Cargo.lock
+          git add crates Cargo.toml Cargo.lock docs/releases/V0.4.0_CI_GATE.md
           if git diff --cached --quiet; then
             exit 0
           fi
-          git commit -m "style: применить rustfmt к v0.4.0"
+          git commit -m "ci: сохранить диагностику gate v0.4.0"
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
+      - name: Завершить gate
+        if: steps.gate.outputs.ok != 'true'
+        run: exit 1
 
   test:
     name: ${{ matrix.os }} / stable
