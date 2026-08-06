@@ -9,6 +9,9 @@ mod codec;
 mod log;
 mod state;
 
+#[cfg(test)]
+mod compatibility_tests;
+
 pub const CURRENT_FILE_NAME: &str = "CURRENT";
 pub const MINIMUM_MANIFEST_FORMAT_VERSION: u16 = 1;
 pub const MANIFEST_FORMAT_VERSION: u16 = 2;
