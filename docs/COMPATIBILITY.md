@@ -2,61 +2,60 @@
 
 ## Версия библиотеки
 
-`v0.1.0` является pre-release. Публичный API может изменяться до `v1.0.0`, но persisted-форматы меняются только
-через явную новую версию и документированную migration policy.
+`v0.4.0` является pre-release. Публичный API может изменяться до `v1.0.0`, но persisted-форматы меняются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
 ## Поддерживаемый Rust
 
 Минимальная поддерживаемая версия: Rust 1.89. CI также проверяет текущий stable на Ubuntu и Windows.
 
-## Persisted-форматы
+## Persisted-форматы v0.4.0
 
 | Компонент | Writer | Reader | Неизвестная будущая версия |
-|---|---:|---:|---|
-| `IDENTITY V1` | Да | Да | Отклоняется |
-| `Internal Key V1` | Да | Да | Отклоняется |
-| `WAL V1` | Да | Да | Отклоняется |
+|---|---|---|---|
+| `IDENTITY V1` | V1 | V1 | Отклоняется |
+| `Internal Key V1` | V1 | V1 | Отклоняется |
+| `WAL V1` | V1 | V1 | Отклоняется |
+| `SSTable V1` | V1 | V1 | Отклоняется |
+| `MANIFEST` | V2 | V1, V2 | Отклоняется |
+| `CURRENT V1` | V1 | V1 | Отклоняется |
 
 Reader не пытается интерпретировать future version как текущий layout.
 
-## Совместимость WAL
+## MANIFEST V1 → V2
 
-WAL V1 привязан к:
+MANIFEST V2 введён для persisted L1+ placement.
 
-- database identity;
-- file number `1`;
-- little-endian layout;
-- CRC32C Castagnoli;
-- текущему operation payload V1.
+- read-only open V1 базы не изменяет каталог;
+- read-write open V1 сначала полностью replay/validate старый MANIFEST;
+- затем создаётся новый V2 snapshot под новым unique file number;
+- V2 sync/rename выполняются до replacement `CURRENT`;
+- V1 MANIFEST не перезаписывается in-place;
+- после durable publication V2 старая ForgeDB v0.3.x должна отказать с future-format error, а не угадывать layout.
 
-Изменение любого обязательного поля требует WAL V2 или отдельного совместимого extension protocol. Ненулевые
-reserved-поля в V1 отклоняются, поэтому они не могут быть молча переиспользованы старым reader.
+Подробный контракт: `docs/formats/MANIFEST_V2.md` и ADR 0010.
+
+## WAL V1
+
+WAL V1 привязан к database identity, canonical numbered generation, little-endian layout, CRC32C Castagnoli и operation payload V1. Изменение обязательного layout требует WAL V2 или отдельного совместимого extension protocol.
+
+## SSTable V1
+
+Compaction v0.4.0 не меняет SSTable layout. Input и output tables используют один и тот же SSTable V1 contract; level placement является MANIFEST metadata, а не частью имени SST или эвристикой reader.
 
 ## Операционные системы
 
 Поддерживаемый CI:
 
 - Ubuntu latest;
-- Windows latest.
+- Windows latest;
+- Ubuntu с Rust 1.89 как MSRV gate.
 
-Native lock, directory sync и truncation имеют platform-specific реализации. Другие платформы могут компилироваться,
-но не считаются поддерживаемыми без отдельного CI и crash-тестов.
+Native lock, directory sync, atomic rename и truncation имеют platform-specific implementations. Другие платформы не считаются поддерживаемыми без отдельного CI/crash coverage.
 
 ## Endianness и размер указателя
 
-Persisted integers имеют фиксированную ширину и little-endian порядок. Значения `usize` не записываются напрямую.
-Все преобразования между persisted `u32/u64` и `usize` проверяются.
+Persisted integers имеют фиксированную ширину и little-endian порядок. `usize` не записывается напрямую. Все преобразования persisted `u32/u64` ↔ `usize` проверяются.
 
 ## Обратная совместимость API
 
-До v1.0 SemVer допускает несовместимые изменения minor-версии. Release notes обязаны перечислять:
-
-- изменения публичного API;
-- изменения persisted-форматов;
-- migration requirements;
-- изменения durability semantics.
-
-## Обновление с v0.0.1
-
-`v0.0.1` не имела пользовательского WAL или read/write path. База, созданная foundation-версией, содержит только
-`IDENTITY` и `LOCK`; v0.1.0 использует тот же `IDENTITY V1` и создаёт новый `WAL-000001.log` при первом read-write открытии.
+До v1.0 SemVer допускает несовместимые изменения minor-версии. Release notes обязаны перечислять изменения public API, persisted formats, migration requirements и durability semantics.
