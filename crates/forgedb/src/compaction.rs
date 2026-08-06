@@ -1,10 +1,7 @@
 #[derive(Clone, Debug)]
 struct CompactionPlan {
-    source_level: usize,
     target_level: usize,
     inputs: Vec<(usize, crate::version_set::TableHandle)>,
-    smallest_user_key: Vec<u8>,
-    largest_user_key: Vec<u8>,
     bottommost: bool,
 }
 
@@ -141,6 +138,8 @@ impl Database {
             observed: u64::MAX,
         })?;
 
+        // File numbers резервируются durable MANIFEST edit до создания outputs. После crash
+        // эти номера не переиспользуются, а успевшие появиться SST остаются unreferenced orphan.
         let first_file_number = {
             let mut state = self.lock_state()?;
             validate_compaction_inputs(&state, plan)?;
@@ -153,15 +152,13 @@ impl Database {
                         limit: u64::MAX,
                         observed: u64::MAX,
                     })?;
-                append_manifest_edit(
-                    &mut state,
-                    &VersionEdit {
-                        next_file_number: Some(next),
-                        last_sequence: Some(state.last_sequence),
-                        ..VersionEdit::default()
-                    },
-                    limits,
-                )?;
+                let last_sequence = state.last_sequence;
+                let reservation = VersionEdit {
+                    next_file_number: Some(next),
+                    last_sequence: Some(last_sequence),
+                    ..VersionEdit::default()
+                };
+                append_manifest_edit(&mut state, &reservation, limits)?;
             }
             first
         };
@@ -209,61 +206,56 @@ impl Database {
             outputs.push((metadata, reader));
         }
 
-        let installation_result = (|| -> Result<()> {
-            let mut state = self.lock_state()?;
-            validate_compaction_inputs(&state, plan)?;
-            let deleted = plan
-                .inputs
-                .iter()
-                .map(|(level, table)| (*level, table.metadata().file_number))
-                .collect::<Vec<_>>();
-            let added_for_version = outputs
-                .iter()
-                .map(|(metadata, reader)| (plan.target_level, metadata.clone(), reader.clone()))
-                .collect::<Vec<_>>();
-            let next_version = state
-                .version
-                .with_compaction(&deleted, added_for_version, limits)?;
+        let mut state = self.lock_state()?;
+        validate_compaction_inputs(&state, plan)?;
+        let deleted = plan
+            .inputs
+            .iter()
+            .map(|(level, table)| (*level, table.metadata().file_number))
+            .collect::<Vec<_>>();
+        let added_for_version = outputs
+            .iter()
+            .map(|(metadata, reader)| (plan.target_level, metadata.clone(), reader.clone()))
+            .collect::<Vec<_>>();
+        let next_version = state
+            .version
+            .with_compaction(&deleted, added_for_version, limits)?;
 
-            let mut edit = VersionEdit {
-                last_sequence: Some(state.last_sequence),
-                ..VersionEdit::default()
-            };
-            for (level, table) in &plan.inputs {
-                if *level == 0 {
-                    edit.deleted_files.push(table.metadata().file_number);
-                } else {
-                    edit.deleted_level_files.push(forgedb_manifest::LevelFileRef::new(
-                        u32::try_from(*level).map_err(|_| Error::ResourceLimit {
-                            resource: "lsm_level",
-                            limit: u64::from(u32::MAX),
-                            observed: u64::MAX,
-                        })?,
-                        table.metadata().file_number,
-                    )?);
-                }
-            }
-            for (metadata, _) in &outputs {
-                edit.added_level_files.push(forgedb_manifest::LevelFileMeta::new(
-                    u32::try_from(plan.target_level).map_err(|_| Error::ResourceLimit {
+        let last_sequence = state.last_sequence;
+        let mut edit = VersionEdit {
+            last_sequence: Some(last_sequence),
+            ..VersionEdit::default()
+        };
+        for (level, table) in &plan.inputs {
+            if *level == 0 {
+                edit.deleted_files.push(table.metadata().file_number);
+            } else {
+                edit.deleted_level_files.push(forgedb_manifest::LevelFileRef::new(
+                    u32::try_from(*level).map_err(|_| Error::ResourceLimit {
                         resource: "lsm_level",
                         limit: u64::from(u32::MAX),
                         observed: u64::MAX,
                     })?,
-                    metadata.clone(),
-                    limits,
+                    table.metadata().file_number,
                 )?);
             }
-
-            append_manifest_edit(&mut state, &edit, limits)?;
-            state.version = Arc::new(next_version);
-            state.flush_in_progress = false;
-            Ok(())
-        })();
-        if installation_result.is_err() {
-            self.clear_flush_flag()?;
         }
-        installation_result
+        for (metadata, _) in &outputs {
+            edit.added_level_files.push(forgedb_manifest::LevelFileMeta::new(
+                u32::try_from(plan.target_level).map_err(|_| Error::ResourceLimit {
+                    resource: "lsm_level",
+                    limit: u64::from(u32::MAX),
+                    observed: u64::MAX,
+                })?,
+                metadata.clone(),
+                limits,
+            )?);
+        }
+
+        append_manifest_edit(&mut state, &edit, limits)?;
+        state.version = Arc::new(next_version);
+        state.flush_in_progress = false;
+        Ok(())
     }
 
     fn l0_file_count(&self) -> Result<usize> {
@@ -343,10 +335,9 @@ fn pick_compaction(
             loop {
                 let before = selected.len();
                 for candidate in l0 {
-                    if selected
-                        .iter()
-                        .any(|current| current.metadata().file_number == candidate.metadata().file_number)
-                    {
+                    if selected.iter().any(|current| {
+                        current.metadata().file_number == candidate.metadata().file_number
+                    }) {
                         continue;
                     }
                     if candidate.metadata().smallest_user_key.as_slice() <= largest.as_slice()
@@ -369,14 +360,10 @@ fn pick_compaction(
             for file in version.overlapping_files(1, &smallest, &largest)? {
                 inputs.push((1, file));
             }
-            let bottommost = is_bottommost(version, 1, &smallest, &largest)?;
             return Ok(Some(CompactionPlan {
-                source_level: 0,
                 target_level: 1,
                 inputs,
-                smallest_user_key: smallest,
-                largest_user_key: largest,
-                bottommost,
+                bottommost: is_bottommost(version, 1, &smallest, &largest)?,
             }));
         }
     }
@@ -408,14 +395,10 @@ fn pick_compaction(
         for file in version.overlapping_files(target_level, &smallest, &largest)? {
             inputs.push((target_level, file));
         }
-        let bottommost = is_bottommost(version, target_level, &smallest, &largest)?;
         return Ok(Some(CompactionPlan {
-            source_level: level,
             target_level,
             inputs,
-            smallest_user_key: smallest,
-            largest_user_key: largest,
-            bottommost,
+            bottommost: is_bottommost(version, target_level, &smallest, &largest)?,
         }));
     }
     Ok(None)
@@ -552,8 +535,7 @@ fn retain_versions(
         return Ok(Vec::new());
     }
 
-    let mut retained = Vec::new();
-    retained.push(newest.clone());
+    let mut retained = vec![newest.clone()];
     let Some(oldest_snapshot) = oldest_snapshot else {
         return Ok(retained);
     };
@@ -657,6 +639,22 @@ mod compaction_tests {
             entry(b"k", 8, forgedb_core::ValueType::Value)?,
         ];
         assert!(retain_versions(&group, None, true)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn output_split_never_divides_versions_of_one_user_key() -> Result<()> {
+        let entries = vec![
+            entry(b"a", 3, forgedb_core::ValueType::Value)?,
+            entry(b"a", 2, forgedb_core::ValueType::Value)?,
+            entry(b"b", 1, forgedb_core::ValueType::Value)?,
+        ];
+        let chunks = build_compaction_chunks(entries, Some(SequenceNumber::FIRST), false, 1)?;
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len(), 2);
+        assert!(chunks[0]
+            .iter()
+            .all(|entry| entry.internal_key.user_key() == b"a"));
         Ok(())
     }
 }
