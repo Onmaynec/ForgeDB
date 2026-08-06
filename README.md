@@ -4,28 +4,28 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## Статус версий
 
-- последняя опубликованная версия: **v0.3.0 — Full LSM Read Path**, GitHub Pre-release;
-- следующий milestone разработки: **v0.4.0 — Leveled Compaction**.
+- текущий release milestone: **v0.4.0 — Leveled Compaction**, GitHub Pre-release;
+- следующий milestone: **v0.5.0 — MVCC Transactions**.
 
-## Возможности v0.3.0
+## Возможности v0.4.0
 
 - WAL V1, atomic WriteBatch и durability modes;
-- SSTable V1, MANIFEST V1 и crash-safe CURRENT;
-- mutable и immutable MVCC memtables;
-- snapshot-aware point reads;
-- cheap snapshots с registry активных sequence numbers;
+- SSTable V1 с checksums, blocks, index и Bloom filter;
+- MANIFEST V2 с persisted L1+ metadata и чтением MANIFEST V1;
+- crash-safe V1 → V2 MANIFEST migration при writable open;
+- mutable/immutable MVCC memtables;
+- cheap snapshots и snapshot-aware point reads;
 - immutable `VersionSet`;
-- L0 newest-first lookup;
-- validated L1+ model с sorted/non-overlap invariant;
-- forward merge iterator на binary heap;
-- block-at-a-time SSTable cursors;
+- L0 newest-first lookup и non-overlapping L1+;
+- forward merge iterator и block-at-a-time SSTable cursors;
 - bounded-memory range scan с bounds и limit;
-- file inventory;
-- неразрушающий recovery plan;
-- quick/deep verify;
-- CLI `scan`, `inventory`, `verify` и `inspect recovery-plan`.
-
-Persisted-форматы не менялись: IDENTITY, Internal Key, WAL, SSTable, MANIFEST и CURRENT остаются V1.
+- L0 → L1 и Ln → Ln+1 leveled compaction;
+- MVCC-aware retention и conservative bottommost tombstone dropping;
+- output splitting по user-key boundaries;
+- L0 slowdown/stop backpressure;
+- automatic compaction после `flush()`;
+- public `compact_range` и CLI `compact`;
+- file inventory, recovery plan и quick/deep verify.
 
 ## Пример API
 
@@ -47,18 +47,8 @@ fn main() -> Result<()> {
         Some(b"Alice".to_vec()),
     );
 
-    for item in database.scan(
-        b"user:".to_vec()..b"user;".to_vec(),
-        ReadOptions::default(),
-    )? {
-        let (key, value) = item?;
-        println!(
-            "{} = {}",
-            String::from_utf8_lossy(&key),
-            String::from_utf8_lossy(&value),
-        );
-    }
-
+    database.flush()?;
+    database.compact_range(Some(b"user:"), Some(b"user;"))?;
     database.close()?;
     Ok(())
 }
@@ -70,37 +60,72 @@ fn main() -> Result<()> {
 cargo run -p forgedb-cli -- put ./data key value
 cargo run -p forgedb-cli -- get ./data key
 cargo run -p forgedb-cli -- scan ./data
+cargo run -p forgedb-cli -- compact ./data
+cargo run -p forgedb-cli -- compact ./data user:0000 user:9999
 cargo run -p forgedb-cli -- inventory ./data
 cargo run -p forgedb-cli -- verify ./data --deep
 cargo run -p forgedb-cli -- inspect recovery-plan ./data
 ```
 
-## Гарантии recovery
+CLI boundaries для `scan`/`compact` в v0.4.0 принимаются как UTF-8. Library API остаётся binary-safe.
 
-- WAL-first bootstrap;
-- generation-safe recovery current/previous WAL;
-- current и previous MANIFEST-owned WAL проверяются до replay/open;
-- отсутствующий MANIFEST-owned WAL блокирует open как corruption;
-- SSTable становится live только через durable MANIFEST installation;
-- obsolete previous WAL удаляется только после installation edit;
+## Persisted compatibility
+
+| Формат | Read | Write |
+|---|---|---|
+| IDENTITY | 1 | 1 |
+| Internal Key | 1 | 1 |
+| WAL | 1 | 1 |
+| SSTable | 1 | 1 |
+| MANIFEST | 1, 2 | 2 |
+| CURRENT | 1 | 1 |
+
+Writable open MANIFEST V1 не изменяет старый файл in-place: ForgeDB создаёт новый V2 snapshot MANIFEST и crash-safe публикует его через `CURRENT`. Read-only open V1 ничего не мигрирует.
+
+## Compaction
+
+Default policy:
+
+```text
+levels:                 7
+L0 compaction trigger:  4 files
+L0 slowdown trigger:    8 files
+L0 stop trigger:        12 files
+L1 target:              256 MiB
+level multiplier:       10
+target SST:             64 MiB
+```
+
+Compaction сохраняет newest version каждого user key и версии, необходимые oldest active snapshot. Tombstone может быть отброшен только в bottommost range при snapshot-safe условиях.
+
+Output SSTables полностью создаются до atomic MANIFEST installation edit. File numbers резервируются durable edit до построения outputs и не переиспользуются после crash.
+
+Подробности: [`docs/COMPACTION.md`](docs/COMPACTION.md).
+
+## Recovery
+
+- current/previous MANIFEST-owned WAL проверяются до replay;
+- отсутствующий live WAL/SST является corruption;
+- SST становится live только через durable MANIFEST installation;
+- compaction до installation сохраняет inputs authoritative;
+- compaction после synced installation делает outputs authoritative;
 - orphan SST не включается автоматически в live state;
-- unknown, backup и user files normal recovery не удаляет.
-
-Точная crash matrix SST installation: [`docs/CRASH_RECOVERY_MATRIX_V0.2.md`](docs/CRASH_RECOVERY_MATRIX_V0.2.md).
+- unknown, backup и user files normal recovery не удаляет;
+- future persisted versions отклоняются.
 
 ## Структура workspace
 
 ```text
-crates/forgedb           Database, MVCC, snapshots, iterators, inventory и verify
-crates/forgedb-cli       CLI put/get/delete/scan/inventory/verify/inspect
-crates/forgedb-core      Типы, лимиты, internal keys и WriteBatch
-crates/forgedb-fs        Файловая абстракция, native lock и identity
+crates/forgedb           Database, MVCC, snapshots, reads, compaction и verify
+crates/forgedb-cli       CLI put/get/delete/scan/compact/inventory/verify/inspect
+crates/forgedb-core      Типы, limits, internal keys и WriteBatch
+crates/forgedb-fs        Filesystem abstraction, native lock и identity
 crates/forgedb-wal       WAL V1 и numbered generations
-crates/forgedb-sstable   SSTable V1, blocks, Bloom filter и TableBuildRequest
-crates/forgedb-manifest  MANIFEST V1, VersionEdit и CURRENT
+crates/forgedb-sstable   SSTable V1, blocks, Bloom filter и builder/reader
+crates/forgedb-manifest  MANIFEST V1/V2, VersionEdit и CURRENT
 ```
 
-## Проверка
+## Release gate
 
 ```bash
 cargo fmt --all --check
@@ -110,39 +135,27 @@ cargo test --locked --workspace --doc
 cargo build --locked --workspace --release
 ```
 
-Обязательная matrix: Ubuntu stable, Windows stable и Rust 1.89.
+Основная CI matrix: Ubuntu stable, Windows stable и Rust 1.89.
 
-## Следующий milestone: v0.4.0
+## Ограничения v0.4.0
 
-Планируется leveled compaction:
-
-- compaction picker и score;
-- L0 → L1 и Ln → Ln+1;
-- bounded-memory merge;
-- snapshot-aware version retention;
-- безопасные tombstone rules;
-- output splitting;
-- write stalls;
-- obsolete file lifetime;
-- manual compact.
-
-## Ограничения v0.3.0
-
-- физические L1+ файлы появятся только с compaction в v0.4.0;
+- compaction synchronous; background worker pool появится позже;
+- compaction merge bounded `max_compaction_bytes`, но materialized внутри этого budget;
+- input SST после compaction пока не удаляются автоматически: reference-aware Windows-safe obsolete reaper ещё не реализован;
 - reverse iterator отсутствует;
-- transactions отсутствуют;
-- flush остаётся синхронным;
-- background compaction и write stalls ещё не реализованы;
+- transactions появятся в v0.5.0;
+- range tombstones отсутствуют;
 - normal recovery не удаляет произвольные orphan/unknown files.
 
 ## Документация
 
+- [`docs/COMPACTION.md`](docs/COMPACTION.md);
+- [`docs/formats/MANIFEST_V2.md`](docs/formats/MANIFEST_V2.md);
 - [`docs/LSM_READ_PATH_V1.md`](docs/LSM_READ_PATH_V1.md);
 - [`docs/SNAPSHOTS_AND_MVCC.md`](docs/SNAPSHOTS_AND_MVCC.md);
 - [`docs/FILE_INVENTORY_AND_VERIFY.md`](docs/FILE_INVENTORY_AND_VERIFY.md);
 - [`docs/INVARIANTS.md`](docs/INVARIANTS.md);
-- [`docs/releases/V0.3.0.md`](docs/releases/V0.3.0.md);
-- [`docs/releases/V0.2.0.md`](docs/releases/V0.2.0.md).
+- [`docs/adr/0010-manifest-v2-leveled-files.md`](docs/adr/0010-manifest-v2-leveled-files.md).
 
 ## Лицензия
 

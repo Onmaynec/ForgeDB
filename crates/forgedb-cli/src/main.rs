@@ -77,6 +77,15 @@ fn run() -> Result<()> {
             drop(stdout);
             database.close()
         }
+        "compact" => {
+            let path = required(&mut arguments, "path")?;
+            let start = arguments.next().map(String::into_bytes);
+            let end = arguments.next().map(String::into_bytes);
+            ensure_no_extra(arguments)?;
+            let database = Database::open(PathBuf::from(path), Options::default())?;
+            database.compact_range(start.as_deref(), end.as_deref())?;
+            database.close()
+        }
         "inventory" => {
             let path = required(&mut arguments, "path")?;
             ensure_no_extra(arguments)?;
@@ -209,11 +218,12 @@ fn usage() -> String {
         "  forgedb get <каталог> <ключ>",
         "  forgedb delete <каталог> <ключ> [--sync|--no-sync|--disable-wal]",
         "  forgedb scan <каталог> [start] [end-exclusive]",
+        "  forgedb compact <каталог> [start] [end-exclusive]",
         "  forgedb inventory <каталог>",
         "  forgedb inspect recovery-plan <каталог>",
         "  forgedb verify <каталог> [--deep]",
         "",
-        "CLI v0.3.0 принимает границы scan как UTF-8 и выводит raw key/value через TAB.",
+        "CLI v0.4.0 принимает границы scan/compact как UTF-8; library API остаётся binary-safe.",
     ]
     .join("\n")
 }

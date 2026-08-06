@@ -1,4 +1,4 @@
-use std::io::{ErrorKind, Read, Write};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,7 +10,8 @@ use crate::codec::{decode_complete_frame, decode_frame_header, encode_edit_frame
 use crate::state::{ManifestState, VersionEdit};
 use crate::{
     CURRENT_FILE_NAME, INITIAL_LOG_NUMBER, MANIFEST_FORMAT_VERSION, MANIFEST_FRAME_HEADER_SIZE,
-    MANIFEST_HEADER_SIZE, MINIMUM_READER_VERSION, manifest_file_name, parse_manifest_file_name,
+    MANIFEST_HEADER_SIZE, MINIMUM_MANIFEST_FORMAT_VERSION, MINIMUM_READER_VERSION,
+    manifest_file_name, parse_manifest_file_name,
 };
 
 const MANIFEST_MAGIC: &[u8; 8] = b"FORGEMAN";
@@ -21,6 +22,7 @@ pub struct ReplaySummary {
     pub edit_count: u64,
     pub valid_bytes: u64,
     pub truncated_tail: bool,
+    pub format_version: u16,
 }
 
 /// Append-only writer активного MANIFEST.
@@ -29,6 +31,7 @@ pub struct ManifestWriter<W: WritableFile> {
     file: W,
     path: PathBuf,
     bytes_written: u64,
+    format_version: u16,
 }
 
 impl<W: WritableFile> ManifestWriter<W> {
@@ -40,7 +43,7 @@ impl<W: WritableFile> ManifestWriter<W> {
         limits: &Limits,
     ) -> Result<()> {
         let next = state.applied(edit, limits)?;
-        let frame = encode_edit_frame(edit, limits)?;
+        let frame = encode_edit_frame(edit, limits, self.format_version)?;
         self.file
             .write_all(&frame)
             .map_err(|source| Error::io("append_manifest_edit", Some(self.path.clone()), source))?;
@@ -75,9 +78,14 @@ impl<W: WritableFile> ManifestWriter<W> {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    #[must_use]
+    pub const fn format_version(&self) -> u16 {
+        self.format_version
+    }
 }
 
-/// Создаёт initial MANIFEST и crash-safe CURRENT.
+/// Создаёт initial MANIFEST V2 и crash-safe CURRENT.
 pub fn create_manifest<F: FileSystem>(
     filesystem: &F,
     directory: &Path,
@@ -87,34 +95,13 @@ pub fn create_manifest<F: FileSystem>(
 ) -> Result<(ManifestWriter<F::WritableFile>, ManifestState)> {
     limits.validate()?;
     let state = ManifestState::initial(database_id, initial_log_number)?;
-    let name = manifest_file_name(state.manifest_number);
-    let temporary = directory.join(format!("{name}.tmp"));
-    let final_path = directory.join(&name);
-    let snapshot = encode_edit_frame(&state.snapshot_edit(), limits)?;
-    let mut file = filesystem.create_writable(&temporary)?;
-    file.write_all(&encode_header(database_id, state.manifest_number))
-        .and_then(|_| file.write_all(&snapshot))
-        .map_err(|source| Error::io("write_manifest", Some(temporary.clone()), source))?;
-    file.sync_all()
-        .map_err(|source| Error::io("sync_manifest", Some(temporary.clone()), source))?;
-    drop(file);
-    filesystem.rename_atomic(&temporary, &final_path)?;
-    filesystem.sync_directory(directory)?;
-    write_current(filesystem, directory, &name)?;
-    let bytes_written =
-        u64::try_from(MANIFEST_HEADER_SIZE + snapshot.len()).map_err(|_| Error::ResourceLimit {
-            resource: "manifest_bytes_written",
-            limit: u64::MAX,
-            observed: u64::MAX,
-        })?;
-    Ok((
-        ManifestWriter {
-            file: filesystem.open_appendable(&final_path)?,
-            path: final_path,
-            bytes_written,
-        },
-        state,
-    ))
+    install_snapshot_manifest(
+        filesystem,
+        directory,
+        &state,
+        limits,
+        MANIFEST_FORMAT_VERSION,
+    )
 }
 
 /// Результат открытия active MANIFEST.
@@ -124,11 +111,13 @@ pub struct OpenManifest<W: WritableFile> {
     pub writer: Option<ManifestWriter<W>>,
     /// Восстановленное authoritative состояние.
     pub state: ManifestState,
-    /// Итог строгого replay.
+    /// Итог строгого replay исходного или текущего MANIFEST.
     pub replay: ReplaySummary,
 }
 
 /// Открывает active MANIFEST из CURRENT.
+///
+/// Read-write open автоматически ротирует поддерживаемый MANIFEST V1 в V2 snapshot.
 pub fn open_manifest<F: FileSystem>(
     filesystem: &F,
     directory: &Path,
@@ -141,21 +130,57 @@ pub fn open_manifest<F: FileSystem>(
     let number = parse_manifest_file_name(&name)
         .ok_or_else(|| Error::corruption("CURRENT", "имя MANIFEST не canonical"))?;
     let path = directory.join(name);
-    let (state, summary) = replay_manifest(filesystem, &path, database_id, number, limits)?;
+    let (mut state, mut summary) = replay_manifest(filesystem, &path, database_id, number, limits)?;
     if summary.truncated_tail && !read_only {
         filesystem.truncate_file(&path, summary.valid_bytes)?;
     }
-    let writer = if read_only {
-        None
-    } else {
-        Some(ManifestWriter {
-            file: filesystem.open_appendable(&path)?,
-            path,
-            bytes_written: summary.valid_bytes,
-        })
+
+    if read_only {
+        return Ok(OpenManifest {
+            writer: None,
+            state,
+            replay: summary,
+        });
+    }
+
+    if summary.format_version < MANIFEST_FORMAT_VERSION {
+        let next_manifest_number = state.next_file_number;
+        let next_file_number = next_manifest_number.checked_add(1).ok_or(Error::ResourceLimit {
+            resource: "file_number",
+            limit: u64::MAX,
+            observed: u64::MAX,
+        })?;
+        state.manifest_number = next_manifest_number;
+        state.next_file_number = next_file_number;
+        state.validate(limits)?;
+        let (writer, upgraded_state) = install_snapshot_manifest(
+            filesystem,
+            directory,
+            &state,
+            limits,
+            MANIFEST_FORMAT_VERSION,
+        )?;
+        summary = ReplaySummary {
+            edit_count: 1,
+            valid_bytes: writer.bytes_written,
+            truncated_tail: false,
+            format_version: MANIFEST_FORMAT_VERSION,
+        };
+        return Ok(OpenManifest {
+            writer: Some(writer),
+            state: upgraded_state,
+            replay: summary,
+        });
+    }
+
+    let writer = ManifestWriter {
+        file: filesystem.open_appendable(&path)?,
+        path,
+        bytes_written: summary.valid_bytes,
+        format_version: summary.format_version,
     };
     Ok(OpenManifest {
-        writer,
+        writer: Some(writer),
         state,
         replay: summary,
     })
@@ -180,13 +205,14 @@ pub fn replay_manifest<F: FileSystem>(
             "файл усечён до конца заголовка",
         ));
     }
-    decode_header(&header, database_id, manifest_number)?;
+    let format_version = decode_header(&header, database_id, manifest_number)?;
 
     let mut state = ManifestState::initial(database_id, INITIAL_LOG_NUMBER)?;
     state.manifest_number = manifest_number;
     let mut initialized = false;
     let mut summary = ReplaySummary {
         valid_bytes: u64::try_from(MANIFEST_HEADER_SIZE).unwrap_or(u64::MAX),
+        format_version,
         ..ReplaySummary::default()
     };
     loop {
@@ -211,7 +237,7 @@ pub fn replay_manifest<F: FileSystem>(
             state.validate(limits)?;
             return Ok((state, summary));
         }
-        let descriptor = decode_frame_header(&frame_header, limits)?;
+        let descriptor = decode_frame_header(&frame_header, limits, format_version)?;
         let mut payload = vec![0_u8; descriptor.payload_length];
         let payload_read = read_up_to(&mut reader, &mut payload)
             .map_err(|source| Error::io("read_manifest_payload", Some(path.into()), source))?;
@@ -237,6 +263,7 @@ pub fn replay_manifest<F: FileSystem>(
                 next_file_number: INITIAL_LOG_NUMBER + 1,
                 last_sequence: None,
                 l0_files: Vec::new(),
+                level_files: Vec::new(),
                 minimum_reader_version: MINIMUM_READER_VERSION,
                 feature_flags: 0,
             };
@@ -266,6 +293,49 @@ pub fn replay_manifest<F: FileSystem>(
                 observed: u64::MAX,
             })?;
     }
+}
+
+fn install_snapshot_manifest<F: FileSystem>(
+    filesystem: &F,
+    directory: &Path,
+    state: &ManifestState,
+    limits: &Limits,
+    format_version: u16,
+) -> Result<(ManifestWriter<F::WritableFile>, ManifestState)> {
+    state.validate(limits)?;
+    let name = manifest_file_name(state.manifest_number);
+    let temporary = directory.join(format!("{name}.tmp"));
+    let final_path = directory.join(&name);
+    let snapshot = encode_edit_frame(&state.snapshot_edit(), limits, format_version)?;
+    let mut file = filesystem.create_writable(&temporary)?;
+    file.write_all(&encode_header(
+        state.database_id,
+        state.manifest_number,
+        format_version,
+    ))
+    .and_then(|_| file.write_all(&snapshot))
+    .map_err(|source| Error::io("write_manifest", Some(temporary.clone()), source))?;
+    file.sync_all()
+        .map_err(|source| Error::io("sync_manifest", Some(temporary.clone()), source))?;
+    drop(file);
+    filesystem.rename_atomic(&temporary, &final_path)?;
+    filesystem.sync_directory(directory)?;
+    write_current(filesystem, directory, &name)?;
+    let bytes_written =
+        u64::try_from(MANIFEST_HEADER_SIZE + snapshot.len()).map_err(|_| Error::ResourceLimit {
+            resource: "manifest_bytes_written",
+            limit: u64::MAX,
+            observed: u64::MAX,
+        })?;
+    Ok((
+        ManifestWriter {
+            file: filesystem.open_appendable(&final_path)?,
+            path: final_path,
+            bytes_written,
+            format_version,
+        },
+        state.clone(),
+    ))
 }
 
 fn write_current<F: FileSystem>(filesystem: &F, directory: &Path, name: &str) -> Result<()> {
@@ -320,10 +390,14 @@ fn read_current<F: FileSystem>(filesystem: &F, directory: &Path) -> Result<Strin
     Ok(name.to_owned())
 }
 
-fn encode_header(database_id: DatabaseId, manifest_number: u64) -> [u8; MANIFEST_HEADER_SIZE] {
+fn encode_header(
+    database_id: DatabaseId,
+    manifest_number: u64,
+    format_version: u16,
+) -> [u8; MANIFEST_HEADER_SIZE] {
     let mut output = [0_u8; MANIFEST_HEADER_SIZE];
     output[0..8].copy_from_slice(MANIFEST_MAGIC);
-    output[8..10].copy_from_slice(&MANIFEST_FORMAT_VERSION.to_le_bytes());
+    output[8..10].copy_from_slice(&format_version.to_le_bytes());
     output[10..12].copy_from_slice(&(MANIFEST_HEADER_SIZE as u16).to_le_bytes());
     output[12..16].copy_from_slice(&0_u32.to_le_bytes());
     output[16..32].copy_from_slice(database_id.as_bytes());
@@ -346,16 +420,16 @@ fn decode_header(
     input: &[u8; MANIFEST_HEADER_SIZE],
     database_id: DatabaseId,
     manifest_number: u64,
-) -> Result<()> {
+) -> Result<u16> {
     if &input[0..8] != MANIFEST_MAGIC {
         return Err(Error::corruption("MANIFEST header", "неверная сигнатура"));
     }
     let version = read_u16(input, 8, "MANIFEST header")?;
-    if version != MANIFEST_FORMAT_VERSION {
+    if !(MINIMUM_MANIFEST_FORMAT_VERSION..=MANIFEST_FORMAT_VERSION).contains(&version) {
         return Err(Error::UnsupportedFormat {
             component: "MANIFEST",
             found: u32::from(version),
-            minimum_supported: u32::from(MANIFEST_FORMAT_VERSION),
+            minimum_supported: u32::from(MINIMUM_MANIFEST_FORMAT_VERSION),
             maximum_supported: u32::from(MANIFEST_FORMAT_VERSION),
         });
     }
@@ -394,20 +468,18 @@ fn decode_header(
             maximum_supported: MINIMUM_READER_VERSION,
         });
     }
-    Ok(())
+    Ok(version)
 }
 
 fn read_up_to<R: Read>(reader: &mut R, buffer: &mut [u8]) -> std::io::Result<usize> {
-    let mut filled = 0_usize;
-    while filled < buffer.len() {
-        match reader.read(&mut buffer[filled..]) {
-            Ok(0) => break,
-            Ok(read) => filled += read,
-            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
+    let mut read = 0_usize;
+    while read < buffer.len() {
+        match reader.read(&mut buffer[read..])? {
+            0 => break,
+            count => read += count,
         }
     }
-    Ok(filled)
+    Ok(read)
 }
 
 fn read_u16(input: &[u8], offset: usize, component: &'static str) -> Result<u16> {
@@ -479,6 +551,7 @@ mod tests {
         let limits = Limits::default();
         let (mut writer, mut state) =
             create_manifest(&filesystem, &directory, database_id, 1, &limits)?;
+        assert_eq!(writer.format_version(), MANIFEST_FORMAT_VERSION);
         writer.append_edit(
             &mut state,
             &VersionEdit {
@@ -494,6 +567,7 @@ mod tests {
         assert_eq!(opened.state.log_number, 2);
         assert_eq!(opened.state.previous_log_number, Some(1));
         assert_eq!(opened.replay.edit_count, 2);
+        assert_eq!(opened.replay.format_version, MANIFEST_FORMAT_VERSION);
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
         Ok(())
@@ -512,7 +586,7 @@ mod tests {
             .append(true)
             .open(&path)
             .map_err(|source| Error::io("open_test_manifest", Some(path.clone()), source))?;
-        file.write_all(b"FMV1\x20")
+        file.write_all(b"FMV2\x20")
             .map_err(|source| Error::io("append_partial_manifest", Some(path.clone()), source))?;
         drop(file);
         let opened = open_manifest(&filesystem, &directory, database_id, &limits, true)?;

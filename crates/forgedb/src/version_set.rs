@@ -62,12 +62,33 @@ impl VersionSet {
                 limits,
                 max_file_size,
             )?;
-            let level_zero = levels.get_mut(0).ok_or(Error::InternalInvariant {
-                invariant: "I-VERSIONSET-L0-PRESENT",
-                reason: "VersionSet не содержит L0".to_owned(),
-            })?;
-            level_zero.push(TableHandle {
+            levels[0].push(TableHandle {
                 metadata: metadata.clone(),
+                reader: Arc::new(reader),
+            });
+        }
+        for leveled in &manifest.level_files {
+            let level = usize::try_from(leveled.level).map_err(|_| Error::ResourceLimit {
+                resource: "lsm_level",
+                limit: u64::try_from(level_count.saturating_sub(1)).unwrap_or(u64::MAX),
+                observed: u64::from(leveled.level),
+            })?;
+            if level == 0 || level >= level_count {
+                return Err(Error::corruption(
+                    "VersionSet",
+                    format!("MANIFEST содержит SSTable вне configured level_count: L{level}"),
+                ));
+            }
+            let reader = TableReader::open(
+                &filesystem,
+                directory,
+                identity,
+                &leveled.table,
+                limits,
+                max_file_size,
+            )?;
+            levels[level].push(TableHandle {
+                metadata: leveled.table.clone(),
                 reader: Arc::new(reader),
             });
         }
@@ -96,6 +117,53 @@ impl VersionSet {
             metadata,
             reader: Arc::new(reader),
         });
+        next.validate(limits)?;
+        Ok(next)
+    }
+
+    pub(crate) fn with_compaction(
+        &self,
+        deleted: &[(usize, u64)],
+        added: Vec<(usize, TableMeta, TableReader)>,
+        limits: &Limits,
+    ) -> Result<Self> {
+        let mut next = self.clone();
+        for (level, file_number) in deleted {
+            let files = next.levels.get_mut(*level).ok_or(Error::InternalInvariant {
+                invariant: "I-COMPACTION-DELETE-LEVEL",
+                reason: format!("уровень L{level} отсутствует"),
+            })?;
+            let before = files.len();
+            files.retain(|file| file.metadata.file_number != *file_number);
+            if files.len() == before {
+                return Err(Error::InternalInvariant {
+                    invariant: "I-COMPACTION-DELETE-LIVE-FILE",
+                    reason: format!("SST-{file_number:06} отсутствует в L{level}"),
+                });
+            }
+        }
+        for (level, metadata, reader) in added {
+            if level == 0 {
+                return Err(Error::InternalInvariant {
+                    invariant: "I-COMPACTION-OUTPUT-LEVEL",
+                    reason: "compaction output не устанавливается обратно в L0".to_owned(),
+                });
+            }
+            let files = next.levels.get_mut(level).ok_or(Error::InternalInvariant {
+                invariant: "I-COMPACTION-OUTPUT-LEVEL",
+                reason: format!("уровень L{level} отсутствует"),
+            })?;
+            files.push(TableHandle {
+                metadata,
+                reader: Arc::new(reader),
+            });
+            files.sort_by(|left, right| {
+                left.metadata
+                    .smallest_user_key
+                    .cmp(&right.metadata.smallest_user_key)
+                    .then_with(|| left.metadata.file_number.cmp(&right.metadata.file_number))
+            });
+        }
         next.validate(limits)?;
         Ok(next)
     }
@@ -166,6 +234,47 @@ impl VersionSet {
             files.extend(level.iter().cloned());
         }
         Ok(files)
+    }
+
+    pub(crate) fn level_files(&self, level: usize) -> Result<&[TableHandle]> {
+        self.levels
+            .get(level)
+            .map(Vec::as_slice)
+            .ok_or_else(|| Error::invalid_argument("level", format!("уровень L{level} отсутствует")))
+    }
+
+    pub(crate) fn overlapping_files(
+        &self,
+        level: usize,
+        smallest: &[u8],
+        largest: &[u8],
+    ) -> Result<Vec<TableHandle>> {
+        if smallest > largest {
+            return Err(Error::invalid_argument(
+                "compaction_range",
+                "smallest key больше largest key",
+            ));
+        }
+        Ok(self
+            .level_files(level)?
+            .iter()
+            .filter(|table| {
+                table.metadata.smallest_user_key.as_slice() <= largest
+                    && smallest <= table.metadata.largest_user_key.as_slice()
+            })
+            .cloned()
+            .collect())
+    }
+
+    pub(crate) fn level_size(&self, level: usize) -> Result<u64> {
+        self.level_files(level)?.iter().try_fold(0_u64, |sum, table| {
+            sum.checked_add(table.metadata.file_size)
+                .ok_or(Error::ResourceLimit {
+                    resource: "level_size",
+                    limit: u64::MAX,
+                    observed: u64::MAX,
+                })
+        })
     }
 
     pub(crate) fn validate(&self, limits: &Limits) -> Result<()> {

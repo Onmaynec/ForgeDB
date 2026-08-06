@@ -2,12 +2,14 @@ use forgedb_core::{Error, Limits, Result, SequenceNumber};
 use forgedb_sstable::TableMeta;
 
 use crate::checksum::crc32c;
-use crate::state::VersionEdit;
-use crate::{MANIFEST_FORMAT_VERSION, MANIFEST_FRAME_HEADER_SIZE};
+use crate::state::{LevelFileMeta, LevelFileRef, VersionEdit};
+use crate::{
+    MANIFEST_FORMAT_VERSION, MANIFEST_FRAME_HEADER_SIZE, MINIMUM_MANIFEST_FORMAT_VERSION,
+};
 
-const FRAME_MAGIC: &[u8; 4] = b"FMV1";
+const FRAME_MAGIC_V1: &[u8; 4] = b"FMV1";
+const FRAME_MAGIC_V2: &[u8; 4] = b"FMV2";
 const RECORD_VERSION_EDIT: u8 = 1;
-const EDIT_VERSION: u8 = 1;
 const TAG_COMPARATOR: u8 = 1;
 const TAG_LOG_NUMBER: u8 = 2;
 const TAG_PREVIOUS_LOG_NUMBER: u8 = 3;
@@ -17,6 +19,8 @@ const TAG_ADD_FILE: u8 = 6;
 const TAG_DELETE_FILE: u8 = 7;
 const TAG_MINIMUM_READER_VERSION: u8 = 8;
 const TAG_FEATURE_FLAGS: u8 = 9;
+const TAG_ADD_LEVEL_FILE: u8 = 10;
+const TAG_DELETE_LEVEL_FILE: u8 = 11;
 const MAX_FIELDS: usize = 1_000_000;
 const MAX_COMPARATOR_BYTES: usize = 256;
 
@@ -25,15 +29,32 @@ pub(crate) struct FrameDescriptor {
     pub total_length: usize,
     pub payload_length: usize,
     pub field_count: usize,
+    pub format_version: u16,
 }
 
-pub(crate) fn encode_edit_frame(edit: &VersionEdit, limits: &Limits) -> Result<Vec<u8>> {
+pub(crate) fn encode_edit_frame(
+    edit: &VersionEdit,
+    limits: &Limits,
+    format_version: u16,
+) -> Result<Vec<u8>> {
+    validate_supported_version(format_version, "MANIFEST encoder")?;
     if edit.is_empty() {
         return Err(Error::invalid_argument(
             "version_edit",
             "пустой VersionEdit не кодируется",
         ));
     }
+    if format_version == 1
+        && (!edit.added_level_files.is_empty() || !edit.deleted_level_files.is_empty())
+    {
+        return Err(Error::UnsupportedFormat {
+            component: "MANIFEST V1 leveled edit",
+            found: 2,
+            minimum_supported: 1,
+            maximum_supported: 1,
+        });
+    }
+
     let mut fields = Vec::<(u8, Vec<u8>)>::new();
     if let Some(comparator) = &edit.comparator {
         if comparator.len() > MAX_COMPARATOR_BYTES {
@@ -72,6 +93,14 @@ pub(crate) fn encode_edit_frame(edit: &VersionEdit, limits: &Limits) -> Result<V
     for number in &edit.deleted_files {
         fields.push((TAG_DELETE_FILE, number.to_le_bytes().to_vec()));
     }
+    if format_version >= 2 {
+        for file in &edit.added_level_files {
+            fields.push((TAG_ADD_LEVEL_FILE, encode_level_file(file, limits)?));
+        }
+        for file in &edit.deleted_level_files {
+            fields.push((TAG_DELETE_LEVEL_FILE, encode_level_ref(*file)?));
+        }
+    }
     if let Some(version) = edit.minimum_reader_version {
         fields.push((TAG_MINIMUM_READER_VERSION, version.to_le_bytes().to_vec()));
     }
@@ -87,9 +116,13 @@ pub(crate) fn encode_edit_frame(edit: &VersionEdit, limits: &Limits) -> Result<V
     }
 
     let mut payload = Vec::new();
-    payload.push(EDIT_VERSION);
+    payload.push(u8::try_from(format_version).map_err(|_| Error::ResourceLimit {
+        resource: "manifest_format_version",
+        limit: u64::from(u8::MAX),
+        observed: u64::from(format_version),
+    })?);
     payload.extend_from_slice(&[0_u8; 3]);
-    for (tag, value) in fields.iter() {
+    for (tag, value) in &fields {
         payload.push(*tag);
         payload.extend_from_slice(&[0_u8; 3]);
         let length = u32::try_from(value.len()).map_err(|_| Error::ResourceLimit {
@@ -131,11 +164,11 @@ pub(crate) fn encode_edit_frame(edit: &VersionEdit, limits: &Limits) -> Result<V
     })?;
 
     let mut frame = vec![0_u8; MANIFEST_FRAME_HEADER_SIZE];
-    frame[0..4].copy_from_slice(FRAME_MAGIC);
+    frame[0..4].copy_from_slice(frame_magic(format_version)?);
     frame[4..8].copy_from_slice(&total_u32.to_le_bytes());
     frame[12] = RECORD_VERSION_EDIT;
     frame[13] = 0;
-    frame[14..16].copy_from_slice(&MANIFEST_FORMAT_VERSION.to_le_bytes());
+    frame[14..16].copy_from_slice(&format_version.to_le_bytes());
     frame[16..20].copy_from_slice(&field_count.to_le_bytes());
     frame[20..24].copy_from_slice(&payload_u32.to_le_bytes());
     frame[24..32].copy_from_slice(&0_u64.to_le_bytes());
@@ -148,8 +181,10 @@ pub(crate) fn encode_edit_frame(edit: &VersionEdit, limits: &Limits) -> Result<V
 pub(crate) fn decode_frame_header(
     input: &[u8; MANIFEST_FRAME_HEADER_SIZE],
     limits: &Limits,
+    manifest_format_version: u16,
 ) -> Result<FrameDescriptor> {
-    if &input[0..4] != FRAME_MAGIC {
+    validate_supported_version(manifest_format_version, "MANIFEST frame")?;
+    if &input[0..4] != frame_magic(manifest_format_version)? {
         return Err(Error::corruption("MANIFEST frame", "неверная сигнатура"));
     }
     if input[12] != RECORD_VERSION_EDIT || input[13] != 0 {
@@ -161,12 +196,12 @@ pub(crate) fn decode_frame_header(
         });
     }
     let version = read_u16(input, 14, "MANIFEST frame")?;
-    if version != MANIFEST_FORMAT_VERSION {
+    if version != manifest_format_version {
         return Err(Error::UnsupportedFormat {
             component: "MANIFEST frame",
             found: u32::from(version),
-            minimum_supported: u32::from(MANIFEST_FORMAT_VERSION),
-            maximum_supported: u32::from(MANIFEST_FORMAT_VERSION),
+            minimum_supported: u32::from(manifest_format_version),
+            maximum_supported: u32::from(manifest_format_version),
         });
     }
     if read_u64(input, 24, "MANIFEST frame")? != 0 {
@@ -218,6 +253,7 @@ pub(crate) fn decode_frame_header(
         total_length: total,
         payload_length: payload,
         field_count,
+        format_version: manifest_format_version,
     })
 }
 
@@ -239,12 +275,16 @@ pub(crate) fn decode_complete_frame(
     if crc32c(&checksum_input) != read_u32(header, 8, "MANIFEST frame")? {
         return Err(Error::corruption("MANIFEST frame", "CRC32C не совпадает"));
     }
-    if payload.len() < 4 || payload[0] != EDIT_VERSION || payload[1..4] != [0_u8; 3] {
+    let payload_version = payload.first().copied().unwrap_or(0);
+    if payload.len() < 4
+        || u16::from(payload_version) != descriptor.format_version
+        || payload[1..4] != [0_u8; 3]
+    {
         return Err(Error::UnsupportedFormat {
             component: "VersionEdit",
-            found: u32::from(payload.first().copied().unwrap_or(0)),
-            minimum_supported: u32::from(EDIT_VERSION),
-            maximum_supported: u32::from(EDIT_VERSION),
+            found: u32::from(payload_version),
+            minimum_supported: u32::from(descriptor.format_version),
+            maximum_supported: u32::from(descriptor.format_version),
         });
     }
     let mut edit = VersionEdit::default();
@@ -277,7 +317,13 @@ pub(crate) fn decode_complete_frame(
         let value = payload
             .get(field_header_end..value_end)
             .ok_or_else(|| Error::corruption("VersionEdit", "field value усечено"))?;
-        decode_field(&mut edit, tag, value, limits)?;
+        decode_field(
+            &mut edit,
+            tag,
+            value,
+            limits,
+            descriptor.format_version,
+        )?;
         offset = value_end;
     }
     if offset != payload.len() || edit.is_empty() {
@@ -289,7 +335,13 @@ pub(crate) fn decode_complete_frame(
     Ok(edit)
 }
 
-fn decode_field(edit: &mut VersionEdit, tag: u8, value: &[u8], limits: &Limits) -> Result<()> {
+fn decode_field(
+    edit: &mut VersionEdit,
+    tag: u8,
+    value: &[u8],
+    limits: &Limits,
+    format_version: u16,
+) -> Result<()> {
     match tag {
         TAG_COMPARATOR => {
             if edit.comparator.is_some() || value.len() > MAX_COMPARATOR_BYTES {
@@ -326,14 +378,13 @@ fn decode_field(edit: &mut VersionEdit, tag: u8, value: &[u8], limits: &Limits) 
                 ));
             }
             let sequence = exact_u64(value, "last_sequence")?;
-            edit.last_sequence =
-                Some(if sequence == 0 {
-                    None
-                } else {
-                    Some(SequenceNumber::new(sequence).map_err(|_| {
-                        Error::corruption("VersionEdit", "last_sequence равен нулю")
-                    })?)
-                });
+            edit.last_sequence = Some(if sequence == 0 {
+                None
+            } else {
+                Some(SequenceNumber::new(sequence).map_err(|_| {
+                    Error::corruption("VersionEdit", "last_sequence равен нулю")
+                })?)
+            });
         }
         TAG_ADD_FILE => edit.added_files.push(decode_table_meta(value, limits)?),
         TAG_DELETE_FILE => edit
@@ -349,16 +400,81 @@ fn decode_field(edit: &mut VersionEdit, tag: u8, value: &[u8], limits: &Limits) 
             edit.minimum_reader_version = Some(read_u32(value, 0, "VersionEdit")?);
         }
         TAG_FEATURE_FLAGS => set_once_u64(&mut edit.feature_flags, value, "feature_flags")?,
+        TAG_ADD_LEVEL_FILE if format_version >= 2 => {
+            edit.added_level_files
+                .push(decode_level_file(value, limits)?)
+        }
+        TAG_DELETE_LEVEL_FILE if format_version >= 2 => {
+            edit.deleted_level_files.push(decode_level_ref(value)?)
+        }
         _ => {
             return Err(Error::UnsupportedFormat {
                 component: "VersionEdit field tag",
                 found: u32::from(tag),
                 minimum_supported: u32::from(TAG_COMPARATOR),
-                maximum_supported: u32::from(TAG_FEATURE_FLAGS),
+                maximum_supported: u32::from(if format_version >= 2 {
+                    TAG_DELETE_LEVEL_FILE
+                } else {
+                    TAG_FEATURE_FLAGS
+                }),
             });
         }
     }
     Ok(())
+}
+
+fn encode_level_file(file: &LevelFileMeta, limits: &Limits) -> Result<Vec<u8>> {
+    if file.level == 0 {
+        return Err(Error::invalid_argument(
+            "level",
+            "leveled SSTable не может принадлежать L0",
+        ));
+    }
+    let table = encode_table_meta(&file.table, limits)?;
+    let mut output = Vec::with_capacity(4_usize.saturating_add(table.len()));
+    output.extend_from_slice(&file.level.to_le_bytes());
+    output.extend_from_slice(&table);
+    Ok(output)
+}
+
+fn decode_level_file(value: &[u8], limits: &Limits) -> Result<LevelFileMeta> {
+    if value.len() < 56 {
+        return Err(Error::corruption(
+            "VersionEdit leveled add file",
+            "record усечён",
+        ));
+    }
+    let level = read_u32(value, 0, "VersionEdit leveled add file")?;
+    let table = decode_table_meta(&value[4..], limits)?;
+    LevelFileMeta::new(level, table, limits)
+        .map_err(|_| Error::corruption("VersionEdit leveled add file", "level недопустим"))
+}
+
+fn encode_level_ref(file: LevelFileRef) -> Result<Vec<u8>> {
+    if file.level == 0 || file.file_number == 0 {
+        return Err(Error::invalid_argument(
+            "leveled_delete",
+            "level и file_number должны быть ненулевыми",
+        ));
+    }
+    let mut output = Vec::with_capacity(12);
+    output.extend_from_slice(&file.level.to_le_bytes());
+    output.extend_from_slice(&file.file_number.to_le_bytes());
+    Ok(output)
+}
+
+fn decode_level_ref(value: &[u8]) -> Result<LevelFileRef> {
+    if value.len() != 12 {
+        return Err(Error::corruption(
+            "VersionEdit leveled delete file",
+            "record имеет неверную ширину",
+        ));
+    }
+    LevelFileRef::new(
+        read_u32(value, 0, "VersionEdit leveled delete file")?,
+        read_u64(value, 4, "VersionEdit leveled delete file")?,
+    )
+    .map_err(|_| Error::corruption("VersionEdit leveled delete file", "reference недопустима"))
 }
 
 fn encode_table_meta(file: &TableMeta, limits: &Limits) -> Result<Vec<u8>> {
@@ -396,7 +512,7 @@ fn decode_table_meta(value: &[u8], limits: &Limits) -> Result<TableMeta> {
     if value.len() < 52 || read_u32(value, 0, "VersionEdit add file")? != 0 {
         return Err(Error::corruption(
             "VersionEdit add file",
-            "record усечён или level не равен 0",
+            "record усечён или legacy level не равен 0",
         ));
     }
     let smallest = usize::try_from(read_u32(value, 20, "VersionEdit add file")?).map_err(|_| {
@@ -449,6 +565,31 @@ fn decode_table_meta(value: &[u8], limits: &Limits) -> Result<TableMeta> {
     };
     file.validate(limits)?;
     Ok(file)
+}
+
+fn validate_supported_version(version: u16, component: &'static str) -> Result<()> {
+    if !(MINIMUM_MANIFEST_FORMAT_VERSION..=MANIFEST_FORMAT_VERSION).contains(&version) {
+        return Err(Error::UnsupportedFormat {
+            component,
+            found: u32::from(version),
+            minimum_supported: u32::from(MINIMUM_MANIFEST_FORMAT_VERSION),
+            maximum_supported: u32::from(MANIFEST_FORMAT_VERSION),
+        });
+    }
+    Ok(())
+}
+
+fn frame_magic(version: u16) -> Result<&'static [u8; 4]> {
+    match version {
+        1 => Ok(FRAME_MAGIC_V1),
+        2 => Ok(FRAME_MAGIC_V2),
+        _ => Err(Error::UnsupportedFormat {
+            component: "MANIFEST frame magic",
+            found: u32::from(version),
+            minimum_supported: u32::from(MINIMUM_MANIFEST_FORMAT_VERSION),
+            maximum_supported: u32::from(MANIFEST_FORMAT_VERSION),
+        }),
+    }
 }
 
 fn set_once_u64(target: &mut Option<u64>, value: &[u8], name: &'static str) -> Result<()> {
@@ -506,4 +647,55 @@ fn read_u64(input: &[u8], offset: usize, component: &'static str) -> Result<u64>
         .try_into()
         .map_err(|_| Error::corruption(component, "поле u64 имеет неверную ширину"))?;
     Ok(u64::from_le_bytes(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn metadata(number: u64) -> Result<TableMeta> {
+        Ok(TableMeta {
+            file_number: number,
+            file_size: 256,
+            smallest_user_key: b"a".to_vec(),
+            largest_user_key: b"z".to_vec(),
+            smallest_sequence: SequenceNumber::FIRST,
+            largest_sequence: SequenceNumber::FIRST,
+            entry_count: 1,
+        })
+    }
+
+    #[test]
+    fn v1_rejects_leveled_fields() -> Result<()> {
+        let limits = Limits::default();
+        let edit = VersionEdit {
+            added_level_files: vec![LevelFileMeta::new(1, metadata(10)?, &limits)?],
+            ..VersionEdit::default()
+        };
+        assert!(encode_edit_frame(&edit, &limits, 1).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn v2_round_trips_leveled_fields() -> Result<()> {
+        let limits = Limits::default();
+        let edit = VersionEdit {
+            added_level_files: vec![LevelFileMeta::new(2, metadata(10)?, &limits)?],
+            deleted_level_files: vec![LevelFileRef::new(1, 9)?],
+            ..VersionEdit::default()
+        };
+        let frame = encode_edit_frame(&edit, &limits, 2)?;
+        let header: [u8; MANIFEST_FRAME_HEADER_SIZE] = frame[..MANIFEST_FRAME_HEADER_SIZE]
+            .try_into()
+            .map_err(|_| Error::corruption("test", "frame header"))?;
+        let descriptor = decode_frame_header(&header, &limits, 2)?;
+        let decoded = decode_complete_frame(
+            &header,
+            &frame[MANIFEST_FRAME_HEADER_SIZE..],
+            descriptor,
+            &limits,
+        )?;
+        assert_eq!(decoded, edit);
+        Ok(())
+    }
 }
