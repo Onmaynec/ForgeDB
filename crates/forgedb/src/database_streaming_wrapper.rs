@@ -158,7 +158,7 @@ impl StreamingDatabase {
 
     /// Возвращает persisted UUID базы.
     #[must_use]
-    pub const fn identity(&self) -> DatabaseId {
+    pub fn identity(&self) -> DatabaseId {
         self.inner.identity()
     }
 
