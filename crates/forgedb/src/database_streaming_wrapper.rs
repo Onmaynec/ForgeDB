@@ -1,5 +1,5 @@
 /// Публичный Database wrapper с block-at-a-time SSTable scan и единым public write gate.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct StreamingDatabase {
     inner: Arc<Database>,
     write_gate: Arc<Mutex<()>>,
@@ -61,7 +61,7 @@ impl StreamingDatabase {
 
     /// Начинает optimistic transaction на snapshot текущего visible sequence.
     pub fn begin_transaction(&self) -> Result<crate::Transaction> {
-        crate::Transaction::begin(self.clone())
+        crate::Transaction::begin(self)
     }
 
     /// Создаёт forward iterator; SSTable sources держат index и один data block.
@@ -166,6 +166,13 @@ impl StreamingDatabase {
     #[must_use]
     pub fn path(&self) -> &Path {
         self.inner.path()
+    }
+
+    pub(crate) fn transaction_handle(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            write_gate: Arc::clone(&self.write_gate),
+        }
     }
 
     pub(crate) fn new_transaction_batch(&self) -> Result<(WriteBatch, usize)> {
