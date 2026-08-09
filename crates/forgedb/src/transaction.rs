@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use forgedb_core::{BatchOperation, Error, Result, WriteBatch};
 
 use crate::database_v3_fixed::StreamingDatabase;
-use crate::{ReadOptions, Snapshot, WriteOptions};
+use crate::{Durability, ReadOptions, Snapshot, WriteOptions};
 
 /// Состояние optimistic transaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -100,6 +100,14 @@ impl Transaction {
     /// `Database::write`.
     pub fn commit(&mut self, write_options: WriteOptions) -> Result<()> {
         self.ensure_active()?;
+        if write_options.durability() == Durability::DisableWal {
+            self.state = TransactionState::Failed;
+            self.snapshot.take();
+            return Err(Error::invalid_argument(
+                "durability",
+                "DisableWal запрещён для transaction commit",
+            ));
+        }
         if self.write_batch.is_empty() {
             self.state = TransactionState::Committed;
             self.snapshot.take();
@@ -323,6 +331,20 @@ mod tests {
         assert!(matches!(result, Err(Error::InvalidArgument { .. })));
         assert_eq!(transaction.state(), TransactionState::Failed);
         assert_eq!(database.get(b"key")?, None);
+        database.close()?;
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
+    #[test]
+    fn disable_wal_is_rejected_for_empty_transaction_too() -> Result<()> {
+        let directory = temporary_directory("disable-wal-empty")?;
+        let database = Database::open(&directory, Options::default())?;
+        let mut transaction = database.begin_transaction()?;
+        let result = transaction.commit(WriteOptions::disable_wal());
+        assert!(matches!(result, Err(Error::InvalidArgument { .. })));
+        assert_eq!(transaction.state(), TransactionState::Failed);
         database.close()?;
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
