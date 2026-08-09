@@ -117,7 +117,7 @@ v0.5.0 не меняет persisted layout.
 ### Ограничения
 
 - Compaction остаётся synchronous; background worker pool ещё не реализован.
-- Compaction job bounded `max_compaction_bytes`, но materialize-ит выбранные entries в пределах этого budget).
+- Compaction job bounded `max_compaction_bytes`, но materialize-ит выбранные entries в пределах этого budget.
 - Physical input SST после compaction пока не удаляются автоматически: reference-aware Windows-safe obsolete reaper ещё не реализован.
 - Reverse iterator и transactions отсутствуют.
 - Compaction metrics и range tombstones отсутствуют.
