@@ -40,7 +40,7 @@ fn generated_transaction_sequences_match_reference_model() -> Result<()> {
     let mut seed = 0x5eed_f0db_0500_u64;
 
     for round in 0..96_u64 {
-        if round % 7 == 0 {
+        if round.is_multiple_of(7) {
             let key = format!("key-{:02}", next(&mut seed) % 24).into_bytes();
             let external = format!("external-{round}").into_bytes();
             let mut transaction = database.begin_transaction()?;
@@ -54,7 +54,7 @@ fn generated_transaction_sequences_match_reference_model() -> Result<()> {
             let mut pending = BTreeMap::<Vec<u8>, Option<Vec<u8>>>::new();
             for operation in 0..4_u64 {
                 let key = format!("key-{:02}", next(&mut seed) % 24).into_bytes();
-                if (next(&mut seed) + operation) % 5 == 0 {
+                if (next(&mut seed) + operation).is_multiple_of(5) {
                     transaction.delete(&key)?;
                     pending.insert(key.clone(), None);
                     assert_eq!(transaction.get(&key)?, None);
