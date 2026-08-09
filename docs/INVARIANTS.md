@@ -7,7 +7,7 @@
 - **частично** — обеспечена безопасная часть инварианта, но lifecycle ещё неполон;
 - **запланирован** — feature нельзя заявлять до указанного milestone.
 
-| ID | Инвариант | Статус перед v0.4.0 gate | Доказательство |
+| ID | Инвариант | Статус перед v0.5.0 gate | Доказательство |
 |---|---|---|---|
 | I-001 | Один каталог базы одновременно открыт не более чем одним процессом ForgeDB. | обеспечен | native lock tests; lock удерживается до close/drop/process exit |
 | I-002 | Номер persisted-файла не переиспользуется. | draft v0.4.0 | `next_file_number`; MANIFEST validation; flush reservation; compaction reservation edit до output creation |
@@ -43,15 +43,21 @@
 | I-032 | Header-only orphan WAL переиспользуется только после strict validation. | обеспечен | idempotent create WAL tests |
 | I-033 | Без CURRENT bootstrap cleanup удаляет только reserved bootstrap artifacts. | обеспечен | bootstrap cleanup test |
 | I-034 | Existing CURRENT запрещает повторную initial MANIFEST initialization. | обеспечен | existing-current rejection test |
-| I-035 | Release gate использует зафиксированный dependency graph. | draft v0.4.0 | Cargo.lock 0.4.0; CI/release команды используют `--locked` |
+| I-035 | Release gate использует зафиксированный dependency graph. | draft v0.4.0 | Cargo.lock; CI/release команды используют `--locked` |
 | I-036 | Compaction installation является одним atomic VersionEdit относительно LSM topology. | draft v0.4.0 | один edit содержит delete L0/L1+ inputs и add target outputs; cloned-state validation перед publish |
 | I-037 | Crash до compaction installation не делает output live; crash после synced installation не возвращает input в live state. | draft v0.4.0 | MANIFEST authoritative topology + reopen L0→L1 test; documented protocol |
 | I-038 | MANIFEST V1 не изменяется in-place при upgrade до V2. | draft v0.4.0 | read-only V1 unchanged; writable rotation через новый MANIFEST + CURRENT replacement |
 | I-039 | Output splitting не разделяет versions одного user key между SSTables. | draft v0.4.0 | `build_compaction_chunks` groups user key; dedicated unit test |
 | I-040 | L0 stop backpressure не допускает unbounded growth через публичный write path. | draft v0.4.0 | stop threshold запускает synchronous compaction и затем возвращает `Busy`, если pressure остаётся |
+| I-041 | Active transaction читает последнюю собственную buffered mutation раньше snapshot database state. | draft v0.5.0 | `Transaction::own_write`; own-write/put-delete-read test |
+| I-042 | Transaction commit отклоняется целиком, если любой written key имеет committed sequence выше snapshot sequence. | draft v0.5.0 | mutable/immutable/SST validation; same-key, ABA sequence и flushed-SST conflict tests |
+| I-043 | Между successful transaction conflict validation и WAL append не может вклиниться другой public writer. | draft v0.5.0 | общий `StreamingDatabase::write_gate` охватывает ordinary writes и validate→write transaction path |
+| I-044 | Successful transaction commit сохраняется одним существующим atomic WAL WriteBatch и не имеет частично восстанавливаемого transaction record. | draft v0.5.0 | transaction reopen recovery test; WAL one-frame-per-batch invariant I-004 |
+| I-045 | Active transaction удерживает зарегистрированный snapshot до commit/rollback/conflict/failure. | draft v0.5.0 | `Transaction.snapshot`; terminal paths вызывают `take`; existing SnapshotRegistry oldest-sequence retention |
+| I-046 | Transaction commit не принимает `DisableWal`. | draft v0.5.0 | explicit validation + rejection/no-publication test + CLI integration test |
 
 ## Правило изменения
 
 Новый persisted-протокол или изменение write/recovery path обязаны обновить эту таблицу и добавить автоматическое доказательство соответствующего инварианта. Одной документации недостаточно для статуса **обеспечен**.
 
-После successful v0.4.0 release gate строки со статусом `draft v0.4.0` могут быть переведены в **обеспечен** только там, где фактические tests покрывают заявленный invariant. I-013 остаётся **частично**, пока не появится reference-aware obsolete-file reaper.
+После successful v0.5.0 release gate строки со статусом `draft v0.5.0` могут быть переведены в **обеспечен** только там, где фактические tests покрывают заявленный invariant. Старые `draft v0.4.0` также нельзя автоматически повышать без подтверждённого gate. I-013 остаётся **частично**, пока не появится reference-aware obsolete-file reaper.
