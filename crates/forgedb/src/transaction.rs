@@ -224,12 +224,53 @@ mod tests {
         first.put(b"key", b"first")?;
         second.put(b"key", b"second")?;
         first.commit(WriteOptions::sync())?;
-        let error = second
-            .commit(WriteOptions::sync())
-            .expect_err("conflict expected");
-        assert!(matches!(error, Error::Conflict { .. }));
+        let result = second.commit(WriteOptions::sync());
+        assert!(matches!(result, Err(Error::Conflict { .. })));
         assert_eq!(second.state(), TransactionState::Conflicted);
         assert_eq!(database.get(b"key")?, Some(b"first".to_vec()));
+        database.close()?;
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
+    #[test]
+    fn sequence_change_conflicts_even_when_value_returns_to_snapshot_bytes() -> Result<()> {
+        let directory = temporary_directory("sequence-conflict")?;
+        let database = Database::open(&directory, Options::default())?;
+        database.put(b"key", b"base", WriteOptions::sync())?;
+        let mut transaction = database.begin_transaction()?;
+        database.put(b"key", b"temporary", WriteOptions::sync())?;
+        database.put(b"key", b"base", WriteOptions::sync())?;
+        transaction.put(b"key", b"transaction")?;
+        let result = transaction.commit(WriteOptions::sync());
+        assert!(matches!(result, Err(Error::Conflict { .. })));
+        assert_eq!(database.get(b"key")?, Some(b"base".to_vec()));
+        database.close()?;
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
+    #[test]
+    fn conflict_is_found_after_newer_version_is_flushed_to_sstable() -> Result<()> {
+        let directory = temporary_directory("sst-conflict")?;
+        let options = Options {
+            l0_compaction_trigger: 8,
+            l0_slowdown_trigger: 9,
+            l0_stop_trigger: 10,
+            ..Options::default()
+        };
+        let database = Database::open(&directory, options)?;
+        database.put(b"key", b"base", WriteOptions::sync())?;
+        database.flush()?;
+        let mut transaction = database.begin_transaction()?;
+        database.put(b"key", b"newer", WriteOptions::sync())?;
+        database.flush()?;
+        transaction.put(b"key", b"transaction")?;
+        let result = transaction.commit(WriteOptions::sync());
+        assert!(matches!(result, Err(Error::Conflict { .. })));
+        assert_eq!(database.get(b"key")?, Some(b"newer".to_vec()));
         database.close()?;
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
@@ -266,6 +307,22 @@ mod tests {
         transaction.commit(WriteOptions::sync())?;
         assert_eq!(database.get(b"observed")?, Some(b"new".to_vec()));
         assert_eq!(database.get(b"other")?, Some(b"value".to_vec()));
+        database.close()?;
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
+    #[test]
+    fn disable_wal_is_rejected_for_transaction_commit() -> Result<()> {
+        let directory = temporary_directory("disable-wal")?;
+        let database = Database::open(&directory, Options::default())?;
+        let mut transaction = database.begin_transaction()?;
+        transaction.put(b"key", b"value")?;
+        let result = transaction.commit(WriteOptions::disable_wal());
+        assert!(matches!(result, Err(Error::InvalidArgument { .. })));
+        assert_eq!(transaction.state(), TransactionState::Failed);
+        assert_eq!(database.get(b"key")?, None);
         database.close()?;
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
