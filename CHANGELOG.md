@@ -4,6 +4,64 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
+## [0.5.0] — 2026-08-09
+
+### Добавлено
+
+- Public `Database::begin_transaction()`, `Transaction` и `TransactionState`.
+- Optimistic snapshot isolation: snapshot фиксируется при BEGIN и удерживается до terminal state.
+- Own-write visibility: transaction читает последнюю buffered mutation раньше snapshot database state.
+- Buffered `put`/`delete` и explicit rollback без WAL mutation.
+- Write-write conflict detection по committed sequence numbers во всех live sources: mutable memtable, pending immutable memtable, L0 и L1+ SSTables.
+- Единый public write gate, сериализующий conflict validation и последующий WAL append относительно обычных public writes.
+- Atomic transaction commit одним существующим `WriteBatch` через WAL V1 path.
+- Bounded transaction read set.
+- CLI `forgedb transaction` / `forgedb tx` с `--put`, `--delete`, `--get`, `--rollback`, `--sync` и `--no-sync`.
+- Stable CLI exit code `9` для transaction conflict.
+- Deterministic transaction state-machine/reference-model test.
+- CLI integration tests для commit, rollback и запрета `--disable-wal`.
+- Документы `docs/TRANSACTIONS.md`, ADR 0011 и `docs/releases/V0.5.0.md`.
+
+### Изменено
+
+- Workspace version повышена до `0.5.0`.
+- `StreamingDatabase` использует shared public write gate между clone handles.
+- MVCC memtable предоставляет newest sequence lookup для conflict validation.
+- `VersionSet` предоставляет correctness-first latest-sequence lookup по live SSTables с checksum validation.
+- Compatibility documentation обновлена для v0.5.0.
+- MANIFEST V1 compatibility fixture приведён к strict stable Clippy (`&Path` вместо `&PathBuf`).
+
+### Гарантии transactions
+
+- Transaction read snapshot не видит committed sequence выше sequence на BEGIN.
+- Own buffered writes видимы самой transaction до commit и не видимы другим readers.
+- Если written key изменился после BEGIN, commit отклоняется целиком, даже если value bytes затем вернулись к прежнему значению.
+- После successful validation весь write set передаётся одним atomic WAL batch; partial transaction recovery не вводится.
+- `DisableWal` для transaction commit запрещён.
+- Active transaction участвует в existing SnapshotRegistry и тем самым в compaction retention oldest active snapshot.
+
+### Persisted-форматы
+
+v0.5.0 не меняет persisted layout.
+
+| Формат | Read support | Write support |
+|---|---|---|
+| IDENTITY | 1 | 1 |
+| Internal Key | 1 | 1 |
+| WAL | 1 | 1 |
+| SSTable | 1 | 1 |
+| MANIFEST | 1, 2 | 2 |
+| CURRENT | 1 | 1 |
+
+### Ограничения
+
+- Isolation — snapshot isolation, не serializable.
+- Обязательна write-write conflict detection; full read-write validation пока отсутствует.
+- Write skew, predicate/range locks и phantom protection не предотвращаются.
+- Nested transactions, savepoints и automatic retry отсутствуют.
+- Full FQL parser/shell остаётся milestone v0.8.0.
+- SSTable conflict lookup correctness-first и может быть оптимизирован в v0.6 только после benchmark.
+
 ## [0.4.0] — 2026-08-07
 
 ### Добавлено
@@ -59,7 +117,7 @@
 ### Ограничения
 
 - Compaction остаётся synchronous; background worker pool ещё не реализован.
-- Compaction job bounded `max_compaction_bytes`, но materialize-ит выбранные entries в пределах этого budget.
+- Compaction job bounded `max_compaction_bytes`, но materialize-ит выбранные entries в пределах этого budget).
 - Physical input SST после compaction пока не удаляются автоматически: reference-aware Windows-safe obsolete reaper ещё не реализован.
 - Reverse iterator и transactions отсутствуют.
 - Compaction metrics и range tombstones отсутствуют.
