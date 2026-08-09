@@ -223,6 +223,54 @@ impl VersionSet {
         Ok(TableSnapshotLookup::Missing)
     }
 
+    /// Ищет newest committed sequence user key во всех live SSTables.
+    ///
+    /// Это correctness-first baseline для transaction validation. Таблицы, чей largest sequence
+    /// не новее transaction snapshot, caller может отсеять через `after`; остальные читаются
+    /// bounded existing SST decoder-ом с checksum validation.
+    pub(crate) fn latest_sequence_after(
+        &self,
+        user_key: &[u8],
+        after: Option<SequenceNumber>,
+        limits: &Limits,
+        verify_checksums: bool,
+    ) -> Result<Option<SequenceNumber>> {
+        let mut newest = None;
+        let threshold = after.map(SequenceNumber::get).unwrap_or(0);
+        for table in self.files_in_read_order()? {
+            if !table.metadata.may_contain_user_key(user_key)
+                || table.metadata.largest_sequence.get() <= threshold
+            {
+                continue;
+            }
+            for entry in table_scan::read_entries(
+                table.path(),
+                self.identity,
+                table.metadata(),
+                limits,
+                self.max_file_size,
+                verify_checksums,
+            )? {
+                let entry_key = entry.internal_key.user_key();
+                if entry_key < user_key {
+                    continue;
+                }
+                if entry_key > user_key {
+                    break;
+                }
+                let sequence = entry.internal_key.sequence();
+                if sequence.get() > threshold
+                    && newest.is_none_or(|current: SequenceNumber| sequence > current)
+                {
+                    newest = Some(sequence);
+                }
+                // Entries одного user key идут sequence-desc; для этой table первый match newest.
+                break;
+            }
+        }
+        Ok(newest)
+    }
+
     pub(crate) fn files_in_read_order(&self) -> Result<Vec<TableHandle>> {
         let level_zero = self.levels.first().ok_or(Error::InternalInvariant {
             invariant: "I-VERSIONSET-L0-PRESENT",
