@@ -50,6 +50,18 @@ impl MvccMemTable {
         MemLookup::Missing
     }
 
+    /// Возвращает newest committed sequence для user key внутри этой memtable.
+    pub(crate) fn latest_sequence(&self, user_key: &[u8]) -> Option<SequenceNumber> {
+        for internal_key in self.entries.keys() {
+            match internal_key.user_key().cmp(user_key) {
+                Ordering::Less => continue,
+                Ordering::Greater => break,
+                Ordering::Equal => return Some(internal_key.sequence()),
+            }
+        }
+        None
+    }
+
     pub(crate) fn prepare(
         &self,
         sequence_start: SequenceNumber,
@@ -176,6 +188,7 @@ mod tests {
             table.get_at(b"key", Some(SequenceNumber::new(2)?)),
             MemLookup::Value(b"new".to_vec())
         );
+        assert_eq!(table.latest_sequence(b"key"), Some(SequenceNumber::new(2)?));
         Ok(())
     }
 
@@ -196,6 +209,7 @@ mod tests {
             table.get_at(b"key", Some(SequenceNumber::new(2)?)),
             MemLookup::Tombstone
         );
+        assert_eq!(table.latest_sequence(b"key"), Some(SequenceNumber::new(2)?));
         Ok(())
     }
 
