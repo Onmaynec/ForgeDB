@@ -162,7 +162,10 @@ impl Transaction {
         if self.state != TransactionState::Active {
             return Err(Error::invalid_argument(
                 "transaction",
-                format!("operation требует Active state; текущее состояние: {:?}", self.state),
+                format!(
+                    "operation требует Active state; текущее состояние: {:?}",
+                    self.state
+                ),
             ));
         }
         Ok(())
@@ -221,7 +224,9 @@ mod tests {
         first.put(b"key", b"first")?;
         second.put(b"key", b"second")?;
         first.commit(WriteOptions::sync())?;
-        let error = second.commit(WriteOptions::sync()).expect_err("conflict expected");
+        let error = second
+            .commit(WriteOptions::sync())
+            .expect_err("conflict expected");
         assert!(matches!(error, Error::Conflict { .. }));
         assert_eq!(second.state(), TransactionState::Conflicted);
         assert_eq!(database.get(b"key")?, Some(b"first".to_vec()));

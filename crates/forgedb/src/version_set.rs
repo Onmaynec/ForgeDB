@@ -129,10 +129,13 @@ impl VersionSet {
     ) -> Result<Self> {
         let mut next = self.clone();
         for (level, file_number) in deleted {
-            let files = next.levels.get_mut(*level).ok_or(Error::InternalInvariant {
-                invariant: "I-COMPACTION-DELETE-LEVEL",
-                reason: format!("уровень L{level} отсутствует"),
-            })?;
+            let files = next
+                .levels
+                .get_mut(*level)
+                .ok_or(Error::InternalInvariant {
+                    invariant: "I-COMPACTION-DELETE-LEVEL",
+                    reason: format!("уровень L{level} отсутствует"),
+                })?;
             let before = files.len();
             files.retain(|file| file.metadata.file_number != *file_number);
             if files.len() == before {
@@ -285,10 +288,9 @@ impl VersionSet {
     }
 
     pub(crate) fn level_files(&self, level: usize) -> Result<&[TableHandle]> {
-        self.levels
-            .get(level)
-            .map(Vec::as_slice)
-            .ok_or_else(|| Error::invalid_argument("level", format!("уровень L{level} отсутствует")))
+        self.levels.get(level).map(Vec::as_slice).ok_or_else(|| {
+            Error::invalid_argument("level", format!("уровень L{level} отсутствует"))
+        })
     }
 
     pub(crate) fn overlapping_files(
@@ -315,14 +317,16 @@ impl VersionSet {
     }
 
     pub(crate) fn level_size(&self, level: usize) -> Result<u64> {
-        self.level_files(level)?.iter().try_fold(0_u64, |sum, table| {
-            sum.checked_add(table.metadata.file_size)
-                .ok_or(Error::ResourceLimit {
-                    resource: "level_size",
-                    limit: u64::MAX,
-                    observed: u64::MAX,
-                })
-        })
+        self.level_files(level)?
+            .iter()
+            .try_fold(0_u64, |sum, table| {
+                sum.checked_add(table.metadata.file_size)
+                    .ok_or(Error::ResourceLimit {
+                        resource: "level_size",
+                        limit: u64::MAX,
+                        observed: u64::MAX,
+                    })
+            })
     }
 
     pub(crate) fn validate(&self, limits: &Limits) -> Result<()> {
