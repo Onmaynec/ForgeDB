@@ -36,11 +36,11 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    pub(crate) fn begin(database: StreamingDatabase) -> Result<Self> {
+    pub(crate) fn begin(database: &StreamingDatabase) -> Result<Self> {
         let snapshot = database.snapshot()?;
         let (write_batch, max_tracked_reads) = database.new_transaction_batch()?;
         Ok(Self {
-            database,
+            database: database.transaction_handle(),
             snapshot: Some(snapshot),
             read_set: BTreeSet::new(),
             write_batch,
