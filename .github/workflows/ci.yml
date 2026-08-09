@@ -79,6 +79,103 @@ jobs:
         if: steps.gate.outputs.ok != 'true'
         run: exit 1
 
+  finalize-v050:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'agent/v0.5.0-mvcc-transactions'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: agent/v0.5.0-mvcc-transactions
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Применить финальный rustfmt и добавить CHANGELOG v0.5.0
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("CHANGELOG.md")
+          text = path.read_text(encoding="utf-8")
+          marker = "## [0.5.0] — 2026-08-09"
+          if marker not in text:
+              section = r'''## [0.5.0] — 2026-08-09
+
+### Добавлено
+
+- Public `Database::begin_transaction()`, `Transaction` и `TransactionState`.
+- Optimistic snapshot isolation: snapshot фиксируется при BEGIN и удерживается до terminal state.
+- Own-write visibility: transaction читает последнюю buffered mutation раньше snapshot database state.
+- Buffered `put`/`delete` и explicit rollback без WAL mutation.
+- Write-write conflict detection по committed sequence numbers во всех live sources: mutable memtable, pending immutable memtable, L0 и L1+ SSTables.
+- Единый public write gate, сериализующий conflict validation и последующий WAL append относительно обычных public writes.
+- Atomic transaction commit одним существующим `WriteBatch` через WAL V1 path.
+- Bounded transaction read set.
+- CLI `forgedb transaction` / `forgedb tx` с `--put`, `--delete`, `--get`, `--rollback`, `--sync` и `--no-sync`.
+- Stable CLI exit code `9` для transaction conflict.
+- Deterministic transaction state-machine/reference-model test.
+- CLI integration tests для commit, rollback и запрета `--disable-wal`.
+- Документы `docs/TRANSACTIONS.md`, ADR 0011 и `docs/releases/V0.5.0.md`.
+
+### Изменено
+
+- Workspace version повышена до `0.5.0`.
+- `StreamingDatabase` использует shared public write gate между clone handles.
+- MVCC memtable предоставляет newest sequence lookup для conflict validation.
+- `VersionSet` предоставляет correctness-first latest-sequence lookup по live SSTables с checksum validation.
+- Compatibility documentation обновлена для v0.5.0.
+- MANIFEST V1 compatibility fixture приведён к strict stable Clippy (`&Path` вместо `&PathBuf`).
+
+### Гарантии transactions
+
+- Transaction read snapshot не видит committed sequence выше sequence на BEGIN.
+- Own buffered writes видимы самой transaction до commit и не видимы другим readers.
+- Если written key изменился после BEGIN, commit отклоняется целиком, даже если value bytes затем вернулись к прежнему значению.
+- После successful validation весь write set передаётся одним atomic WAL batch; partial transaction recovery не вводится.
+- `DisableWal` для transaction commit запрещён.
+- Active transaction участвует в existing SnapshotRegistry и тем самым в compaction retention oldest active snapshot.
+
+### Persisted-форматы
+
+v0.5.0 не меняет persisted layout.
+
+| Формат | Read support | Write support |
+|---|---|---|
+| IDENTITY | 1 | 1 |
+| Internal Key | 1 | 1 |
+| WAL | 1 | 1 |
+| SSTable | 1 | 1 |
+| MANIFEST | 1, 2 | 2 |
+| CURRENT | 1 | 1 |
+
+### Ограничения
+
+- Isolation — snapshot isolation, не serializable.
+- Обязательна write-write conflict detection; full read-write validation пока отсутствует.
+- Write skew, predicate/range locks и phantom protection не предотвращаются.
+- Nested transactions, savepoints и automatic retry отсутствуют.
+- Full FQL parser/shell остаётся milestone v0.8.0.
+- SSTable conflict lookup correctness-first и может быть оптимизирован в v0.6 только после benchmark.
+
+'''
+              anchor = "\n## [0.4.0]"
+              if anchor not in text:
+                  raise SystemExit("CHANGELOG anchor v0.4.0 not found")
+              text = text.replace(anchor, "\n" + section + "## [0.4.0]", 1)
+              path.write_text(text, encoding="utf-8")
+          PY
+          cargo fmt --all
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates CHANGELOG.md
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "style: finalize v0.5.0 sources and changelog"
+          git push origin HEAD:agent/v0.5.0-mvcc-transactions
+
   test:
     if: github.event_name != 'issue_comment'
     name: ${{ matrix.os }} / stable
