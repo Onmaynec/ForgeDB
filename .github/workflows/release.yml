@@ -32,9 +32,9 @@ jobs:
       - name: Проверить метаданные выпуска
         shell: bash
         run: |
-          grep -Fqx 'version = "0.5.0"' Cargo.toml
+          grep -Fqx 'version = "0.6.0"' Cargo.toml
           test -s RELEASE_NOTES.md
-          test -s docs/releases/V0.5.0.md
+          test -s docs/releases/V0.6.0.md
       - name: Проверить форматирование
         run: cargo fmt --all --check
       - name: Выполнить Clippy
