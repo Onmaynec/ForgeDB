@@ -378,9 +378,9 @@ mod tests {
     fn read_set_rejects_oversized_keys_and_total_bytes_before_allocation() -> Result<()> {
         let directory = temporary_directory("read-set-budget")?;
         let options = Options {
-            max_key_size: 4,
+            max_key_size: 128,
             max_value_size: 4,
-            max_batch_size: 8,
+            max_batch_size: 256,
             max_batch_operations: 10,
             ..Options::default()
         };
@@ -388,23 +388,23 @@ mod tests {
         let mut transaction = database.begin_transaction()?;
 
         assert!(matches!(
-            transaction.get(b"12345"),
+            transaction.get(&[b'x'; 129]),
             Err(Error::ResourceLimit {
                 resource: "key_size",
                 ..
             })
         ));
-        assert_eq!(transaction.get(b"aaaa")?, None);
-        assert_eq!(transaction.get(b"bbbb")?, None);
+        assert_eq!(transaction.get(&[b'a'; 128])?, None);
+        assert_eq!(transaction.get(&[b'b'; 128])?, None);
         assert!(matches!(
-            transaction.get(b"cccc"),
+            transaction.get(b"c"),
             Err(Error::ResourceLimit {
                 resource: "transaction_read_set_bytes",
                 ..
             })
         ));
         // Повторное чтение уже учтённого ключа не расходует бюджет повторно.
-        assert_eq!(transaction.get(b"aaaa")?, None);
+        assert_eq!(transaction.get(&[b'a'; 128])?, None);
         transaction.rollback()?;
         database.close()?;
         fs::remove_dir_all(&directory)
