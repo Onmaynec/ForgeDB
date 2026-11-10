@@ -253,6 +253,22 @@ impl Database {
         }
 
         append_manifest_edit(&mut state, &edit, limits)?;
+
+        // Только успешно опубликованные MANIFEST deletions могут попасть в cleanup.
+        // Weak VersionSet запрещает удаление, пока readers удерживают старое поколение,
+        // но сам cleanup не продлевает срок жизни больших TableReader buffers.
+        let old_version = Arc::downgrade(&state.version);
+        let retired_numbers = plan
+            .inputs
+            .iter()
+            .map(|(_, table)| table.metadata().file_number)
+            .collect::<Vec<_>>();
+        if !retired_numbers.is_empty() {
+            state.retired_sstables.push(crate::obsolete::RetiredSstables {
+                old_version,
+                file_numbers: retired_numbers,
+            });
+        }
         state.version = Arc::new(next_version);
         state.flush_in_progress = false;
         Ok(())
