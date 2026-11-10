@@ -55,7 +55,7 @@ println!("hits={}, misses={}, evictions={}", stats.hits, stats.misses, stats.evi
 - освобождает cached blocks удалённого файла, синхронизирует каталог после успешных удалений;
 - возвращает `CleanupReport` с `removed`, `deferred`, `absent`, `failed`; неудачное физическое удаление можно повторить, не меняя логическую топологию.
 
-Команда `forgedb compact` вызывает очистку после compaction и выводит результат. Cleanup не запускается автоматически на каждой записи или при открытии базы.
+В v0.6.1 после завершения leveled compaction запускается best-effort cleanup. Ошибка unlink не превращает уже установленную compaction в неуспешную операцию; явный `Database::cleanup_obsolete_sstables()` по-прежнему возвращает отчёт и позволяет повторять удаление после освобождения readers. Cleanup не запускается при каждом чтении или при открытии базы. После restart неопознанные orphan-файлы сохраняются.
 
 **Важная граница:** очередь retirement находится в памяти. После нового открытия ForgeDB не делает выводы из произвольного orphan SST и не удаляет его, даже если файл выглядит ненужным. Backups, unknown и user files не затрагиваются. Этот процесс-lifetime reaper не является полной cross-restart garbage collection и не должен выдаваться за неё.
 
