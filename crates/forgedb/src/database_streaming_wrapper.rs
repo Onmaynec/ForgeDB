@@ -157,6 +157,11 @@ impl StreamingDatabase {
         self.inner.cache_stats()
     }
 
+    /// Безопасно убирает выведенные из MANIFEST SST после освобождения readers.
+    pub fn cleanup_obsolete_sstables(&self) -> Result<crate::CleanupReport> {
+        self.inner.cleanup_obsolete_sstables()
+    }
+
     /// Синхронизирует writers и освобождает process lock.
     pub fn close(&self) -> Result<()> {
         self.inner.close()
