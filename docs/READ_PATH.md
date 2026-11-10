@@ -1,57 +1,39 @@
-# Путь чтения v0.1.0
+# Путь чтения ForgeDB v0.4.0
 
-## Point lookup
+## Источники
 
-`Database::get(key)` выполняет:
+`Database::get` и `get_with_options` ищут последнюю видимую версию ключа. Внутренние ключи упорядочены по column family, user key, sequence по убыванию и value type.
 
-1. проверку, что база не закрыта;
-2. проверку ключа по `Limits`;
-3. захват mutex состояния;
-4. поиск ключа в mutable memtable;
-5. возврат копии последнего значения или `None`.
+Порядок поиска:
 
-В v0.1.0 единственным источником пользовательских данных является mutable memtable, заполненная runtime-записями
-и WAL replay. SSTable и merge нескольких источников ещё отсутствуют.
+1. mutable MVCC memtable;
+2. pending immutable memtable во время или после WAL rotation;
+3. L0 SSTables, от новых к старым;
+4. L1+ SSTables из `VersionSet`, с non-overlapping key ranges внутри каждого уровня.
 
-## Tombstone
+Tombstone возвращает отсутствие значения и скрывает все более старые версии. Отсутствие ключа отличается от tombstone только внутри движка.
 
-Delete хранится как запись с `None`. Для публичного point lookup tombstone и никогда не существовавший ключ оба
-возвращаются как `None`.
+## Snapshots
 
-## Последняя операция выигрывает
+`Database::snapshot()` фиксирует последний опубликованный sequence и регистрирует lease в `SnapshotRegistry`. При чтении с `ReadOptions::from_snapshot` версии с большим sequence невидимы. Snapshot из другого open handle или другой базы не принимается.
 
-Если один `WriteBatch` несколько раз изменяет один ключ, preflight staging сохраняет последнюю операцию. Между batch
-побеждает запись с большим sequence number.
+Привязка snapshot к активному registry необходима для retention при compaction; детали: [SNAPSHOTS_AND_MVCC.md](SNAPSHOTS_AND_MVCC.md).
 
-## Консистентность
+## Range scan
 
-Читатель использует тот же mutex, что и writer. Поэтому он не может увидеть частично применённый batch:
+Публичный `Database::scan(range, read_options)` создаёт forward merge iterator с границами и limit:
 
-- до commit видит старое состояние;
-- после commit видит состояние после всех операций batch.
+- memtable entries подготавливаются как in-memory cursors;
+- SSTable `SstEntryCursor` удерживает индекс и один текущий data block;
+- iterator объединяет источники по internal-key ordering, учитывает snapshot, tombstones и bounds;
+- `Arc<VersionSet>` удерживает выбранное поколение файлов на протяжении чтения.
 
-## Read-only открытие
+Range scan не загружает все SSTables целиком, но memtable entries в v0.4.0 материализуются при создании iterator. Обратного iterator пока нет.
 
-Read-only режим:
+## Проверка и ошибки
 
-- требует существующие `IDENTITY` и WAL;
-- получает ту же эксклюзивную process-level блокировку, что и read-write режим;
-- выполняет полный replay;
-- не создаёт и не усекает файлы;
-- отклоняет `put`, `delete` и `write` с ошибкой `ReadOnly`.
+Перед возвратом данных проверяются ограничения ключей, принадлежность snapshot и применимые persisted-форматы. Проверка checksums управляется `ReadOptions`. Повреждённый live SSTable не маскируется чтением других файлов.
 
-Эксклюзивная блокировка read-only режима в v0.1.0 является консервативным решением. Shared-lock и несколько читателей
-могут появиться только вместе с доказанным multi-process protocol.
+Read-only open получает эксклюзивный LOCK, выполняет recovery без изменения файлов и отклоняет write/flush/compaction. Несколько процессов не открывают один каталог одновременно.
 
-## Ограничения
-
-В v0.1.0 отсутствуют:
-
-- iterator и range scan;
-- snapshots;
-- column-family lookup;
-- SSTable reads;
-- block cache;
-- bloom filters;
-- zero-copy возврат value;
-- concurrent lock-free readers.
+Подробности физического размещения: [COMPACTION.md](COMPACTION.md) и [FILE_INVENTORY_AND_VERIFY.md](FILE_INVENTORY_AND_VERIFY.md).

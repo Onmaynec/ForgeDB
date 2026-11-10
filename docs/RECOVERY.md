@@ -1,77 +1,54 @@
-# Восстановление и обработка повреждений
+# Восстановление ForgeDB v0.4.0
 
-## Открытие базы
+## Авторитетное состояние
 
-`Database::open` выполняет восстановление в следующем порядке:
+`CURRENT` указывает на активный MANIFEST. `ManifestState` определяет current/previous WAL, номера файлов, последний sequence и live SSTables в L0/L1+. Существование SST на диске само по себе не делает его live.
 
-1. Проверяет `Options` без открытия persisted-файлов.
-2. Создаёт каталог только при разрешённом read-write открытии.
-3. Получает эксклюзивную системную блокировку `LOCK`.
-4. Читает или создаёт versioned-файл `IDENTITY`.
-5. Открывает `WAL-000001.log`.
-6. Проверяет заголовок WAL, database identity, версию, reserved-поля и CRC32C.
-7. Последовательно воспроизводит все полные кадры.
-8. Для каждого кадра полностью проверяет header, лимиты, sequence range, payload и CRC32C.
-9. Подготавливает весь batch и только затем атомарно применяет его к memtable.
-10. Устанавливает следующий sequence после последней persisted-операции.
+При открытии база получает эксклюзивный LOCK, проверяет IDENTITY и persisted versions, выполняет strict MANIFEST replay и подтверждает наличие MANIFEST-owned WAL/SST. Missing live file считается corruption, а не причиной создать пустую замену.
 
-## Последний неполный кадр
+## WAL recovery
 
-Process crash может оставить физически неполную запись в самом конце файла. Разрешены только два случая:
+После проверки MANIFEST-owned файлов `previous WAL` восстанавливается в pending immutable memtable, `current WAL` — в mutable memtable. Каждый полный WAL frame проходит length, field, sequence, UUID и CRC32C validation до применения batch.
 
-- EOF внутри 32-байтового заголовка последнего кадра;
-- EOF внутри payload последнего кадра.
+Применение одного `WriteBatch` атомарно: либо все операции кадра проходят preflight и replay, либо ни одна не становится видима.
 
-Все предыдущие полные кадры должны быть корректными. При read-write открытии WAL усекается до последней
-проверенной границы и новый размер синхронизируется. При read-only открытии хвост игнорируется, но файл не изменяется.
+Только физически неполный последний frame допускается как trailing partial. Writable open усекает такой хвост до последней проверенной границы; read-only open ничего не изменяет. Mid-file corruption и checksum mismatch полного кадра запрещают дальнейший replay. Sequence ranges должны строго возрастать; gaps после `DisableWal` допустимы.
 
-## Что считается fatal corruption
+## MANIFEST V1 → V2
 
-Открытие блокируется при любом из условий:
+Writable open V1 сначала проверяет старое состояние, затем создаёт новый MANIFEST V2 snapshot под новым номером, синхронизирует файл и публикует `CURRENT`. Старый MANIFEST V1 не перезаписывается. Read-only open V1 не выполняет migration.
 
-- усечён заголовок WAL;
-- неверный magic;
-- неизвестная версия формата;
-- ненулевые flags или reserved bytes;
-- database identity или file number не совпадают;
-- CRC32C заголовка не совпадает;
-- неверный magic полного кадра;
-- неизвестный record type;
-- противоречивые `total_frame_length` и `payload_length`;
-- длина или operation count превышают настроенные лимиты;
-- sequence равен нулю, переполнен, откатывается или пересекает уже replayed range;
-- CRC32C полного кадра не совпадает;
-- varint усечён, слишком длинный или переполнен;
-- операция имеет неизвестный тип;
-- Delete содержит ненулевую длину value;
-- payload заканчивается раньше объявленных полей;
-- после последней операции остаются лишние байты.
+V1 reader не должен интерпретировать V2 как V1. Future versions отклоняются. Детали: [COMPATIBILITY.md](COMPATIBILITY.md) и [formats/MANIFEST_V2.md](formats/MANIFEST_V2.md).
 
-ForgeDB не ищет следующий magic после повреждения и не пытается «спасти» более поздние кадры. Такой resync мог бы
-создать состояние, которое никогда не существовало как подтверждённая последовательность записей.
+## Flush и compaction crash boundaries
 
-## Атомарность batch при replay
+Flush резервирует номера и сохраняет отдельно current/previous WAL. До successful SST installation edit durable WAL продолжает быть источником recovery.
 
-Payload полностью декодируется во временный `WriteBatch`. Затем memtable выполняет preflight всей операции.
-До успешного завершения обоих этапов ни одна операция кадра не становится видимой.
+Для compaction:
 
-## Sequence gaps
+1. reserved output numbers сохраняются до создания outputs;
+2. outputs создаются и синхронизируются, но пока не считаются live;
+3. один synced MANIFEST edit удаляет input references и добавляет output references;
+4. новый `VersionSet` публикуется после durable installation.
 
-Пропуски sequence разрешены, потому что `DisableWal` резервирует sequence, но не записывает кадр. При replay важно
-только строгое возрастание непересекающихся persisted-диапазонов. Повторный или меньший sequence блокирует открытие.
+Crash до installation сохраняет inputs authoritative; после него authoritative становятся outputs. Output SST без MANIFEST reference является orphan.
 
-## Crash tests
+Неразмеченные, backup и user files не удаляются normal recovery. Старые physical compaction inputs в v0.4.0 сохраняются консервативно до реализации reference-aware cleanup.
 
-Набор тестов включает:
+## Диагностика
 
-- дочерний процесс, который выполняет `Sync` put и немедленно вызывает `abort`;
-- повторное открытие и проверку сохранённого значения;
-- trailing partial frame с последующим безопасным truncation;
-- checksum mismatch полного кадра;
-- deterministic model из сотен put/delete с повторным открытием;
-- `DisableWal` gap перед последующей durable записью.
+`file_inventory()` показывает live, obsolete, orphan, temporary и unknown файлы. `verify(VerifyOptions::quick())` проверяет метаданные и топологию, `deep()` дополнительно читает live SST entries/blocks. Проверка не изменяет базу.
 
-## Граница гарантий
+CLI:
 
-Recovery v0.1.0 восстанавливает только состояние одного WAL в mutable memtable. SSTable, MANIFEST, flush,
-несколько WAL-файлов и recovery после частично опубликованного flush появятся в следующих milestone.
+```bash
+forgedb inventory ./db
+forgedb verify ./db --deep
+forgedb inspect recovery-plan ./db
+```
+
+Подробная классификация: [FILE_INVENTORY_AND_VERIFY.md](FILE_INVENTORY_AND_VERIFY.md). Salvage повреждённых баз пока отсутствует.
+
+## Границы гарантий
+
+Автоматические tests включают повторное открытие, проверки повреждений и process abort. Эти проверки не равнозначны подтверждённой устойчивости к произвольному power loss, неисправности накопителя или OS crash. Durability зависит от режима записи и поведения файловой системы: [DURABILITY.md](DURABILITY.md).

@@ -1,78 +1,54 @@
-# Путь записи v0.1.0
+# Путь записи ForgeDB v0.4.0
 
-## Цель
+## Публичные операции
 
-Путь записи обеспечивает атомарность `WriteBatch`, последовательное назначение sequence numbers,
-явный режим durability и отсутствие видимости частично применённого batch.
+`Database::put`, `delete` и `write` используют единый путь `WriteBatch`. Перед записью проверяются открытое состояние базы, режим read-only, ключи, значения, число операций, размер batch и ограничения памяти.
 
-## Упорядочивание
+Операции одного batch получают непересекающийся непрерывный sequence range. Последняя операция с одним ключом побеждает внутри batch. Декодирование WAL в recovery применяет batch целиком.
 
-Все записи сериализуются одним `Mutex<DatabaseState>`. В v0.1.0 это сознательная архитектура:
-один упорядоченный writer path важнее параллелизма до появления flush, MANIFEST и compaction.
+## Порядок `Database::write`
 
-## Алгоритм
+1. Вызов публичного wrapper проверяет L0 write pressure; при необходимости выполняет compaction или ограниченную задержку.
+2. Под mutex проверяется отсутствие fatal storage error.
+3. Назначаются sequence start/end и проверяется переполнение.
+4. Mutable memtable выполняет preflight без изменения видимого состояния.
+5. Batch кодируется и добавляется в один WAL V1 frame, если WAL включён.
+6. При `Sync` выполняется WAL `sync_all` до публикации в memtable.
+7. Под тем же mutex staged changes полностью применяются к memtable и публикуется новый sequence.
 
-Для `Database::write(batch, options)` выполняются шаги:
+`NoSync` не требует синхронизации WAL при каждом вызове; `DisableWal` пропускает журнал. Их crash durability отличается от `Sync`: [DURABILITY.md](DURABILITY.md).
 
-1. Проверить, что база не закрыта и не открыта в read-only режиме.
-2. Проверить лимиты ключей, значений, размера batch и числа операций.
-3. Отклонить пустой batch.
-4. Захватить mutex состояния.
-5. Отклонить запись, если предыдущая ошибка WAL перевела writer в fatal state.
-6. Зарезервировать непрерывный sequence-диапазон для всех операций batch.
-7. Подготовить изменения memtable без изменения её видимого состояния.
-8. Проверить projected memory memtable до записи WAL.
-9. В зависимости от `WriteOptions`:
-   - `Sync`: закодировать один WAL-кадр, выполнить `write_all`, затем `sync_all`;
-   - `NoSync`: закодировать один WAL-кадр и выполнить `write_all` без обязательного sync;
-   - `DisableWal`: пропустить WAL.
-10. Если WAL-операция завершилась ошибкой, не применять prepared batch и перевести writer в fatal state.
-11. Одной критической секцией применить весь prepared batch к memtable.
-12. Переместить `next_sequence` за конец batch.
-13. Вернуть успех.
+## Ошибки записи
 
-## Атомарность
+Validation/preflight ошибки до WAL не изменяют состояние базы. Ошибка WAL append/sync не публикует batch и переводит writer в fatal state: продолжать запись при неопределённом результате I/O нельзя.
 
-Один `WriteBatch` хранится одним WAL-кадром и полностью декодируется до replay. Поэтому recovery видит либо
-весь batch, либо ни одной его операции. В runtime batch становится доступным читателям только после полного
-применения staged changes к memtable под тем же mutex.
+Public write path при переполнении L0 пытается снизить pressure через synchronous compaction; если stop threshold по-прежнему превышен, возвращается `Busy`. Читатели продолжают работать с выбранным immutable `VersionSet`.
 
-## Ошибки до WAL
+## Flush
 
-Следующие ошибки не изменяют WAL, memtable и sequence state:
+`Database::flush()`:
 
-- пустой ключ;
-- превышение лимита ключа, значения, batch или operation count;
-- арифметическое переполнение;
-- projected memory выше `Options::memtable_size`;
-- закрытая или read-only база;
-- ранее зафиксированная fatal WAL error.
+1. синхронизирует current WAL;
+2. резервирует SST/WAL generation и переводит mutable записи в pending immutable memtable;
+3. создаёт новый WAL и фиксирует смену поколений в MANIFEST;
+4. строит SSTable с проверенными блоками и синхронизирует файл/каталог до публикации;
+5. устанавливает SSTable в L0 через durable MANIFEST edit;
+6. только после установки может удалить завершённый WAL generation.
 
-## Ошибка append или sync
+Повторный crash при незавершённом flush восстанавливает previous/current WAL раздельно. Физический SST не становится live только из-за существования в каталоге.
 
-Если append или обязательный sync не завершился успешно:
+## Leveled compaction
 
-- prepared batch не применяется к memtable;
-- sequence state не продвигается;
-- последующие записи отклоняются как `BackgroundFailure`;
-- caller должен закрыть и заново открыть базу для проверки WAL и recovery.
+После публичного `flush` wrapper запускает synchronous compaction при достижении trigger. Также доступен `Database::compact_range` с half-open range.
 
-Это консервативное поведение исключает продолжение записи после неясного результата I/O.
+Compaction резервирует output file numbers durable edit, строит все outputs и устанавливает их одним MANIFEST V2 edit. Версии, необходимые активным snapshots, сохраняются. Старые input SST не удаляются немедленно: reference-aware cleanup отсутствует в v0.4.0.
 
-## DisableWal
+Полный порядок installation и retention: [COMPACTION.md](COMPACTION.md).
 
-`DisableWal` сохраняет обычную атомарность относительно текущего процесса, но не crash durability.
-Sequence numbers всё равно резервируются и продвигаются, поэтому persisted WAL может содержать законные
-пропуски. Replay разрешает такие пропуски, но запрещает пересечение или уменьшение sequence.
+## Close
 
-## Что отсутствует
+`close()` синхронизирует WAL/MANIFEST writers и освобождает LOCK только после успешной операции. Закрытие во время активного maintenance job возвращает `Busy`.
 
-В v0.1.0 нет:
+## Отсутствует в v0.4.0
 
-- group commit;
-- нескольких writer threads внутри critical section;
-- WAL rotation;
-- immutable memtable;
-- flush и write stall;
-- MANIFEST commit;
-- SSTable publication.
+Транзакционный public API, group commit, background compaction scheduler, range tombstones и безопасный автоматический reaper устаревших SST.

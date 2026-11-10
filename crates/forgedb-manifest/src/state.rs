@@ -239,7 +239,10 @@ impl ManifestState {
                 ));
             }
             maximum_used = maximum_used.max(leveled.table.file_number);
-            by_level.entry(leveled.level).or_default().push(&leveled.table);
+            by_level
+                .entry(leveled.level)
+                .or_default()
+                .push(&leveled.table);
         }
         for files in by_level.values() {
             for pair in files.windows(2) {
@@ -404,7 +407,11 @@ impl ManifestState {
         next.level_files.sort_by(|left, right| {
             left.level
                 .cmp(&right.level)
-                .then_with(|| left.table.smallest_user_key.cmp(&right.table.smallest_user_key))
+                .then_with(|| {
+                    left.table
+                        .smallest_user_key
+                        .cmp(&right.table.smallest_user_key)
+                })
                 .then_with(|| left.table.file_number.cmp(&right.table.file_number))
         });
         next.validate(limits)?;
@@ -451,11 +458,7 @@ mod tests {
         state.l0_files.push(metadata(10, b"a", b"z")?);
         let edit = VersionEdit {
             deleted_files: vec![10],
-            added_level_files: vec![LevelFileMeta::new(
-                1,
-                metadata(19, b"a", b"z")?,
-                &limits,
-            )?],
+            added_level_files: vec![LevelFileMeta::new(1, metadata(19, b"a", b"z")?, &limits)?],
             next_file_number: Some(20),
             ..VersionEdit::default()
         };
