@@ -1,9 +1,8 @@
-use std::cmp::Ordering;
 use std::fs;
 use std::path::Path;
 
 use forgedb_core::{
-    DatabaseId, Error, InternalKey, InternalKeyCodec, Limits, Result, SequenceNumber, ValueType,
+    DatabaseId, Error, InternalKey, InternalKeyCodec, Limits, Result, ValueType,
 };
 use forgedb_sstable::{
     BLOCK_TRAILER_SIZE, CHECKSUM_TYPE_CRC32C, COMPRESSION_NONE, SST_FOOTER_SIZE, SST_HEADER_SIZE,

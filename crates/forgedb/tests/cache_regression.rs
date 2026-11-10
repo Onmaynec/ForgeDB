@@ -37,10 +37,16 @@ fn block_cache_preserves_snapshot_versions_across_sst_blocks() -> Result<()> {
     database.flush()?;
 
     let old = ReadOptions::from_snapshot(&snapshot);
-    assert_eq!(database.get_with_options(b"account", old.clone())?, Some(vec![1; 700]));
+    assert_eq!(
+        database.get_with_options(b"account", old.clone())?,
+        Some(vec![1; 700])
+    );
     let after_first = database.cache_stats()?;
     assert!(after_first.misses > 0);
-    assert_eq!(database.get_with_options(b"account", old)?, Some(vec![1; 700]));
+    assert_eq!(
+        database.get_with_options(b"account", old)?,
+        Some(vec![1; 700])
+    );
     let after_second = database.cache_stats()?;
     assert!(after_second.hits > after_first.hits);
     assert_eq!(database.get(b"account")?, Some(vec![12; 700]));

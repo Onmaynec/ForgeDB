@@ -90,7 +90,10 @@ fn parse_positive(raw: Option<String>, default: usize, field: &'static str) -> R
         None => default,
     };
     if number == 0 {
-        return Err(Error::invalid_argument(field, "значение должно быть больше нуля"));
+        return Err(Error::invalid_argument(
+            field,
+            "значение должно быть больше нуля",
+        ));
     }
     Ok(number)
 }
