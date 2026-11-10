@@ -29,57 +29,6 @@ struct BlockHandle {
     length: u64,
 }
 
-pub(crate) struct TableLookupRequest<'a> {
-    pub(crate) path: &'a Path,
-    pub(crate) expected_database_id: DatabaseId,
-    pub(crate) metadata: &'a TableMeta,
-    pub(crate) user_key: &'a [u8],
-    pub(crate) snapshot: Option<SequenceNumber>,
-    pub(crate) limits: &'a Limits,
-    pub(crate) max_file_size: u64,
-    pub(crate) verify_checksums: bool,
-}
-
-pub(crate) fn lookup_at(request: TableLookupRequest<'_>) -> Result<TableSnapshotLookup> {
-    let TableLookupRequest {
-        path,
-        expected_database_id,
-        metadata,
-        user_key,
-        snapshot,
-        limits,
-        max_file_size,
-        verify_checksums,
-    } = request;
-    let Some(snapshot) = snapshot else {
-        return Ok(TableSnapshotLookup::Missing);
-    };
-    if !metadata.may_contain_user_key(user_key) {
-        return Ok(TableSnapshotLookup::Missing);
-    }
-    for entry in read_entries(
-        path,
-        expected_database_id,
-        metadata,
-        limits,
-        max_file_size,
-        verify_checksums,
-    )? {
-        match entry.internal_key.user_key().cmp(user_key) {
-            Ordering::Less => continue,
-            Ordering::Greater => return Ok(TableSnapshotLookup::Missing),
-            Ordering::Equal if entry.internal_key.sequence() > snapshot => continue,
-            Ordering::Equal => {
-                return match entry.internal_key.value_type() {
-                    ValueType::Deletion => Ok(TableSnapshotLookup::Tombstone),
-                    ValueType::Value => Ok(TableSnapshotLookup::Value(entry.value)),
-                };
-            }
-        }
-    }
-    Ok(TableSnapshotLookup::Missing)
-}
-
 pub(crate) fn read_entries(
     path: &Path,
     expected_database_id: DatabaseId,
