@@ -23,37 +23,35 @@ impl StreamingDatabase {
     ) -> Result<()> {
         let _write_guard = self.lock_write_gate()?;
         self.apply_write_stall()?;
-        let mut batch = WriteBatch::with_limits(self.inner.options.limits()?);
-        batch.put(key, value)?;
-        self.write_with_auto_flush(batch, write_options)
+        self.retry_after_memtable_full(|| {
+            self.inner.put(key.as_ref(), value.as_ref(), write_options)
+        })
     }
 
     /// Добавляет MVCC tombstone.
     pub fn delete(&self, key: impl AsRef<[u8]>, write_options: WriteOptions) -> Result<()> {
         let _write_guard = self.lock_write_gate()?;
         self.apply_write_stall()?;
-        let mut batch = WriteBatch::with_limits(self.inner.options.limits()?);
-        batch.delete(key)?;
-        self.write_with_auto_flush(batch, write_options)
+        self.retry_after_memtable_full(|| self.inner.delete(key.as_ref(), write_options))
     }
 
     /// Применяет WriteBatch атомарно после выбранной WAL durability boundary.
     pub fn write(&self, batch: WriteBatch, write_options: WriteOptions) -> Result<()> {
         let _write_guard = self.lock_write_gate()?;
         self.apply_write_stall()?;
-        self.write_with_auto_flush(batch, write_options)
+        self.retry_after_memtable_full(|| self.inner.write_ref(&batch, write_options))
     }
 
     /// Один synchronous flush/retry только при исчерпании бюджета mutable memtable.
     /// Первый отказ происходит до WAL append, поэтому batch не применяется частично.
-    fn write_with_auto_flush(&self, batch: WriteBatch, options: WriteOptions) -> Result<()> {
-        match self.inner.write_ref(&batch, options) {
+    fn retry_after_memtable_full(&self, mut operation: impl FnMut() -> Result<()>) -> Result<()> {
+        match operation() {
             Err(Error::ResourceLimit {
                 resource: "memtable_memory",
                 ..
             }) => {
                 self.flush()?;
-                self.inner.write_ref(&batch, options)
+                operation()
             }
             result => result,
         }
