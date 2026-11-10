@@ -99,7 +99,8 @@ impl DatabaseId {
         }
 
         let mut bytes = [0_u8; 16];
-        for (target, pair) in bytes.iter_mut().zip(compact.chunks_exact(2)) {
+        let (pairs, _) = compact.as_chunks::<2>();
+        for (target, pair) in bytes.iter_mut().zip(pairs) {
             let high = decode_hex(pair[0])?;
             let low = decode_hex(pair[1])?;
             *target = (high << 4) | low;
