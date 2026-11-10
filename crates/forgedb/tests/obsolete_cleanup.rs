@@ -103,7 +103,12 @@ fn cleanup_never_guesses_origin_of_orphan_after_restart() -> Result<()> {
     assert!(report.removed.is_empty());
     assert!(report.deferred.is_empty());
     assert!(orphan.exists());
-    assert!(database.file_inventory()?.orphan_sst.contains(&"SST-999999.sst".to_owned()));
+    assert!(
+        database
+            .file_inventory()?
+            .orphan_sst
+            .contains(&"SST-999999.sst".to_owned())
+    );
     database.close()?;
     drop(database);
 
