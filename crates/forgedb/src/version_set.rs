@@ -31,9 +31,7 @@ impl TableHandle {
 #[derive(Clone, Debug)]
 pub(crate) struct VersionSet {
     directory: PathBuf,
-    identity: DatabaseId,
     levels: Vec<Vec<TableHandle>>,
-    max_file_size: u64,
     block_cache: Arc<BlockCache>,
 }
 
@@ -96,9 +94,7 @@ impl VersionSet {
         }
         let version = Self {
             directory: directory.to_path_buf(),
-            identity,
             levels,
-            max_file_size,
             block_cache: Arc::new(BlockCache::new(block_cache_size)),
         };
         version.validate(limits)?;
