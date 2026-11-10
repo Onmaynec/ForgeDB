@@ -1,13 +1,17 @@
-/// Публичный Database wrapper с block-at-a-time SSTable scan.
+/// Публичный Database wrapper с block-at-a-time SSTable scan и единым public write gate.
 #[derive(Debug)]
 pub struct StreamingDatabase {
-    inner: Database,
+    inner: Arc<Database>,
+    write_gate: Arc<Mutex<()>>,
 }
 
 impl StreamingDatabase {
     /// Открывает базу и восстанавливает WAL/MANIFEST/VersionSet через основной storage core.
     pub fn open(path: impl AsRef<Path>, options: Options) -> Result<Self> {
-        Database::open(path, options).map(|inner| Self { inner })
+        Database::open(path, options).map(|inner| Self {
+            inner: Arc::new(inner),
+            write_gate: Arc::new(Mutex::new(())),
+        })
     }
 
     /// Записывает или заменяет значение одного ключа.
@@ -17,18 +21,21 @@ impl StreamingDatabase {
         value: impl AsRef<[u8]>,
         write_options: WriteOptions,
     ) -> Result<()> {
+        let _write_guard = self.lock_write_gate()?;
         self.apply_write_stall()?;
         self.inner.put(key, value, write_options)
     }
 
     /// Добавляет MVCC tombstone.
     pub fn delete(&self, key: impl AsRef<[u8]>, write_options: WriteOptions) -> Result<()> {
+        let _write_guard = self.lock_write_gate()?;
         self.apply_write_stall()?;
         self.inner.delete(key, write_options)
     }
 
     /// Применяет WriteBatch атомарно после выбранной WAL durability boundary.
     pub fn write(&self, batch: WriteBatch, write_options: WriteOptions) -> Result<()> {
+        let _write_guard = self.lock_write_gate()?;
         self.apply_write_stall()?;
         self.inner.write(batch, write_options)
     }
@@ -50,6 +57,11 @@ impl StreamingDatabase {
     /// Фиксирует latest visible sequence.
     pub fn snapshot(&self) -> Result<Snapshot> {
         self.inner.snapshot()
+    }
+
+    /// Начинает optimistic transaction на snapshot текущего visible sequence.
+    pub fn begin_transaction(&self) -> Result<crate::Transaction> {
+        crate::Transaction::begin(self)
     }
 
     /// Создаёт forward iterator; SSTable sources держат index и один data block.
@@ -146,7 +158,7 @@ impl StreamingDatabase {
 
     /// Возвращает persisted UUID базы.
     #[must_use]
-    pub const fn identity(&self) -> DatabaseId {
+    pub fn identity(&self) -> DatabaseId {
         self.inner.identity()
     }
 
@@ -154,6 +166,112 @@ impl StreamingDatabase {
     #[must_use]
     pub fn path(&self) -> &Path {
         self.inner.path()
+    }
+
+    pub(crate) fn transaction_handle(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            write_gate: Arc::clone(&self.write_gate),
+        }
+    }
+
+    pub(crate) fn new_transaction_batch(&self) -> Result<(WriteBatch, usize, usize)> {
+        let limits = self.inner.options.limits()?;
+        Ok((
+            WriteBatch::with_limits(limits),
+            limits.max_batch_operations,
+            limits.max_batch_size,
+        ))
+    }
+
+    pub(crate) fn validate_transaction_key(&self, key: &[u8]) -> Result<()> {
+        self.inner.options.limits()?.validate_key(key)
+    }
+
+    pub(crate) fn commit_transaction(
+        &self,
+        snapshot: &Snapshot,
+        batch: WriteBatch,
+        write_options: WriteOptions,
+    ) -> Result<()> {
+        if write_options.durability() == Durability::DisableWal {
+            return Err(Error::invalid_argument(
+                "durability",
+                "DisableWal запрещён для transaction commit",
+            ));
+        }
+        if !snapshot.belongs_to(self.inner.identity, self.inner.handle_id) {
+            return Err(Error::invalid_argument(
+                "snapshot",
+                "transaction snapshot создан другой базой или другим open handle",
+            ));
+        }
+        let limits = self.inner.options.limits()?;
+        batch.validate_against(&limits)?;
+        if batch.is_empty() {
+            return Ok(());
+        }
+
+        // Gate охватывает validation и последующий WAL append: ни один другой public write не
+        // может вклиниться между проверкой write set и atomic Database::write.
+        let _write_guard = self.lock_write_gate()?;
+        self.apply_write_stall()?;
+        let snapshot_sequence = snapshot.sequence();
+        let threshold = snapshot_sequence.map(SequenceNumber::get).unwrap_or(0);
+        let mut write_keys = std::collections::BTreeSet::<Vec<u8>>::new();
+        for operation in batch.operations() {
+            let key = match operation {
+                forgedb_core::BatchOperation::Put { key, .. }
+                | forgedb_core::BatchOperation::Delete { key, .. } => key,
+            };
+            write_keys.insert(key.clone());
+        }
+
+        let (version, mut conflicts) = {
+            let state = self.inner.lock_state()?;
+            ensure_writer_healthy(&state)?;
+            let mut conflicts = Vec::new();
+            for key in &write_keys {
+                let mutable_conflict = state
+                    .mutable
+                    .latest_sequence(key)
+                    .is_some_and(|sequence| sequence.get() > threshold);
+                let immutable_conflict = state
+                    .pending_flush
+                    .as_ref()
+                    .and_then(|pending| pending.memtable.latest_sequence(key))
+                    .is_some_and(|sequence| sequence.get() > threshold);
+                if mutable_conflict || immutable_conflict {
+                    conflicts.push(key.clone());
+                }
+            }
+            (Arc::clone(&state.version), conflicts)
+        };
+
+        for key in &write_keys {
+            if conflicts.binary_search(key).is_ok() {
+                continue;
+            }
+            if version
+                .latest_sequence_after(key, snapshot_sequence, &limits, true)?
+                .is_some()
+            {
+                conflicts.push(key.clone());
+                conflicts.sort();
+            }
+        }
+        if !conflicts.is_empty() {
+            return Err(Error::Conflict { keys: conflicts });
+        }
+
+        self.inner.write(batch, write_options)
+    }
+
+    fn lock_write_gate(&self) -> Result<MutexGuard<'_, ()>> {
+        self.write_gate.lock().map_err(|_| Error::InternalInvariant {
+            invariant: "I-PUBLIC-WRITE-GATE",
+            reason: "public write gate mutex poisoned".to_owned(),
+        })
     }
 }
 

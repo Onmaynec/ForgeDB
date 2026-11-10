@@ -11,7 +11,7 @@ fn main() {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("Ошибка ForgeDB: {error}");
-            1
+            exit_code_for_error(&error)
         }
     };
     std::process::exit(exit_code);
@@ -52,6 +52,7 @@ fn run() -> Result<()> {
             database.delete(key.as_bytes(), write_options)?;
             database.close()
         }
+        "transaction" | "tx" => run_transaction_command(arguments),
         "scan" => {
             let path = required(&mut arguments, "path")?;
             let start = arguments.next().map(String::into_bytes);
@@ -143,6 +144,50 @@ fn run() -> Result<()> {
     }
 }
 
+fn run_transaction_command(mut arguments: impl Iterator<Item = String>) -> Result<()> {
+    let path = required(&mut arguments, "path")?;
+    let database = Database::open(PathBuf::from(path), Options::default())?;
+    let mut transaction = database.begin_transaction()?;
+    let mut write_options = WriteOptions::sync();
+
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--sync" => write_options = WriteOptions::sync(),
+            "--no-sync" => write_options = WriteOptions::no_sync(),
+            "--put" => {
+                let key = required(&mut arguments, "key")?;
+                let value = required(&mut arguments, "value")?;
+                transaction.put(key.as_bytes(), value.as_bytes())?;
+            }
+            "--delete" => {
+                let key = required(&mut arguments, "key")?;
+                transaction.delete(key.as_bytes())?;
+            }
+            "--get" => {
+                let key = required(&mut arguments, "key")?;
+                if let Some(value) = transaction.get(key.as_bytes())? {
+                    write_bytes_line(&value)?;
+                }
+            }
+            "--rollback" => {
+                ensure_no_extra(arguments)?;
+                transaction.rollback()?;
+                return database.close();
+            }
+            "--disable-wal" => {
+                return Err(Error::invalid_argument(
+                    "durability",
+                    "--disable-wal запрещён для transaction; используйте --sync или --no-sync",
+                ));
+            }
+            _ => return Err(Error::invalid_argument("transaction_operation", usage())),
+        }
+    }
+
+    transaction.commit(write_options)?;
+    database.close()
+}
+
 fn required(arguments: &mut impl Iterator<Item = String>, field: &'static str) -> Result<String> {
     arguments
         .next()
@@ -163,6 +208,19 @@ fn ensure_no_extra(mut arguments: impl Iterator<Item = String>) -> Result<()> {
         return Err(Error::invalid_argument("arguments", usage()));
     }
     Ok(())
+}
+
+fn exit_code_for_error(error: &Error) -> i32 {
+    match error {
+        Error::InvalidArgument { .. } | Error::ResourceLimit { .. } | Error::ReadOnly => 2,
+        Error::UnsupportedFormat { .. } => 4,
+        Error::Busy { .. } => 5,
+        Error::Io { .. } => 6,
+        Error::Corruption { .. } => 7,
+        Error::Conflict { .. } => 9,
+        Error::BackgroundFailure { .. } | Error::InternalInvariant { .. } => 12,
+        Error::Closed => 1,
+    }
 }
 
 fn write_bytes_line(bytes: &[u8]) -> Result<()> {
@@ -217,13 +275,34 @@ fn usage() -> String {
         "  forgedb put <каталог> <ключ> <значение> [--sync|--no-sync|--disable-wal]",
         "  forgedb get <каталог> <ключ>",
         "  forgedb delete <каталог> <ключ> [--sync|--no-sync|--disable-wal]",
+        "  forgedb transaction <каталог> [--sync|--no-sync] [--put <ключ> <значение>] [--delete <ключ>] [--get <ключ>] [--rollback] ...",
         "  forgedb scan <каталог> [start] [end-exclusive]",
         "  forgedb compact <каталог> [start] [end-exclusive]",
         "  forgedb inventory <каталог>",
         "  forgedb inspect recovery-plan <каталог>",
         "  forgedb verify <каталог> [--deep]",
         "",
-        "CLI v0.4.0 принимает границы scan/compact как UTF-8; library API остаётся binary-safe.",
+        "CLI v0.5.0 принимает текстовые ключи/значения как UTF-8; library API остаётся binary-safe.",
+        "Transaction commit запрещает --disable-wal и использует optimistic snapshot isolation.",
     ]
     .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conflict_exit_code_is_stable() {
+        let error = Error::Conflict {
+            keys: vec![b"key".to_vec()],
+        };
+        assert_eq!(exit_code_for_error(&error), 9);
+    }
+
+    #[test]
+    fn transaction_usage_is_documented() {
+        assert!(usage().contains("forgedb transaction"));
+        assert!(usage().contains("--disable-wal"));
+    }
 }

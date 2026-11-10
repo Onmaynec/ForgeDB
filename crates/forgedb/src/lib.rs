@@ -1,8 +1,8 @@
-//! Публичный API ForgeDB v0.4.0.
+//! Публичный API ForgeDB v0.5.0.
 //!
-//! Версия добавляет crash-recoverable leveled compaction, persisted L1+ metadata,
-//! MVCC-aware retention, conservative tombstone dropping, output splitting и
-//! L0 backpressure поверх WAL/SSTable V1 и MANIFEST V1/V2.
+//! Версия добавляет optimistic snapshot-isolation transactions, own-write visibility,
+//! write-write conflict detection и atomic transaction commit поверх существующего single-writer
+//! WAL/LSM path. Persisted WAL/SSTable/MANIFEST форматы не меняются.
 
 mod database_v3_fixed {
     include!("database_v3_fixed.rs");
@@ -19,6 +19,7 @@ mod recovery_plan;
 mod snapshot;
 mod sst_entry_cursor;
 mod table_scan;
+mod transaction;
 mod verify;
 mod version_set;
 mod write_options;
@@ -34,5 +35,6 @@ pub use options::Options;
 pub use read_options::ReadOptions;
 pub use recovery_plan::RecoveryPlan;
 pub use snapshot::Snapshot;
+pub use transaction::{Transaction, TransactionState};
 pub use verify::{VerifyOptions, VerifyReport};
 pub use write_options::{Durability, WriteOptions};
