@@ -1,4 +1,4 @@
-name: ForgeDB v0.4.0 Pre-release
+name: ForgeDB v0.5.0 Pre-release
 
 on:
   push:
@@ -12,15 +12,15 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-v0.4.0
+  group: release-v0.5.0
   cancel-in-progress: false
 
 jobs:
   release:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && contains(github.event.head_commit.message, 'release: v0.4.0')) ||
-      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.title == 'release: v0.4.0')
+      (github.event_name == 'push' && contains(github.event.head_commit.message, 'release: v0.5.0')) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.title == 'release: v0.5.0')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -29,6 +29,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Проверить метаданные выпуска
+        shell: bash
+        run: |
+          grep -Fqx 'version = "0.5.0"' Cargo.toml
+          test -s RELEASE_NOTES.md
+          test -s docs/releases/V0.5.0.md
       - name: Проверить форматирование
         run: cargo fmt --all --check
       - name: Выполнить Clippy
@@ -42,24 +48,24 @@ jobs:
       - name: Создать аннотированный tag
         shell: bash
         run: |
-          if git rev-parse "v0.4.0" >/dev/null 2>&1; then
-            echo "Tag v0.4.0 уже существует"
+          if git rev-parse "v0.5.0" >/dev/null 2>&1; then
+            echo "Tag v0.5.0 уже существует"
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a v0.4.0 -m "ForgeDB v0.4.0 — Leveled Compaction"
-            git push origin v0.4.0
+            git tag -a v0.5.0 -m "ForgeDB v0.5.0 — MVCC Transactions"
+            git push origin v0.5.0
           fi
       - name: Создать GitHub Pre-release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          if gh release view v0.4.0 >/dev/null 2>&1; then
-            echo "Release v0.4.0 уже существует"
+          if gh release view v0.5.0 >/dev/null 2>&1; then
+            echo "Release v0.5.0 уже существует"
           else
-            gh release create v0.4.0 \
+            gh release create v0.5.0 \
               --prerelease \
-              --title "ForgeDB v0.4.0 — Leveled Compaction" \
+              --title "ForgeDB v0.5.0 — MVCC Transactions" \
               --notes-file RELEASE_NOTES.md
           fi

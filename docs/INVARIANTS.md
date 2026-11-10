@@ -7,7 +7,7 @@
 - **частично** — обеспечена безопасная часть инварианта, но lifecycle ещё неполон;
 - **запланирован** — feature нельзя заявлять до указанного milestone.
 
-| ID | Инвариант | Статус перед v0.5.0 gate | Доказательство |
+| ID | Инвариант | Статус v0.5.0 | Доказательство |
 |---|---|---|---|
 | I-001 | Один каталог базы одновременно открыт не более чем одним процессом ForgeDB. | обеспечен | native lock tests; lock удерживается до close/drop/process exit |
 | I-002 | Номер persisted-файла не переиспользуется. | draft v0.4.0 | `next_file_number`; MANIFEST validation; flush reservation; compaction reservation edit до output creation |
@@ -49,16 +49,16 @@
 | I-038 | MANIFEST V1 не изменяется in-place при upgrade до V2. | draft v0.4.0 | read-only V1 unchanged; writable rotation через новый MANIFEST + CURRENT replacement |
 | I-039 | Output splitting не разделяет versions одного user key между SSTables. | draft v0.4.0 | `build_compaction_chunks` groups user key; dedicated unit test |
 | I-040 | L0 stop backpressure не допускает unbounded growth через публичный write path. | draft v0.4.0 | stop threshold запускает synchronous compaction и затем возвращает `Busy`, если pressure остаётся |
-| I-041 | Active transaction читает последнюю собственную buffered mutation раньше snapshot database state. | draft v0.5.0 | `Transaction::own_write`; own-write/put-delete-read test |
-| I-042 | Transaction commit отклоняется целиком, если любой written key имеет committed sequence выше snapshot sequence. | draft v0.5.0 | mutable/immutable/SST validation; same-key, ABA sequence и flushed-SST conflict tests |
-| I-043 | Между successful transaction conflict validation и WAL append не может вклиниться другой public writer. | draft v0.5.0 | общий `StreamingDatabase::write_gate` охватывает ordinary writes и validate→write transaction path |
-| I-044 | Successful transaction commit сохраняется одним существующим atomic WAL WriteBatch и не имеет частично восстанавливаемого transaction record. | draft v0.5.0 | transaction reopen recovery test; WAL one-frame-per-batch invariant I-004 |
-| I-045 | Active transaction удерживает зарегистрированный snapshot до commit/rollback/conflict/failure. | draft v0.5.0 | `Transaction.snapshot`; terminal paths вызывают `take`; existing SnapshotRegistry oldest-sequence retention |
-| I-046 | Transaction commit не принимает `DisableWal`. | draft v0.5.0 | explicit validation + rejection/no-publication test + CLI integration test |
-| I-047 | Transaction read set не выделяет память для invalid/oversized keys и ограничивает число и общую длину сохраняемых ключей. | draft v0.5.0 | `read_set_rejects_oversized_keys_and_total_bytes_before_allocation` |
+| I-041 | Active transaction читает последнюю собственную buffered mutation раньше snapshot database state. | обеспечен v0.5.0 | `Transaction::own_write`; own-write/put-delete-read test |
+| I-042 | Transaction commit отклоняется целиком, если любой written key имеет committed sequence выше snapshot sequence. | обеспечен v0.5.0 | mutable/immutable/SST validation; same-key, ABA sequence и flushed-SST conflict tests |
+| I-043 | Между successful transaction conflict validation и WAL append не может вклиниться другой public writer. | обеспечен v0.5.0 | общий `StreamingDatabase::write_gate` охватывает ordinary writes и validate→write transaction path |
+| I-044 | Successful transaction commit сохраняется одним существующим atomic WAL WriteBatch и не имеет частично восстанавливаемого transaction record. | обеспечен v0.5.0 | transaction reopen recovery test; WAL one-frame-per-batch invariant I-004 |
+| I-045 | Active transaction удерживает зарегистрированный snapshot до commit/rollback/conflict/failure. | обеспечен v0.5.0 | `Transaction.snapshot`; terminal paths вызывают `take`; existing SnapshotRegistry oldest-sequence retention |
+| I-046 | Transaction commit не принимает `DisableWal`. | обеспечен v0.5.0 | explicit validation + rejection/no-publication test + CLI integration test |
+| I-047 | Transaction read set не выделяет память для invalid/oversized keys и ограничивает число и общую длину сохраняемых ключей. | обеспечен v0.5.0 | `read_set_rejects_oversized_keys_and_total_bytes_before_allocation` |
 
 ## Правило изменения
 
 Новый persisted-протокол или изменение write/recovery path обязаны обновить эту таблицу и добавить автоматическое доказательство соответствующего инварианта. Одной документации недостаточно для статуса **обеспечен**.
 
-После successful v0.5.0 release gate строки со статусом `draft v0.5.0` могут быть переведены в **обеспечен** только там, где фактические tests покрывают заявленный invariant. Старые `draft v0.4.0` также нельзя автоматически повышать без подтверждённого gate. I-013 остаётся **частично**, пока не появится reference-aware obsolete-file reaper.
+I-041–I-047 подтверждены проверками feature head `70bdad2586fb4f2cd9208f584fb5536a692186d1` (CI run `42780867814`: Ubuntu stable, Windows stable, Rust 1.89). Выпуск дополнительно проходит отдельный release gate. Для старых `draft v0.4.0` статус намеренно не повышен автоматически: требуется предметная проверка покрытия каждого инварианта. I-013 остаётся **частично** до реализации reference-aware obsolete-file reaper.

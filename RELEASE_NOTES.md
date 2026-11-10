@@ -1,82 +1,78 @@
-# ForgeDB v0.4.0 — Leveled Compaction
+# ForgeDB v0.5.0 — MVCC Transactions
 
-Статус выпуска: GitHub Pre-release.
+Статус: GitHub Pre-release.
 
-ForgeDB v0.4.0 превращает L1+ из validated read model в persisted LSM topology: добавлены leveled compaction, MVCC-aware retention, conservative tombstone dropping, output splitting, L0 backpressure и MANIFEST V2.
+В этой версии добавлены транзакции с optimistic snapshot isolation поверх существующего WAL/LSM движка. Для транзакционного commit не используется второй журнал: все изменения проходят обычный `Database::write` одним атомарным `WriteBatch`.
 
-## Основные изменения
+## Изменения
 
-- physical L0 → L1 и Ln → Ln+1 compaction;
-- picker с L0 overlap closure и size targets для L1+;
-- bounded compaction budget через `max_compaction_bytes`;
-- MVCC retention с `oldest_active_snapshot_sequence`;
-- bottommost tombstone dropping только при snapshot-safe условиях;
-- output splitting без разделения versions одного user key;
-- atomic compaction installation одним MANIFEST edit;
-- durable reservation file numbers до создания outputs;
-- persisted L1+ metadata;
-- MANIFEST V2 с read compatibility MANIFEST V1;
-- crash-safe automatic V1 → V2 rotation при read-write open;
-- read-only V1 open без migration;
-- L0 slowdown/stop backpressure;
-- automatic compaction после public `flush()`;
-- public `Database::compact_range`;
-- CLI `forgedb compact <database> [start] [end-exclusive]`;
-- reopen test после L0 → L1 installation;
-- unit tests retention, bottommost tombstone и user-key-safe output splitting.
+- Публичные `Database::begin_transaction()`, `Transaction` и `TransactionState`.
+- Snapshot фиксируется в момент BEGIN и удерживается до commit, rollback, conflict либо failure.
+- `get` внутри транзакции сначала читает собственные buffered `put`/`delete`, затем данные на snapshot sequence.
+- `rollback` отбрасывает изменения без записи в WAL.
+- Commit проверяет write-write conflicts по committed sequence numbers во всех live источниках: mutable/immutable memtables и SSTables L0/L1+.
+- Конфликт обнаруживается и при ABA (значение изменили, а затем вернули прежние байты).
+- Validation и последующая запись WAL сериализованы одним public write gate.
+- `Sync` и `NoSync` сохраняют существующие гарантии durability; `DisableWal` при commit запрещён.
+- Read set ограничен числом уникальных ключей и их суммарным размером. Некорректный ключ отклоняется до добавления в read set.
+- В CLI появились `forgedb transaction` / `forgedb tx`; конфликт возвращает exit code `9`.
 
-## MANIFEST V2
+## Пример Rust API
 
-SSTable и WAL остаются V1. Новый persisted contract нужен только для authoritative level placement.
+```rust
+use forgedb::{Database, Options, Result, WriteOptions};
 
-| Формат | Read support | Write support |
+fn main() -> Result<()> {
+    let db = Database::open("./data", Options::default())?;
+    let mut tx = db.begin_transaction()?;
+    tx.put(b"account:1", b"100")?;
+    tx.put(b"account:2", b"200")?;
+    tx.commit(WriteOptions::sync())?;
+    db.close()
+}
+```
+
+## Пример CLI
+
+```bash
+cargo run -p forgedb-cli -- tx ./data --put account:1 100 --put account:2 200 --sync
+cargo run -p forgedb-cli -- tx ./data --get account:1 --put account:1 150 --get account:1 --sync
+cargo run -p forgedb-cli -- tx ./data --put temporary value --rollback
+```
+
+## Гарантии изоляции
+
+Реализована **snapshot isolation**, а не serializable isolation. Обязательная проверка write-write conflicts предотвращает перезапись ключа, изменённого после BEGIN. Read set ведётся для ограничения ресурсов, но не проверяется на все read-write conflicts.
+
+**Не гарантируются:** защита от write skew, predicate/range locking, phantom protection, nested transactions, savepoints и automatic retry. После `Error::Conflict` повтор бизнес-операции остаётся ответственностью вызывающего кода.
+
+## Совместимость файлов
+
+Persisted-format impact: **нет**.
+
+| Компонент | Reader | Writer |
 |---|---|---|
-| IDENTITY | 1 | 1 |
-| Internal Key | 1 | 1 |
-| WAL | 1 | 1 |
-| SSTable | 1 | 1 |
-| MANIFEST | 1, 2 | 2 |
-| CURRENT | 1 | 1 |
+| IDENTITY | V1 | V1 |
+| Internal Key | V1 | V1 |
+| WAL | V1 | V1 |
+| SSTable | V1 | V1 |
+| MANIFEST | V1/V2 | V2 |
+| CURRENT | V1 | V1 |
 
-ForgeDB v0.3.x корректно отклоняет MANIFEST V2 как future format. ForgeDB v0.4.x читает V1/V2 и пишет V2.
+Commit записывается одним WAL V1 batch frame; recovery не применяет его частично. Автоматическая миграция MANIFEST V1 → V2 при writable open остаётся прежней.
 
-Writable open V1 базы создаёт новый V2 snapshot MANIFEST, синхронизирует его и только затем crash-safe заменяет `CURRENT`. V1 MANIFEST не изменяется in-place.
+## Тестирование
 
-## Compaction correctness
+Проверены собственные записи, rollback, конфликты одного ключа, ABA, conflict после flush в SSTable, конкурентный commit, snapshot retention при leveled compaction, ограничения read set, повторное открытие и восстановление WAL, а также CLI.
 
-Для каждого user key newest version сохраняется. Если существует active snapshot, compaction сохраняет все версии новее oldest snapshot и первую версию не новее него. Это сохраняет observable result всех активных snapshots.
+Feature validation: [GitHub Actions run 42780867814](https://github.com/Onmaynec/ForgeDB/actions/runs/42780867814) — Ubuntu stable, Windows stable и Rust 1.89 успешно завершились.
 
-Tombstone удаляется только в bottommost range и только если активному snapshot не требуется состояние до tombstone.
+Release workflow повторяет Linux gate перед созданием аннотированного тега и GitHub Pre-release.
 
-Compaction outputs сначала полностью создаются как SSTable V1. Затем один checksummed MANIFEST V2 edit атомарно удаляет input references и добавляет outputs в target level. До этого edit authoritative остаются inputs; после durable edit — outputs.
+## Ограничения
 
-## Write pressure
+- SSTable conflict lookup использует correctness-first bounded decoder и может быть дорогим; оптимизацию оставляю до benchmark в v0.6.0.
+- Compaction остаётся синхронной, а physical obsolete SST не удаляются автоматически без reference-aware reaper.
+- Полный FQL parser и интерактивная оболочка не входят в этот выпуск.
 
-- `l0_compaction_trigger` запускает compaction после flush;
-- `l0_slowdown_trigger` добавляет bounded задержку перед writes;
-- `l0_stop_trigger` требует synchronous compaction и возвращает `Busy`, если pressure не удалось снизить.
-
-Задержка не выполняется под database state lock.
-
-## Проверка выпуска
-
-Tag и GitHub Pre-release создаются release workflow только после успешного:
-
-- `cargo fmt --all --check`;
-- `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`;
-- `cargo test --locked --workspace --all-features`;
-- `cargo test --locked --workspace --doc`;
-- `cargo build --locked --workspace --release`.
-
-Основной PR CI дополнительно проверяет Ubuntu, Windows и Rust 1.89.
-
-## Известные ограничения
-
-- compaction synchronous; отдельный background worker pool ещё не реализован;
-- merge bounded `max_compaction_bytes`, но job materialize-ит выбранные entries внутри этого лимита;
-- physical input SST после successful compaction не удаляются немедленно: без доказанного reference-aware Windows-safe reaper они остаются unreferenced и не возвращаются в live state;
-- поэтому долгоживущая база после многих compactions может требовать больше disk space до появления safe obsolete-file cleanup;
-- transactions, reverse iterator и compaction metrics ещё отсутствуют;
-- range tombstones отсутствуют.
-
-Подробнее: `docs/COMPACTION.md`, `docs/formats/MANIFEST_V2.md`, ADR 0010.
+Подробности: `docs/TRANSACTIONS.md`, `docs/adr/0011-optimistic-snapshot-isolation.md`, `docs/releases/V0.5.0.md`.
