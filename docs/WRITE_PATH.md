@@ -1,4 +1,4 @@
-# Путь записи ForgeDB v0.4.0
+# Путь записи ForgeDB v0.6.0
 
 ## Публичные операции
 
@@ -41,7 +41,7 @@ Public write path при переполнении L0 пытается снизи
 
 После публичного `flush` wrapper запускает synchronous compaction при достижении trigger. Также доступен `Database::compact_range` с half-open range.
 
-Compaction резервирует output file numbers durable edit, строит все outputs и устанавливает их одним MANIFEST V2 edit. Версии, необходимые активным snapshots, сохраняются. Старые input SST не удаляются немедленно: reference-aware cleanup отсутствует в v0.4.0.
+Compaction резервирует output file numbers durable edit, строит все outputs и устанавливает их одним MANIFEST V2 edit. Версии, необходимые активным snapshots, сохраняются. Старые input SST переходят в process-local retirement queue только после synced installation edit; manual `cleanup_obsolete_sstables()` удаляет их после освобождения читателей. При restart не предпринимается speculative orphan deletion.
 
 Полный порядок installation и retention: [COMPACTION.md](COMPACTION.md).
 
@@ -49,6 +49,6 @@ Compaction резервирует output file numbers durable edit, строит
 
 `close()` синхронизирует WAL/MANIFEST writers и освобождает LOCK только после успешной операции. Закрытие во время активного maintenance job возвращает `Busy`.
 
-## Отсутствует в v0.4.0
+## Отсутствует в v0.6.0
 
-Транзакционный public API, group commit, background compaction scheduler, range tombstones и безопасный автоматический reaper устаревших SST.
+Group commit, background compaction scheduler, range tombstones и полная automatic/cross-restart garbage collection SST. Optimistic snapshot-isolation transactions существуют с v0.5.0. Индексный point read и bounded decoded-block cache — с v0.6.0.
