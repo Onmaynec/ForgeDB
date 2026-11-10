@@ -248,6 +248,17 @@ impl VersionSet {
         self.block_cache.stats()
     }
 
+    pub(crate) fn is_live_file(&self, file_number: u64) -> bool {
+        self.levels
+            .iter()
+            .flatten()
+            .any(|table| table.metadata.file_number == file_number)
+    }
+
+    pub(crate) fn evict_cached_table(&self, file_number: u64) -> Result<()> {
+        self.block_cache.evict_table(file_number)
+    }
+
     pub(crate) fn files_in_read_order(&self) -> Result<Vec<TableHandle>> {
         let level_zero = self.levels.first().ok_or(Error::InternalInvariant {
             invariant: "I-VERSIONSET-L0-PRESENT",
