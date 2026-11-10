@@ -14,7 +14,7 @@ use forgedb_manifest::{
     CURRENT_FILE_NAME, ManifestState, ManifestWriter, VersionEdit, create_manifest, open_manifest,
 };
 use forgedb_sstable::{
-    TableBuildOptions, TableBuildRequest, TableReader, build_table, sst_file_name,
+    CacheStats, TableBuildOptions, TableBuildRequest, TableReader, build_table, sst_file_name,
 };
 use forgedb_wal::{
     WalBatch, WalWriter, create_wal, open_wal_numbered, replay_wal_numbered, wal_file_name,
@@ -207,6 +207,7 @@ impl Database {
             &limits,
             options.level_count,
             options.max_compaction_bytes,
+            options.block_cache_size,
         )?);
         let inventory = inventory_for(version.as_ref(), &manifest)?;
         if !inventory.blockers.is_empty() {
@@ -476,6 +477,13 @@ impl Database {
             self.snapshots.oldest_active_sequence()?,
             verify_options,
         )
+    }
+
+    /// Счётчики point-lookup block cache этого open handle.
+    pub fn cache_stats(&self) -> Result<CacheStats> {
+        self.ensure_open()?;
+        let version = Arc::clone(&self.lock_state()?.version);
+        version.cache_stats()
     }
 
     /// Синхронизирует WAL и MANIFEST и освобождает process lock.
