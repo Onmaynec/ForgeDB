@@ -5,9 +5,9 @@ use std::sync::Arc;
 use forgedb_core::{DatabaseId, Error, Limits, Result, SequenceNumber};
 use forgedb_fs::NativeFileSystem;
 use forgedb_manifest::ManifestState;
-use forgedb_sstable::{TableMeta, TableReader};
+use forgedb_sstable::{BlockCache, CacheStats, TableLookup, TableMeta, TableReader};
 
-use crate::table_scan::{self, TableLookupRequest, TableSnapshotLookup};
+use crate::table_scan::TableSnapshotLookup;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TableHandle {
@@ -34,6 +34,7 @@ pub(crate) struct VersionSet {
     identity: DatabaseId,
     levels: Vec<Vec<TableHandle>>,
     max_file_size: u64,
+    block_cache: Arc<BlockCache>,
 }
 
 impl VersionSet {
@@ -44,6 +45,7 @@ impl VersionSet {
         limits: &Limits,
         level_count: usize,
         max_file_size: u64,
+        block_cache_size: usize,
     ) -> Result<Self> {
         if level_count < 2 {
             return Err(Error::invalid_argument(
@@ -97,6 +99,7 @@ impl VersionSet {
             identity,
             levels,
             max_file_size,
+            block_cache: Arc::new(BlockCache::new(block_cache_size)),
         };
         version.validate(limits)?;
         Ok(version)
@@ -175,8 +178,8 @@ impl VersionSet {
         &self,
         user_key: &[u8],
         snapshot: Option<SequenceNumber>,
-        limits: &Limits,
-        verify_checksums: bool,
+        _limits: &Limits,
+        _verify_checksums: bool,
     ) -> Result<TableSnapshotLookup> {
         let Some(level_zero) = self.levels.first() else {
             return Err(Error::InternalInvariant {
@@ -188,90 +191,65 @@ impl VersionSet {
             if !table.metadata.may_contain_user_key(user_key) {
                 continue;
             }
-            let lookup = table_scan::lookup_at(TableLookupRequest {
-                path: table.path(),
-                expected_database_id: self.identity,
-                metadata: &table.metadata,
-                user_key,
-                snapshot,
-                limits,
-                max_file_size: self.max_file_size,
-                verify_checksums,
-            })?;
-            if lookup != TableSnapshotLookup::Missing {
-                return Ok(lookup);
+            let lookup = table
+                .reader
+                .get_at_cached(user_key, snapshot, &self.block_cache)?;
+            if lookup != TableLookup::Missing {
+                return Ok(convert_lookup(lookup));
             }
         }
         for level in self.levels.iter().skip(1) {
-            let candidate = level
-                .iter()
-                .find(|table| table.metadata.may_contain_user_key(user_key));
-            let Some(table) = candidate else {
+            // L1+ ranges не пересекаются: binary search вместо линейного обхода уровня.
+            let index = level.partition_point(|table| {
+                table.metadata.largest_user_key.as_slice() < user_key
+            });
+            let Some(table) = level.get(index).filter(|table| {
+                table.metadata.may_contain_user_key(user_key)
+            }) else {
                 continue;
             };
-            let lookup = table_scan::lookup_at(TableLookupRequest {
-                path: table.path(),
-                expected_database_id: self.identity,
-                metadata: &table.metadata,
-                user_key,
-                snapshot,
-                limits,
-                max_file_size: self.max_file_size,
-                verify_checksums,
-            })?;
-            if lookup != TableSnapshotLookup::Missing {
-                return Ok(lookup);
+            let lookup = table
+                .reader
+                .get_at_cached(user_key, snapshot, &self.block_cache)?;
+            if lookup != TableLookup::Missing {
+                return Ok(convert_lookup(lookup));
             }
         }
         Ok(TableSnapshotLookup::Missing)
     }
 
-    /// Ищет newest committed sequence user key во всех live SSTables.
-    ///
-    /// Это correctness-first baseline для transaction validation. Таблицы, чей largest sequence
-    /// не новее transaction snapshot, caller может отсеять через `after`; остальные читаются
-    /// bounded existing SST decoder-ом с checksum validation.
+    /// Проверка write-write conflict использует SSTable index и Bloom filter:
+    /// полная материализация всех entries таблицы больше не требуется.
     pub(crate) fn latest_sequence_after(
         &self,
         user_key: &[u8],
         after: Option<SequenceNumber>,
-        limits: &Limits,
-        verify_checksums: bool,
+        _limits: &Limits,
+        _verify_checksums: bool,
     ) -> Result<Option<SequenceNumber>> {
-        let mut newest = None;
+        let mut newest: Option<SequenceNumber> = None;
         let threshold = after.map(SequenceNumber::get).unwrap_or(0);
-        for table in self.files_in_read_order()? {
-            if !table.metadata.may_contain_user_key(user_key)
-                || table.metadata.largest_sequence.get() <= threshold
-            {
-                continue;
-            }
-            for entry in table_scan::read_entries(
-                table.path(),
-                self.identity,
-                table.metadata(),
-                limits,
-                self.max_file_size,
-                verify_checksums,
-            )? {
-                let entry_key = entry.internal_key.user_key();
-                if entry_key < user_key {
+        for level in &self.levels {
+            for table in level {
+                if !table.metadata.may_contain_user_key(user_key)
+                    || table.metadata.largest_sequence.get() <= threshold
+                {
                     continue;
                 }
-                if entry_key > user_key {
-                    break;
+                if let Some(sequence) = table.reader.latest_sequence_after_cached(
+                    user_key,
+                    after,
+                    &self.block_cache,
+                )? {
+                    newest = Some(newest.map_or(sequence, |current| current.max(sequence)));
                 }
-                let sequence = entry.internal_key.sequence();
-                if sequence.get() > threshold
-                    && newest.is_none_or(|current: SequenceNumber| sequence > current)
-                {
-                    newest = Some(sequence);
-                }
-                // Entries одного user key идут sequence-desc; для этой table первый match newest.
-                break;
             }
         }
         Ok(newest)
+    }
+
+    pub(crate) fn cache_stats(&self) -> Result<CacheStats> {
+        self.block_cache.stats()
     }
 
     pub(crate) fn files_in_read_order(&self) -> Result<Vec<TableHandle>> {
@@ -371,7 +349,15 @@ impl VersionSet {
     }
 }
 
-pub(crate) fn validate_level_metadata(
+pub(crate) fn convert_lookup(lookup: TableLookup) -> TableSnapshotLookup {
+    match lookup {
+        TableLookup::Missing => TableSnapshotLookup::Missing,
+        TableLookup::Tombstone => TableSnapshotLookup::Tombstone,
+        TableLookup::Value(value) => TableSnapshotLookup::Value(value),
+    }
+}
+
+fn validate_level_metadata(
     level_index: usize,
     files: &[TableMeta],
     limits: &Limits,
