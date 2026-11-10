@@ -26,6 +26,7 @@ jobs:
       - run: cargo test --locked --workspace --all-features
       - run: cargo test --locked --workspace --doc
       - run: cargo build --locked --workspace --release
+      - run: cargo run --locked --release -p forgedb --example point_lookup_bench -- 256 1024
 
   msrv:
     name: ubuntu / Rust 1.89
