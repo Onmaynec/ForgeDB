@@ -99,12 +99,7 @@ impl DatabaseId {
         }
 
         let mut bytes = [0_u8; 16];
-        let (pairs, []) = compact.as_chunks::<2>() else {
-            return Err(Error::InternalInvariant {
-                invariant: "I-IDENTITY-HEX-PAIRING",
-                reason: "32 hexadecimal digits должны разделяться на 16 пар".to_owned(),
-            });
-        };
+        let (pairs, _) = compact.as_chunks::<2>();
         for (target, pair) in bytes.iter_mut().zip(pairs) {
             let high = decode_hex(pair[0])?;
             let low = decode_hex(pair[1])?;
