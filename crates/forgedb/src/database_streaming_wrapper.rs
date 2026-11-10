@@ -141,6 +141,20 @@ impl StreamingDatabase {
             .with_version_lease(version))
     }
 
+    /// Transitional materialized iterator remains available for internal tests.
+    /// Public reads use the block-at-a-time streaming implementation above.
+    #[allow(dead_code)]
+    fn legacy_materialized_scan<R>(
+        &self,
+        range: R,
+        read_options: ReadOptions,
+    ) -> Result<DbIterator>
+    where
+        R: RangeBounds<Vec<u8>>,
+    {
+        self.inner.scan(range, read_options)
+    }
+
     /// Синхронно переводит immutable memtable в установленный L0 SSTable и при необходимости
     /// выполняет synchronous leveled compaction до снижения compaction pressure.
     pub fn flush(&self) -> Result<()> {
