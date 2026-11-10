@@ -19,7 +19,7 @@ pub struct Options {
     pub max_batch_operations: usize,
     /// Максимальный объём mutable memtable до отклонения новых записей.
     pub memtable_size: usize,
-    /// Целевой размер WAL-файла для будущей rotation policy.
+    /// Зарезервировано для будущей WAL rotation policy; сейчас не является порогом авто-ротации.
     pub wal_file_size: u64,
     /// Целевой размер SSTable.
     pub target_sst_size: u64,
@@ -31,7 +31,7 @@ pub struct Options {
     pub bloom_bits_per_key: u16,
     /// Максимальный объём resident block cache в байтах.
     pub block_cache_size: usize,
-    /// Максимальное число cached table readers.
+    /// Зарезервировано для будущего lazy table-reader cache; пока не ограничивает eager SST bytes.
     pub table_cache_capacity: usize,
     /// Число уровней LSM.
     pub level_count: usize,
@@ -45,15 +45,15 @@ pub struct Options {
     pub level1_target_size: u64,
     /// Множитель размера между уровнями.
     pub level_size_multiplier: u64,
-    /// Максимальное число одновременных фоновых flush jobs.
+    /// Зарезервировано: сейчас flush синхронен, фонового worker pool нет.
     pub max_background_flushes: usize,
-    /// Максимальное число одновременных фоновых compaction jobs.
+    /// Зарезервировано: сейчас compaction синхронна, фонового worker pool нет.
     pub max_background_compactions: usize,
     /// Максимальный объём данных одной compaction.
     pub max_compaction_bytes: u64,
     /// Проверять checksum при обычном чтении.
     pub verify_checksums: bool,
-    /// Включать дополнительные проверки инвариантов.
+    /// Опция совместимости для дополнительных проверок; текущие mandatory checks всегда выполняются.
     pub paranoid_checks: bool,
 }
 
