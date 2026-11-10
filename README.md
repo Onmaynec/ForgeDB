@@ -4,8 +4,8 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## Статус версий
 
-- версия исходников в feature branch: **v0.6.1 — Stability and Recovery** (до публикации);
-- последний опубликованный выпуск: **v0.6.0 — Cache and Performance**, GitHub Pre-release;
+- текущий выпуск: **v0.6.1 — Stability and Recovery**, GitHub Pre-release;
+- предыдущая версия: **v0.6.0 — Cache and Performance**;
 - следующий milestone: **v0.7.0 — Column Families**.
 
 ## Возможности v0.6.1
@@ -39,6 +39,21 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 - повторяемый `close()`: writer handles и LOCK удерживаются до успешного sync WAL/MANIFEST;
 - однократный synchronous flush/retry для `put/delete/write` при переполнении mutable memtable;
 - best-effort reference-aware SST cleanup после успешной compaction (в рамках текущего open handle).
+
+## CLI без компиляции
+
+Для Windows x86-64 и Linux x86-64 опубликованы архивы с готовым CLI и SHA-256 checksum в [GitHub Releases](https://github.com/Onmaynec/ForgeDB/releases). Скачать и распаковать `forgedb-v0.6.1-windows-x86_64.zip` или `forgedb-v0.6.1-linux-x86_64.tar.gz`.
+
+Пример первого запуска после распаковки (Linux; в PowerShell используйте `./forgedb.exe`):
+
+```bash
+./forgedb put ./data hello world
+./forgedb get ./data hello
+./forgedb scan ./data
+./forgedb verify ./data --deep
+```
+
+Подробности и проверка контрольной суммы: [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
 ## Пример API
 

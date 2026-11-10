@@ -1,82 +1,58 @@
-# ForgeDB v0.6.0 — Cache and Performance
+# ForgeDB v0.6.1 — Stability and Recovery
 
 Статус: GitHub Pre-release.
 
-ForgeDB v0.6.0 ускоряет обычные point reads и validation конфликтов MVCC-транзакций. Вместо повторного декодирования целого SSTable используется проверенный индекс и Bloom filter. Добавлен bounded LRU для декодированных блоков и консервативная очистка файлов, уже исключённых из live MANIFEST.
+Исправительный выпуск поверх v0.6.0. Основные изменения затрагивают закрытие базы, повторные публичные записи при заполненной memtable и автоматическую безопасную очистку SSTable после compaction. Persisted-форматы не меняются.
 
-## Основные изменения
+## Исправлено
 
-- Snapshot-aware point lookup через SSTable index с Bloom filter: декодируются только data blocks, которые могут содержать нужный ключ.
-- Корректное чтение старых MVCC-версий и tombstones, когда версии одного user key лежат в нескольких соседних blocks.
-- Binary search по непересекающимся key ranges L1+.
-- Optimistic transaction write-write validation по newest committed sequence через индекс SST, без full-table materialization.
-- `BlockCache`: LRU decoded-block cache, размер управляется `Options::block_cache_size` (0 отключает кеширование).
-- `Database::cache_stats()` возвращает `CacheStats`: hits, misses, evictions, bypasses, число и объём cached blocks.
-- Public forward `DbIterator` удерживает `Arc<VersionSet>` до завершения scan.
-- После synced MANIFEST compaction installation удалённые input SST можно поставить в process-local retirement queue. Каждый retired файл отслеживает свой `Weak<TableReader>`; пока reader существует, physical cleanup откладывается.
-- `Database::cleanup_obsolete_sstables()` удаляет только доказанно retired inputs из этого open handle и возвращает `CleanupReport` с результатом. CLI `compact` вызывает очистку после compaction.
-- Добавлен benchmark `point_lookup_bench` без внешних зависимостей и короткий smoke-run в Linux/Windows CI.
-- Добавлены регрессионные тесты на cache eviction/disabled, snapshot reads через data block boundaries, conflict detection, active iterator pins, восстановление и orphan-file preservation.
-- Документация: `docs/CACHE_AND_PERFORMANCE.md`, ADR 0012/0013, обновлённые архитектура, read/write path, recovery и compatibility.
+- `Database::close()` больше не помечает базу закрытой и не извлекает WAL/MANIFEST writer handles до успешного sync. При ошибке остаётся возможность повторить закрытие; process LOCK не освобождается преждевременно.
+- `lock_state()` проверяет `closed` после захвата mutex, чтобы не пропускать операции через гонку с успешным закрытием.
+- Публичные `put`, `delete` и `write` при `ResourceLimit { resource: "memtable_memory", .. }` делают один synchronous flush/retry. Повторный отказ не записывает часть batch; бесконечных повторов нет.
+- После успешной leveled compaction вызывается best-effort reference-aware очистка retired SSTables. Удерживаемые читателями файлы не удаляются; неудачный unlink не превращает уже завершённую compaction в ошибку записи.
+- Удалены неиспользуемые источники pre-MVCC storage core; уточнены документы, комментарии API и активные/зарезервированные настройки `Options`.
 
-## Пример API
+## Гарантии и ограничения
 
-```rust
-use forgedb::{Database, Options, Result, WriteOptions};
-
-fn main() -> Result<()> {
-    let db = Database::open("./data", Options::default())?;
-    db.put(b"account:1", b"100", WriteOptions::sync())?;
-
-    let stats = db.cache_stats()?;
-    println!("cache hits={}, misses={}", stats.hits, stats.misses);
-
-    db.compact_range(None, None)?;
-    let cleanup = db.cleanup_obsolete_sstables()?;
-    println!("removed SSTables: {}", cleanup.removed.len());
-    db.close()
-}
-```
-
-## Измерения
-
-```bash
-cargo run --locked --release -p forgedb --example point_lookup_bench -- 8192 50000
-```
-
-Benchmark создаёт временную базу, проверяет reads, выводит cold/warm durations и cache counters. В выпуске намеренно нет неподтверждённых процентов ускорения: полноценное сравнение с v0.5.0 требует одинакового оборудования, набора запросов и конфигурации.
-
-## Persisted compatibility
-
-**Изменений форматов нет.**
-
-| Формат | Reader | Writer |
-|---|---|---|
-| IDENTITY | V1 | V1 |
-| Internal Key | V1 | V1 |
-| WAL | V1 | V1 |
-| SSTable | V1 | V1 |
-| MANIFEST | V1/V2 | V2 |
-| CURRENT | V1 | V1 |
-
-Cache хранится в памяти. Transaction commit продолжает пользоваться WAL V1 `WriteBatch` и snapshot isolation v0.5.0. Compaction по-прежнему публикует topology через synced MANIFEST edit.
-
-## Очистка файлов и восстановление
-
-Cleanup допустим только для SSTable, удалённого из live topology успешно синхронизированным MANIFEST edit. Пока `TableReader` жив, cleanup возвращает deferred, в том числе когда его удерживает старый iterator. Неудачное удаление оставляет объект на диске, не меняя authoritative state.
-
-Очередь retired SST хранится **только в текущем процессе**. После restart ForgeDB не удаляет произвольные orphan-файлы: подтверждения права их удалить уже нет. Backup, unknown и user files normal recovery/cleanup не затрагивает.
-
-## Границы v0.6.0
-
-- `TableReader::open` всё ещё eagerly читает физические SSTable bytes в память. Предел `block_cache_size` ограничивает decoded block residency, **не общий RSS**. `table_cache_capacity` пока не реализует lazy eviction reader buffers.
-- Range scan использует отдельный streaming cursor, не block cache point reads.
-- Обязательная автоматическая restart-aware garbage collection и background compaction worker отсутствуют.
-- Compaction synchronous, merge bounded в `max_compaction_bytes`, но materialized в пределах этого бюджета.
-- MVCC isolation — snapshot isolation, не serializable; write skew всё ещё возможен.
+- `Sync` сохраняет прежнюю WAL durability boundary; не добавлено новых persisted records.
+- WAL V1, SSTable V1, Internal Key V1 и CURRENT V1 без изменений; MANIFEST writer V2, reader V1/V2.
+- Auto-flush и compaction остаются **синхронными**: отдельного worker pool нет. Транзакционный commit не выполняет новый automatic flush/retry.
+- Retired-file cleanup действует только в текущем открытом процессе; произвольные orphan SST после перезапуска не удаляются.
+- Параметры `table_cache_capacity`, `max_background_flushes` и `max_background_compactions` зарезервированы для будущих изменений; их наличие не означает lazy reader eviction или фоновые jobs.
+- `TableReader` по-прежнему eagerly загружает физические SST bytes, и decoded-block cache budget не равен лимиту всего RSS.
+- Snapshot isolation не равна serializable isolation; FQL и полный backup API в эту версию не входят.
 
 ## Проверки
 
-Feature PR [#21](https://github.com/Onmaynec/ForgeDB/pull/21) прошёл весь CI [run 42787135076](https://github.com/Onmaynec/ForgeDB/actions/runs/42787135076): Ubuntu stable, Windows stable, Rust 1.89, strict Clippy, workspace tests, doctests, release build, benchmark smoke. Release workflow отдельно повторяет Linux gate до создания тега/Pre-release.
+Feature head `bea0b52ed9ccabcd144b91ad55f7e6130453f2b8`, [CI run 42880868115](https://github.com/Onmaynec/ForgeDB/actions/runs/42880868115):
 
-Подробнее: `docs/CACHE_AND_PERFORMANCE.md`, `docs/COMPACTION.md`, `docs/adr/0012-indexed-sst-lookup-and-cache.md` и `docs/adr/0013-reference-aware-sst-retirement.md`.
+- Ubuntu stable: rustfmt, strict Clippy, tests, doctests, release build, benchmark smoke — success.
+- Windows stable: тот же набор — success.
+- Rust 1.89: strict Clippy, workspace tests — success.
+
+В проверках есть deterministic fault injection для обеих sync boundaries `close()`, повторное закрытие и reopen, continuous writes при заполненной memtable, oversized atomic batch и проверка автоматического удаления SST с сохранением active iterator/snapshot и orphan файлов. Release workflow отдельно повторяет Linux validation до создания аннотированного тега.
+
+## Готовый CLI
+
+Release workflow собирает CLI `forgedb` для x86-64 Windows и Linux и прикрепляет архивы с SHA-256 checksum к GitHub Release:
+
+- `forgedb-v0.6.1-windows-x86_64.zip` — `forgedb.exe`;
+- `forgedb-v0.6.1-linux-x86_64.tar.gz` — `forgedb`.
+
+После распаковки CLI можно запускать без установленного Rust toolchain:
+
+```bash
+forgedb put ./data hello world
+forgedb get ./data hello
+forgedb scan ./data
+forgedb verify ./data --deep
+```
+
+CLI работает с UTF-8 текстовыми ключами/значениями, библиотечный API принимает бинарные данные. На Windows используйте `./forgedb.exe` или `.\forgedb.exe` в PowerShell.
+
+## Документация
+
+- `docs/releases/V0.6.1.md` — границы исправительного milestone;
+- `docs/ARCHITECTURE.md` и `docs/WRITE_PATH.md` — lifecycle, flush/retry, compaction;
+- `docs/CACHE_AND_PERFORMANCE.md` и `docs/COMPACTION.md` — reference-aware cleanup;
+- `docs/OPTIONS.md` — действующие и зарезервированные параметры.
