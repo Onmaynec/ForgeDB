@@ -2,7 +2,10 @@
 //! Bloom filter, properties и fixed footer.
 
 mod bloom;
+mod cache;
 mod checksum;
+
+pub use cache::{BlockCache, CacheStats};
 
 use std::cmp::Ordering;
 use std::io::{Read, Write};
@@ -456,6 +459,100 @@ impl TableReader {
             }
         }
         Ok(TableLookup::Missing)
+    }
+
+    /// Snapshot-aware indexed lookup. Reads only blocks whose index range can contain the key.
+    ///
+    /// Versions одного user key могут лежать в нескольких последовательных data blocks.
+    /// Поиск продолжает чтение до первой версии, видимой на snapshot.
+    pub fn get_at_cached(
+        &self,
+        user_key: &[u8],
+        snapshot: Option<SequenceNumber>,
+        cache: &BlockCache,
+    ) -> Result<TableLookup> {
+        self.limits.validate_key(user_key)?;
+        let Some(snapshot) = snapshot else {
+            return Ok(TableLookup::Missing);
+        };
+        let Some(first) = self.first_candidate_block(user_key) else {
+            return Ok(TableLookup::Missing);
+        };
+        for (index, _) in self.index.iter().enumerate().skip(first) {
+            let entries = self.cached_entries(index, cache)?;
+            for entry in entries.iter() {
+                match entry.internal_key.user_key().cmp(user_key) {
+                    Ordering::Less => continue,
+                    Ordering::Greater => return Ok(TableLookup::Missing),
+                    Ordering::Equal if entry.internal_key.sequence() > snapshot => continue,
+                    Ordering::Equal => {
+                        return match entry.internal_key.value_type() {
+                            ValueType::Deletion => Ok(TableLookup::Tombstone),
+                            ValueType::Value => Ok(TableLookup::Value(entry.value.clone())),
+                        };
+                    }
+                }
+            }
+        }
+        Ok(TableLookup::Missing)
+    }
+
+    /// Newest persisted sequence ключа, если она строго новее `after`.
+    /// Используется при optimistic transaction conflict validation без full-table materialization.
+    pub fn latest_sequence_after_cached(
+        &self,
+        user_key: &[u8],
+        after: Option<SequenceNumber>,
+        cache: &BlockCache,
+    ) -> Result<Option<SequenceNumber>> {
+        self.limits.validate_key(user_key)?;
+        let Some(first) = self.first_candidate_block(user_key) else {
+            return Ok(None);
+        };
+        for (index, _) in self.index.iter().enumerate().skip(first) {
+            let entries = self.cached_entries(index, cache)?;
+            for entry in entries.iter() {
+                match entry.internal_key.user_key().cmp(user_key) {
+                    Ordering::Less => continue,
+                    Ordering::Greater => return Ok(None),
+                    Ordering::Equal => {
+                        let sequence = entry.internal_key.sequence();
+                        return Ok((after.is_none_or(|threshold| sequence > threshold))
+                            .then_some(sequence));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn first_candidate_block(&self, user_key: &[u8]) -> Option<usize> {
+        if !self.meta.may_contain_user_key(user_key) || !self.filter.may_contain(user_key) {
+            return None;
+        }
+        let first = self
+            .index
+            .partition_point(|entry| entry.separator.user_key() < user_key);
+        (first < self.index.len()).then_some(first)
+    }
+
+    fn cached_entries(
+        &self,
+        index: usize,
+        cache: &BlockCache,
+    ) -> Result<std::sync::Arc<Vec<TableEntry>>> {
+        let handle = self
+            .index
+            .get(index)
+            .ok_or(Error::InternalInvariant {
+                invariant: "I-TABLE-BLOCK-INDEX",
+                reason: "позиция блока вне проверенного SSTable index".to_owned(),
+            })?
+            .handle;
+        cache.get_or_decode(self.meta.file_number, index, || {
+            let payload = read_block(&self.bytes, handle, "SSTable data block")?;
+            decode_data_block(payload, &self.limits)
+        })
     }
 
     #[must_use]
@@ -1887,6 +1984,103 @@ mod tests {
         assert_eq!(reader.get(b"alpha")?, TableLookup::Value(b"one".to_vec()));
         assert_eq!(reader.get(b"beta")?, TableLookup::Tombstone);
         assert_eq!(reader.get(b"missing")?, TableLookup::Missing);
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
+    #[test]
+    fn snapshot_lookup_across_multiple_data_blocks_uses_cache() -> Result<()> {
+        let directory = temporary_directory("snapshot-block-split")?;
+        let filesystem = NativeFileSystem;
+        let limits = Limits::default();
+        let database_id = DatabaseId::random();
+        let mut rows = Vec::new();
+        for sequence in (3..=8_u64).rev() {
+            rows.push(TableEntry::value(
+                b"account".to_vec(),
+                SequenceNumber::new(sequence)?,
+                vec![u8::try_from(sequence).unwrap_or_default(); 700],
+                &limits,
+            )?);
+        }
+        rows.push(TableEntry::tombstone(
+            b"account".to_vec(),
+            SequenceNumber::new(2)?,
+            &limits,
+        )?);
+        rows.push(TableEntry::value(
+            b"account".to_vec(),
+            SequenceNumber::new(1)?,
+            b"old".to_vec(),
+            &limits,
+        )?);
+        rows.push(TableEntry::value(
+            b"other".to_vec(),
+            SequenceNumber::new(1)?,
+            b"other".to_vec(),
+            &limits,
+        )?);
+        rows.sort_by(|a, b| a.internal_key.cmp(&b.internal_key));
+        let meta = build_table(
+            &filesystem,
+            TableBuildRequest::new(
+                &directory,
+                &directory.join("TEMP"),
+                database_id,
+                29,
+                &rows,
+                &limits,
+                TableBuildOptions {
+                    data_block_size: 1024,
+                    restart_interval: 2,
+                    bloom_bits_per_key: 10,
+                },
+            ),
+        )?;
+        let reader = TableReader::open(
+            &filesystem,
+            &directory,
+            database_id,
+            &meta,
+            &limits,
+            16 * 1024 * 1024,
+        )?;
+        assert!(reader.index.len() >= 7);
+        let cache = BlockCache::new(16 * 1024);
+        assert_eq!(
+            reader.get_at_cached(b"account", Some(SequenceNumber::new(4)?), &cache)?,
+            TableLookup::Value(vec![4; 700])
+        );
+        assert_eq!(
+            reader.get_at_cached(b"account", Some(SequenceNumber::new(2)?), &cache)?,
+            TableLookup::Tombstone
+        );
+        assert_eq!(
+            reader.get_at_cached(b"account", Some(SequenceNumber::new(1)?), &cache)?,
+            TableLookup::Value(b"old".to_vec())
+        );
+        assert_eq!(
+            reader.get_at_cached(b"account", None, &cache)?,
+            TableLookup::Missing
+        );
+        assert_eq!(
+            reader.latest_sequence_after_cached(
+                b"account",
+                Some(SequenceNumber::new(7)?),
+                &cache
+            )?,
+            Some(SequenceNumber::new(8)?)
+        );
+        assert_eq!(
+            reader.latest_sequence_after_cached(
+                b"account",
+                Some(SequenceNumber::new(8)?),
+                &cache
+            )?,
+            None
+        );
+        assert!(cache.stats()?.hits > 0);
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
         Ok(())
