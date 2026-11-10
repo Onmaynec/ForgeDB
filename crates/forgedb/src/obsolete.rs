@@ -1,13 +1,13 @@
 use std::sync::Weak;
 
-use crate::version_set::VersionSet;
+use forgedb_sstable::TableReader;
 
 /// Итог консервативной очистки SSTable, выведенных из live MANIFEST topology.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CleanupReport {
     /// Файлы, физически удалённые при этом вызове.
     pub removed: Vec<String>,
-    /// Файлы, удерживаемые старым VersionSet или работающими читателями.
+    /// Файлы, удерживаемые работающими читателями.
     pub deferred: Vec<String>,
     /// Файлы, уже отсутствовавшие при попытке безопасной очистки.
     pub absent: Vec<String>,
@@ -15,11 +15,11 @@ pub struct CleanupReport {
     pub failed: Vec<String>,
 }
 
-/// Только файлы, которые исключены из live topology синхронизированным
-/// compaction VersionEdit в этом open handle. После restart выводов
-/// об orphan-файлах этот список не делает.
+/// Отдельный SSTable, исключённый из live topology synced compaction edit.
+/// Weak<TableReader> отслеживает все версии, разделяющие reader этого файла,
+/// включая итераторы, созданные ещё до последующих flush/compaction.
 #[derive(Debug)]
-pub(crate) struct RetiredSstables {
-    pub(crate) old_version: Weak<VersionSet>,
-    pub(crate) file_numbers: Vec<u64>,
+pub(crate) struct RetiredSstable {
+    pub(crate) file_number: u64,
+    pub(crate) reader: Weak<TableReader>,
 }
