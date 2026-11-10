@@ -31,6 +31,10 @@ ForgeDB v0.5.0 использует optimistic snapshot isolation.
 
 Reads проверяют последнюю собственную buffered mutation ключа, затем читают database state на snapshot sequence.
 
+### Read set limits
+
+Read keys проверяются по лимиту `max_key_size` до копирования. Для набора прочитанных уникальных ключей действуют `max_batch_operations` (число ключей) и `max_batch_size` (сумма длины ключей). Read set ограничен по ресурсам, но не участвует в read-write conflict detection.
+
 ### Conflict rule
 
 При commit для каждого уникального ключа write set определяется newest committed sequence во всех live источниках. Если он строго больше snapshot sequence transaction, commit отклоняется `Error::Conflict`.

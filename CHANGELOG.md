@@ -4,7 +4,7 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
-## [0.5.0] — 2026-08-09
+## [0.5.0] — 2026-11-10
 
 ### Добавлено
 
@@ -15,7 +15,8 @@
 - Write-write conflict detection по committed sequence numbers во всех live sources: mutable memtable, pending immutable memtable, L0 и L1+ SSTables.
 - Единый public write gate, сериализующий conflict validation и последующий WAL append относительно обычных public writes.
 - Atomic transaction commit одним существующим `WriteBatch` через WAL V1 path.
-- Bounded transaction read set.
+- Bounded transaction read set: лимит уникальных ключей и суммарного размера key bytes, validation до allocation.
+- Проверка сохранения transaction snapshot при leveled compaction и конкурентного commit в нескольких потоках.
 - CLI `forgedb transaction` / `forgedb tx` с `--put`, `--delete`, `--get`, `--rollback`, `--sync` и `--no-sync`.
 - Stable CLI exit code `9` для transaction conflict.
 - Deterministic transaction state-machine/reference-model test.
@@ -29,7 +30,6 @@
 - MVCC memtable предоставляет newest sequence lookup для conflict validation.
 - `VersionSet` предоставляет correctness-first latest-sequence lookup по live SSTables с checksum validation.
 - Compatibility documentation обновлена для v0.5.0.
-- MANIFEST V1 compatibility fixture приведён к strict stable Clippy (`&Path` вместо `&PathBuf`).
 
 ### Гарантии transactions
 

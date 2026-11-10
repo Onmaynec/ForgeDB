@@ -63,7 +63,7 @@ fn main() -> Result<()> {
 
 Commit выполняет write-write validation: если любой ключ write set получил более новую committed version после snapshot transaction, commit целиком отклоняется как `Error::Conflict { keys }`. Validation и последующий WAL append сериализованы единым public write gate.
 
-ForgeDB v0.5.0 предоставляет **snapshot isolation**, но не заявляет serializable isolation, predicate locking, phantom protection или защиту от write skew. Read set bounded и отслеживается, но full read-write conflict validation пока не выполняется.
+ForgeDB v0.5.0 предоставляет **snapshot isolation**, но не заявляет serializable isolation, predicate locking, phantom protection или защиту от write skew. Read set ограничен числом уникальных ключей (`max_batch_operations`) и суммарной длиной ключей (`max_batch_size`). До включения ключа в read set проверяется `max_key_size`. Read set не используется для full read-write conflict validation.
 
 `WriteOptions::disable_wal()` для transaction commit запрещён. `Sync` и `NoSync` используют существующие WAL durability semantics.
 

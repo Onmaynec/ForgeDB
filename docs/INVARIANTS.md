@@ -55,6 +55,7 @@
 | I-044 | Successful transaction commit сохраняется одним существующим atomic WAL WriteBatch и не имеет частично восстанавливаемого transaction record. | draft v0.5.0 | transaction reopen recovery test; WAL one-frame-per-batch invariant I-004 |
 | I-045 | Active transaction удерживает зарегистрированный snapshot до commit/rollback/conflict/failure. | draft v0.5.0 | `Transaction.snapshot`; terminal paths вызывают `take`; existing SnapshotRegistry oldest-sequence retention |
 | I-046 | Transaction commit не принимает `DisableWal`. | draft v0.5.0 | explicit validation + rejection/no-publication test + CLI integration test |
+| I-047 | Transaction read set не выделяет память для invalid/oversized keys и ограничивает число и общую длину сохраняемых ключей. | draft v0.5.0 | `read_set_rejects_oversized_keys_and_total_bytes_before_allocation` |
 
 ## Правило изменения
 
