@@ -23,21 +23,40 @@ impl StreamingDatabase {
     ) -> Result<()> {
         let _write_guard = self.lock_write_gate()?;
         self.apply_write_stall()?;
-        self.inner.put(key, value, write_options)
+        let mut batch = WriteBatch::with_limits(self.inner.options.limits()?);
+        batch.put(key, value)?;
+        self.write_with_auto_flush(batch, write_options)
     }
 
     /// Добавляет MVCC tombstone.
     pub fn delete(&self, key: impl AsRef<[u8]>, write_options: WriteOptions) -> Result<()> {
         let _write_guard = self.lock_write_gate()?;
         self.apply_write_stall()?;
-        self.inner.delete(key, write_options)
+        let mut batch = WriteBatch::with_limits(self.inner.options.limits()?);
+        batch.delete(key)?;
+        self.write_with_auto_flush(batch, write_options)
     }
 
     /// Применяет WriteBatch атомарно после выбранной WAL durability boundary.
     pub fn write(&self, batch: WriteBatch, write_options: WriteOptions) -> Result<()> {
         let _write_guard = self.lock_write_gate()?;
         self.apply_write_stall()?;
-        self.inner.write(batch, write_options)
+        self.write_with_auto_flush(batch, write_options)
+    }
+
+    /// Один synchronous flush/retry только при исчерпании бюджета mutable memtable.
+    /// Первый отказ происходит до WAL append, поэтому batch не применяется частично.
+    fn write_with_auto_flush(&self, batch: WriteBatch, options: WriteOptions) -> Result<()> {
+        match self.inner.write_ref(&batch, options) {
+            Err(Error::ResourceLimit {
+                resource: "memtable_memory",
+                ..
+            }) => {
+                self.flush()?;
+                self.inner.write_ref(&batch, options)
+            }
+            result => result,
+        }
     }
 
     /// Возвращает latest visible value.
@@ -120,19 +139,6 @@ impl StreamingDatabase {
         }
         Ok(DbIterator::new_cursors(sources, snapshot, owned_range, read_options.limit)?
             .with_version_lease(version))
-    }
-
-    /// Сохраняет compile-ссылку на materialized scan до объединения wrapper и storage core.
-    #[allow(dead_code)]
-    fn legacy_materialized_scan<R>(
-        &self,
-        range: R,
-        read_options: ReadOptions,
-    ) -> Result<DbIterator>
-    where
-        R: RangeBounds<Vec<u8>>,
-    {
-        self.inner.scan(range, read_options)
     }
 
     /// Синхронно переводит immutable memtable в установленный L0 SSTable и при необходимости
