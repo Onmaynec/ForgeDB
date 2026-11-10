@@ -4,6 +4,23 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
+## [0.6.1] — 2026-11-10
+
+### Исправлено
+
+- `close()` больше не устанавливает `closed` и не извлекает WAL/MANIFEST writers до успешного sync обоих файлов. Неудачная синхронизация позволяет повторить закрытие и сохраняет process LOCK.
+- `lock_state()` повторно проверяет состояние закрытия после захвата mutex, исключая окно между первичной проверкой и завершением параллельного close.
+- Публичные `put/delete/write` при переполнении mutable memtable выполняют один synchronous flush и повторно проверяют batch без его копирования. Oversized batch не записывается частично.
+- После leveled compaction выполняется безопасная best-effort очистка доказанно retired SST. Удерживаемые readers файлы не удаляются; ошибки unlink не отменяют уже установленную compaction.
+
+### Проверка и документация
+
+- Добавлены fault-injection и integration regression tests для close, automatic flush, atomic batch rejection и SST retirement.
+- Исправлены устаревшие описания в ARCHITECTURE, SECURITY и публичных комментариях исходников.
+- Отдельно обозначены пока зарезервированные `table_cache_capacity` и background-job settings.
+- Persisted-форматы WAL V1, SSTable V1, MANIFEST V2 (reader V1/V2) не изменены.
+- Полноценные background workers, restart-aware garbage collection и eager SST reader memory budget не входят в patch.
+
 ## [0.6.0] — 2026-11-10
 
 ### Добавлено
