@@ -156,6 +156,26 @@ impl BlockCache {
         Ok(decoded)
     }
 
+    /// Выбрасывает кэшированные blocks физически удалённого SSTable.
+    /// File numbers никогда не переиспользуются, но это освобождает RAM после cleanup.
+    pub fn evict_table(&self, file_number: u64) -> Result<()> {
+        let mut state = self.lock_state()?;
+        let keys = state
+            .blocks
+            .keys()
+            .filter(|(number, _)| *number == file_number)
+            .copied()
+            .collect::<Vec<_>>();
+        for key in keys {
+            if let Some(discarded) = state.blocks.remove(&key) {
+                state.lru.remove(&(discarded.access, key));
+                state.bytes = state.bytes.saturating_sub(discarded.charge);
+                state.evictions = state.evictions.saturating_add(1);
+            }
+        }
+        Ok(())
+    }
+
     fn lock_state(&self) -> Result<std::sync::MutexGuard<'_, CacheState>> {
         self.state.lock().map_err(|_| Error::InternalInvariant {
             invariant: "I-BLOCK-CACHE-LOCK",
