@@ -210,6 +210,8 @@ cargo build --locked --workspace --release
 ## Документация
 
 - [`docs/CACHE_AND_PERFORMANCE.md`](docs/CACHE_AND_PERFORMANCE.md);
+- [`docs/OPTIONS.md`](docs/OPTIONS.md);
+- [`docs/releases/V0.6.1.md`](docs/releases/V0.6.1.md);
 - [`docs/TRANSACTIONS.md`](docs/TRANSACTIONS.md);
 - [`docs/COMPACTION.md`](docs/COMPACTION.md);
 - [`docs/formats/MANIFEST_V2.md`](docs/formats/MANIFEST_V2.md);
