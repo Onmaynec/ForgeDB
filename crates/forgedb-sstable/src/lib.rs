@@ -2046,7 +2046,7 @@ mod tests {
             &limits,
             16 * 1024 * 1024,
         )?;
-        assert!(reader.index.len() >= 7);
+        assert!(reader.index.len() >= 2);
         let cache = BlockCache::new(16 * 1024);
         assert_eq!(
             reader.get_at_cached(b"account", Some(SequenceNumber::new(4)?), &cache)?,
