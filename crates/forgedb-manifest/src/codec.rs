@@ -3,9 +3,7 @@ use forgedb_sstable::TableMeta;
 
 use crate::checksum::crc32c;
 use crate::state::{LevelFileMeta, LevelFileRef, VersionEdit};
-use crate::{
-    MANIFEST_FORMAT_VERSION, MANIFEST_FRAME_HEADER_SIZE, MINIMUM_MANIFEST_FORMAT_VERSION,
-};
+use crate::{MANIFEST_FORMAT_VERSION, MANIFEST_FRAME_HEADER_SIZE, MINIMUM_MANIFEST_FORMAT_VERSION};
 
 const FRAME_MAGIC_V1: &[u8; 4] = b"FMV1";
 const FRAME_MAGIC_V2: &[u8; 4] = b"FMV2";
@@ -116,11 +114,13 @@ pub(crate) fn encode_edit_frame(
     }
 
     let mut payload = Vec::new();
-    payload.push(u8::try_from(format_version).map_err(|_| Error::ResourceLimit {
-        resource: "manifest_format_version",
-        limit: u64::from(u8::MAX),
-        observed: u64::from(format_version),
-    })?);
+    payload.push(
+        u8::try_from(format_version).map_err(|_| Error::ResourceLimit {
+            resource: "manifest_format_version",
+            limit: u64::from(u8::MAX),
+            observed: u64::from(format_version),
+        })?,
+    );
     payload.extend_from_slice(&[0_u8; 3]);
     for (tag, value) in &fields {
         payload.push(*tag);
@@ -317,13 +317,7 @@ pub(crate) fn decode_complete_frame(
         let value = payload
             .get(field_header_end..value_end)
             .ok_or_else(|| Error::corruption("VersionEdit", "field value усечено"))?;
-        decode_field(
-            &mut edit,
-            tag,
-            value,
-            limits,
-            descriptor.format_version,
-        )?;
+        decode_field(&mut edit, tag, value, limits, descriptor.format_version)?;
         offset = value_end;
     }
     if offset != payload.len() || edit.is_empty() {
@@ -378,13 +372,14 @@ fn decode_field(
                 ));
             }
             let sequence = exact_u64(value, "last_sequence")?;
-            edit.last_sequence = Some(if sequence == 0 {
-                None
-            } else {
-                Some(SequenceNumber::new(sequence).map_err(|_| {
-                    Error::corruption("VersionEdit", "last_sequence равен нулю")
-                })?)
-            });
+            edit.last_sequence =
+                Some(if sequence == 0 {
+                    None
+                } else {
+                    Some(SequenceNumber::new(sequence).map_err(|_| {
+                        Error::corruption("VersionEdit", "last_sequence равен нулю")
+                    })?)
+                });
         }
         TAG_ADD_FILE => edit.added_files.push(decode_table_meta(value, limits)?),
         TAG_DELETE_FILE => edit
@@ -400,10 +395,9 @@ fn decode_field(
             edit.minimum_reader_version = Some(read_u32(value, 0, "VersionEdit")?);
         }
         TAG_FEATURE_FLAGS => set_once_u64(&mut edit.feature_flags, value, "feature_flags")?,
-        TAG_ADD_LEVEL_FILE if format_version >= 2 => {
-            edit.added_level_files
-                .push(decode_level_file(value, limits)?)
-        }
+        TAG_ADD_LEVEL_FILE if format_version >= 2 => edit
+            .added_level_files
+            .push(decode_level_file(value, limits)?),
         TAG_DELETE_LEVEL_FILE if format_version >= 2 => {
             edit.deleted_level_files.push(decode_level_ref(value)?)
         }

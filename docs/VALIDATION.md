@@ -1,48 +1,43 @@
-# Контракт проверки
+# Контракт проверки ForgeDB v0.4.0
 
-Каждый milestone commit обязан проходить Linux, Windows и minimum-supported-Rust jobs.
+Каждое изменение core, persisted-форматов или recovery обязано проходить GitHub Actions на Linux, Windows и минимально поддерживаемой версии Rust 1.89. Успешный compile не заменяет unit, model, integration и crash tests.
 
-## Канонические команды
+## Локальная проверка
 
 ```bash
 cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-cargo test --workspace --doc
-cargo build --workspace --release
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-features
+cargo test --locked --workspace --doc
+cargo build --locked --workspace --release
 ```
 
-Для MSRV:
+MSRV jobs:
 
 ```bash
-cargo +1.89 clippy --workspace --all-targets --all-features -- -D warnings
-cargo +1.89 test --workspace --all-features
+cargo +1.89 clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo +1.89 test --locked --workspace --all-features
 ```
 
-Локальные последовательности также находятся в `scripts/check.sh` и `scripts/check.ps1`.
+Для локальной разработки есть `scripts/check.sh` и `scripts/check.ps1`.
 
-## Обязательные классы тестов v0.1.0
+## Обязательные направления тестирования
 
-- unit tests кодеков, limits, batch и memtable;
-- malformed input и future-version rejection;
-- trailing partial WAL frame;
-- checksum mismatch полного кадра;
-- atomic batch replay;
-- deterministic model put/delete/reopen;
-- process abort после успешной `Sync`-записи;
-- `DisableWal` sequence gap перед durable записью;
-- повторное открытие после `Database::close`;
-- Windows lock, directory sync и truncation.
+- WAL atomic batch, checksum, partial tail, sequence gaps и replay;
+- FLUSH: WAL rotation, previous/current recovery, retry после crash;
+- SSTable: bounded decoding, checksums, block boundaries, Bloom filter;
+- MANIFEST V1/V2 compatibility, migration, future-format rejection;
+- snapshot visibility и MVCC retention;
+- L0→L1 и Ln→Ln+1 compaction, user-key-safe output splitting;
+- tombstone dropping только при bottommost/snapshot-safe условиях;
+- duplicate/overlap/absent file detection;
+- process-abort boundaries, reopen и file inventory/verify;
+- Windows lock/sync/rename semantics и Rust 1.89.
 
-## Правило выпуска
+Новые persisted-форматы требуют ADR, фиксированного layout, fixtures, migration/rollback и rejection tests.
 
-Tag и GitHub Pre-release создаются только после успешных:
+## Release gate
 
-- rustfmt;
-- Clippy без warnings;
-- unit/integration/model/crash tests;
-- doctests;
-- release build;
-- Windows и Rust 1.89 jobs.
+Тег и GitHub Pre-release публикуются только после успешных канонических проверок, подтверждения версии workspace, обновления русских release notes и самостоятельной проверки recovery/durability impact. Нельзя обходить Clippy или отключать платформенный тест ради зелёного CI.
 
-Пропуск platform-specific failure, отключение теста или ослабление lint не считается исправлением.
+Проверенные run ID указываются в описании PR; статус тестов не переносится с другого commit. Политика выпусков: [RELEASE_POLICY.md](RELEASE_POLICY.md).

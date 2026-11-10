@@ -145,11 +145,13 @@ pub fn open_manifest<F: FileSystem>(
 
     if summary.format_version < MANIFEST_FORMAT_VERSION {
         let next_manifest_number = state.next_file_number;
-        let next_file_number = next_manifest_number.checked_add(1).ok_or(Error::ResourceLimit {
-            resource: "file_number",
-            limit: u64::MAX,
-            observed: u64::MAX,
-        })?;
+        let next_file_number = next_manifest_number
+            .checked_add(1)
+            .ok_or(Error::ResourceLimit {
+                resource: "file_number",
+                limit: u64::MAX,
+                observed: u64::MAX,
+            })?;
         state.manifest_number = next_manifest_number;
         state.next_file_number = next_file_number;
         state.validate(limits)?;
