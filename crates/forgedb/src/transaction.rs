@@ -388,14 +388,14 @@ mod tests {
         let mut transaction = database.begin_transaction()?;
 
         assert!(matches!(
-            transaction.get(&[b'x'; 129]),
+            transaction.get([b'x'; 129]),
             Err(Error::ResourceLimit {
                 resource: "key_size",
                 ..
             })
         ));
-        assert_eq!(transaction.get(&[b'a'; 128])?, None);
-        assert_eq!(transaction.get(&[b'b'; 128])?, None);
+        assert_eq!(transaction.get([b'a'; 128])?, None);
+        assert_eq!(transaction.get([b'b'; 128])?, None);
         assert!(matches!(
             transaction.get(b"c"),
             Err(Error::ResourceLimit {
@@ -404,7 +404,7 @@ mod tests {
             })
         ));
         // Повторное чтение уже учтённого ключа не расходует бюджет повторно.
-        assert_eq!(transaction.get(&[b'a'; 128])?, None);
+        assert_eq!(transaction.get([b'a'; 128])?, None);
         transaction.rollback()?;
         database.close()?;
         fs::remove_dir_all(&directory)
@@ -471,12 +471,11 @@ mod tests {
         })?;
         assert!(matches!(
             (first_result, second_result),
-            (Ok(()), Err(Error::Conflict { .. }))
-                | (Err(Error::Conflict { .. }), Ok(()))
+            (Ok(()), Err(Error::Conflict { .. })) | (Err(Error::Conflict { .. }), Ok(()))
         ));
         assert!(matches!(
             database.get(b"key")?,
-            Some(value) if value == b"first" || value == b"second"
+            Some(value) if value.as_slice() == b"first" || value.as_slice() == b"second"
         ));
         database.close()?;
         fs::remove_dir_all(&directory)
