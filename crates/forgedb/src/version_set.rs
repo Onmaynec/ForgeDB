@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use forgedb_core::{DatabaseId, Error, Limits, Result, SequenceNumber};
 use forgedb_fs::NativeFileSystem;
@@ -24,6 +24,10 @@ impl TableHandle {
     #[must_use]
     pub(crate) fn path(&self) -> &Path {
         self.reader.path()
+    }
+
+    pub(crate) fn reader_weak(&self) -> Weak<TableReader> {
+        Arc::downgrade(&self.reader)
     }
 }
 
