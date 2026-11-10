@@ -151,6 +151,11 @@ impl StreamingDatabase {
         self.inner.verify(verify_options)
     }
 
+    /// Текущие hits/misses/evictions и residency bounded SST block cache.
+    pub fn cache_stats(&self) -> Result<CacheStats> {
+        self.inner.cache_stats()
+    }
+
     /// Синхронизирует writers и освобождает process lock.
     pub fn close(&self) -> Result<()> {
         self.inner.close()
