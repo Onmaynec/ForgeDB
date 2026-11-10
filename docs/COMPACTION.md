@@ -1,4 +1,4 @@
-# Leveled compaction ForgeDB v0.4.0
+# Leveled compaction ForgeDB v0.6.1
 
 ## Scope
 
@@ -102,7 +102,7 @@ Crash до installation оставляет старые inputs authoritative. Cr
 
 В v0.6.0 input SST включаются в process-local retirement queue только после durable MANIFEST compaction installation edit. Каждый retired file хранит weak reference на исходный `TableReader`, который может использоваться многими версиями LSM и активными итераторами. `cleanup_obsolete_sstables()` удаляет только proven retired files после освобождения reader и отсутствия номера в live VersionSet. CLI `compact` вызывает эту проверку после compaction.
 
-Это manual conservative cleanup, а не full cross-restart garbage collection: после нового открытия неподтверждённые orphan-файлы не удаляются. При ошибке удаления файл остаётся в очереди для повторной попытки. Подробности: [CACHE_AND_PERFORMANCE.md](CACHE_AND_PERFORMANCE.md) и ADR 0013.
+С v0.6.1 после compaction выполняется best-effort cleanup. Уже подтверждённая compaction не меняет статус из-за ошибки unlink; явный cleanup возвращает подробный отчёт и позволяет retry после освобождения читателей. Это всё ещё не full cross-restart garbage collection: после нового открытия неподтверждённые orphan-файлы не удаляются. Подробности: [CACHE_AND_PERFORMANCE.md](CACHE_AND_PERFORMANCE.md) и ADR 0013.
 
 ## Write backpressure
 
@@ -126,6 +126,6 @@ Reads продолжают использовать immutable VersionSet.
 
 - compaction synchronous, без background worker pool;
 - merge bounded, но materialized внутри `max_compaction_bytes`;
-- process-local manual retired SST cleanup есть; restart-aware/automatic garbage collection ещё нет;
+- process-local best-effort cleanup после compaction есть; restart-aware garbage collection ещё нет;
 - compaction metrics/statistics появятся вместе с observability milestone;
 - range tombstones отсутствуют.
