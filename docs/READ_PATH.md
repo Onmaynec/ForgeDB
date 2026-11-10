@@ -1,4 +1,4 @@
-# Путь чтения ForgeDB v0.4.0
+# Путь чтения ForgeDB v0.6.0
 
 ## Источники
 
@@ -29,6 +29,14 @@ Tombstone возвращает отсутствие значения и скры
 - `Arc<VersionSet>` удерживает выбранное поколение файлов на протяжении чтения.
 
 Range scan не загружает все SSTables целиком, но memtable entries в v0.4.0 материализуются при создании iterator. Обратного iterator пока нет.
+
+## Индексный поиск и кэш
+
+В v0.6.0 обычный point read проверяет Bloom filter и SSTable index, затем декодирует только data blocks, которые могут содержать искомый user key. Поиск продолжается между блоками, если версии ключа занимают несколько физических blocks. Непересекающиеся L1+ ranges выбираются бинарным поиском.
+
+Декодированный block может сохраняться в bounded LRU-кэше; предел задаёт `block_cache_size` (0 отключает кэш). `cache_stats()` возвращает hits/misses/evictions, bypasses и учтённые resident bytes. Eager физический `TableReader.bytes` пока существует отдельно от этого бюджета; range scan использует независимый streaming cursor и удерживает поколение VersionSet.
+
+Подробно: [CACHE_AND_PERFORMANCE.md](CACHE_AND_PERFORMANCE.md).
 
 ## Проверка и ошибки
 

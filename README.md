@@ -4,10 +4,11 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## Статус версий
 
-- текущая опубликованная версия: **v0.5.0 — MVCC Transactions**, GitHub Pre-release;
-- следующий milestone: **v0.6.0 — Cache and Performance**.
+- текущая версия в разработке: **v0.6.0 — Cache and Performance** (PR #21);
+- последняя опубликованная версия: **v0.5.0 — MVCC Transactions**, GitHub Pre-release;
+- следующий milestone: **v0.7.0 — Column Families**.
 
-## Возможности v0.5.0
+## Возможности v0.6.0
 
 - WAL V1, atomic WriteBatch и durability modes;
 - SSTable V1 с checksums, blocks, index и Bloom filter;
@@ -29,6 +30,10 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 - write-write conflict detection по committed sequence numbers;
 - atomic transaction commit через существующий WAL `WriteBatch` path;
 - transaction rollback и terminal state machine;
+- индексный SSTable point lookup с Bloom filter, поддерживающий MVCC-версии между blocks;
+- bounded LRU для декодированных data blocks, counters через `cache_stats()`;
+- бинарный поиск по non-overlapping L1+ ranges;
+- reference-aware manual cleanup доказанных retired SSTables после compaction;
 - public `compact_range`, file inventory, recovery plan и quick/deep verify;
 - CLI transaction/scan/compact/inventory/verify/inspect.
 
@@ -56,6 +61,22 @@ fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+## Cache and Performance
+
+`Options::block_cache_size` ограничивает суммарный учитываемый объём **декодированных SST data blocks**; `0` отключает кеширование. `Database::cache_stats()` показывает hits, misses, evictions, bypasses и текущую residency кэша. SST reader использует Bloom filter и индекс, не материализуя всю таблицу при каждом point read или проверке конфликта транзакции.
+
+`Database::cleanup_obsolete_sstables()` консервативно удаляет только файлы, исключённые из MANIFEST успешной compaction в текущем открытом процессе, и ждёт освобождения их reader handles. После restart непроверенные orphan-файлы не удаляются. CLI `compact` вызывает безопасную очистку после compaction.
+
+**Граница:** `TableReader::open` по-прежнему заранее читает исходный SST в память; `block_cache_size` ограничивает только кэш декодированных блоков, не весь RSS. Полноценный lazy table reader и использование `table_cache_capacity` остаются отдельной работой. Range iterator продолжает свой streaming scan path.
+
+Измерение без внешних зависимостей:
+
+```bash
+cargo run --locked --release -p forgedb --example point_lookup_bench -- 8192 50000
+```
+
+Контракт и ограничения: [`docs/CACHE_AND_PERFORMANCE.md`](docs/CACHE_AND_PERFORMANCE.md).
 
 ## Transactions
 
@@ -167,7 +188,7 @@ cargo build --locked --workspace --release
 
 Основная CI matrix: Ubuntu stable, Windows stable и Rust 1.89.
 
-## Ограничения v0.5.0
+## Ограничения v0.6.0
 
 - isolation — snapshot isolation, не serializable;
 - обязательна write-write conflict detection, но full read-write validation пока отсутствует;
@@ -175,12 +196,15 @@ cargo build --locked --workspace --release
 - full FQL parser/shell остаётся milestone v0.8.0;
 - compaction synchronous; background worker pool появится позже;
 - compaction merge bounded `max_compaction_bytes`, но materialized внутри этого budget;
-- input SST после compaction пока не удаляются автоматически: reference-aware Windows-safe obsolete reaper ещё не реализован;
+- retired SST очищаются по вызову из текущего открытого процесса с reader lifetime pinning; полноценной cross-restart garbage collection ещё нет;
+- `TableReader` пока eager загружает физический SST в память независимо от decoded-block cache budget;
+- benchmark не задаёт фиксированных performance thresholds: результаты зависят от среды;
 - reverse iterator и range tombstones отсутствуют;
 - normal recovery не удаляет произвольные orphan/unknown files.
 
 ## Документация
 
+- [`docs/CACHE_AND_PERFORMANCE.md`](docs/CACHE_AND_PERFORMANCE.md);
 - [`docs/TRANSACTIONS.md`](docs/TRANSACTIONS.md);
 - [`docs/COMPACTION.md`](docs/COMPACTION.md);
 - [`docs/formats/MANIFEST_V2.md`](docs/formats/MANIFEST_V2.md);
@@ -190,6 +214,9 @@ cargo build --locked --workspace --release
 - [`docs/INVARIANTS.md`](docs/INVARIANTS.md);
 - [`docs/adr/0010-manifest-v2-leveled-files.md`](docs/adr/0010-manifest-v2-leveled-files.md);
 - [`docs/adr/0011-optimistic-snapshot-isolation.md`](docs/adr/0011-optimistic-snapshot-isolation.md);
+- [`docs/adr/0012-indexed-sst-lookup-and-cache.md`](docs/adr/0012-indexed-sst-lookup-and-cache.md);
+- [`docs/adr/0013-reference-aware-sst-retirement.md`](docs/adr/0013-reference-aware-sst-retirement.md);
+- [`docs/releases/V0.6.0.md`](docs/releases/V0.6.0.md);
 - [`docs/releases/V0.5.0.md`](docs/releases/V0.5.0.md).
 
 ## Лицензия

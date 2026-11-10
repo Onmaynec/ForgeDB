@@ -1,4 +1,4 @@
-# Контракт проверки ForgeDB v0.4.0
+# Контракт проверки ForgeDB v0.6.0
 
 Каждое изменение core, persisted-форматов или recovery обязано проходить GitHub Actions на Linux, Windows и минимально поддерживаемой версии Rust 1.89. Успешный compile не заменяет unit, model, integration и crash tests.
 
@@ -35,6 +35,24 @@ cargo +1.89 test --locked --workspace --all-features
 - Windows lock/sync/rename semantics и Rust 1.89.
 
 Новые persisted-форматы требуют ADR, фиксированного layout, fixtures, migration/rollback и rejection tests.
+
+## Cache and performance checks
+
+Дополнительно проверяются snapshot-aware индексный lookup через block boundary, cache eviction и disabled режим, возврат transaction conflicts после flush, iterator pinning при SST cleanup, snapshot retention при compaction и сохранение orphan-файлов после restart.
+
+Короткий benchmark smoke-run выполняется на Linux и Windows без порога скорости:
+
+```bash
+cargo run --locked --release -p forgedb --example point_lookup_bench -- 256 1024
+```
+
+Для ручного сравнения cold/warm на большем наборе:
+
+```bash
+cargo run --locked --release -p forgedb --example point_lookup_bench -- 8192 50000
+```
+
+Нельзя выдавать результаты разных CPU/FS/toolchain как гарантированное ускорение.
 
 ## Release gate
 

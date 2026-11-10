@@ -1,4 +1,4 @@
-# Архитектура ForgeDB v0.4.0
+# Архитектура ForgeDB v0.6.0
 
 ## Назначение
 
@@ -45,6 +45,12 @@ ForgeDB — встраиваемый key-value storage engine с LSM-струк�
 
 Публичный `scan` использует merge iterator и block-at-a-time SST cursors. Reader удерживает ссылку на выбранную версию LSM на время работы. Подробности: [READ_PATH.md](READ_PATH.md).
 
+## Cache and indexed point lookup
+
+`VersionSet` использует проверенный SSTable index/Bloom filter для snapshot-aware point reads и optimistic conflict validation. `BlockCache` держит только bounded декодированные data blocks; физический `TableReader` пока eagerly загружает SST bytes. Публичный `cache_stats()` показывает hits/misses/evictions. Range scan не пользуется point cache и удерживает `Arc<VersionSet>` до завершения.
+
+Подробности: [CACHE_AND_PERFORMANCE.md](CACHE_AND_PERFORMANCE.md).
+
 ## Flush и compaction
 
 Flush синхронизирует current WAL перед rotation, фиксирует новые номера файлов, создаёт immutable SSTable и публикует новую L0-топологию через synced MANIFEST edit. Recovery различает current и previous WAL поколения.
@@ -70,5 +76,5 @@ Reader отклоняет неизвестные future versions. Writable open 
 - один writer path и эксклюзивный process lock; shared read-only opens не поддерживаются;
 - compaction synchronous, её merge ограничен memory budget, но ещё не fully streaming;
 - reverse iterator и transactions отсутствуют;
-- automatic reference-aware obsolete SST cleanup ещё не реализован;
+- manual process-local retired SST cleanup реализован, но restart-aware automatic GC отсутствует;
 - backup, unknown и user files normal recovery не удаляет.

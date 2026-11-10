@@ -4,6 +4,30 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
+## [0.6.0] — 2026-11-10
+
+### Добавлено
+
+- Indexed snapshot-aware SST point lookup с Bloom filter и декодированием только запрошенных блоков.
+- Lookup корректно проходит через границы data blocks, когда несколько MVCC-версий одного ключа записаны в разных блоках.
+- Bounded LRU decoded-block cache по `Options::block_cache_size` с режимом `0` (disabled).
+- Публичный `Database::cache_stats()` с hits/misses/evictions/bypasses и текущим учтённым объёмом блоков.
+- Optimistic transaction conflict lookup по SST index вместо materialized full-table lookup.
+- Binary search для выбора SSTable в non-overlapping L1+.
+- Консервативный `Database::cleanup_obsolete_sstables()` и `CleanupReport`. Retired inputs ставятся в очередь только после synced MANIFEST installation и удаляются после освобождения конкретных TableReader.
+- CLI `compact` запускает manual reference-aware cleanup после успешной compaction.
+- Benchmark `point_lookup_bench` для холодного/тёплого проходов и короткий smoke-test в Linux/Windows CI.
+- Regression tests: cache hit/eviction/disabled, split-key snapshots/tombstones, transactions after flush, scan pins и orphan files после рестарта.
+- ADR 0012/0013, нормативный документ `docs/CACHE_AND_PERFORMANCE.md`.
+
+### Совместимость и ограничения
+
+- Persisted WAL V1, SSTable V1 и MANIFEST V2 не изменены.
+- `TableReader::open` по-прежнему eagerly держит физические SST bytes в памяти. Decoded-block cache budget не ограничивает эту память; полноценный lazy table cache пока не реализован.
+- Retired SST cleanup process-local; orphan files после restart автоматически не удаляются.
+- Snapshot isolation сохраняет границы v0.5.0, serializable isolation не заявляется.
+- Performance results зависят от окружения; в релизе не приводятся неподтверждённые проценты ускорения.
+
 ## [0.5.0] — 2026-11-10
 
 ### Добавлено
