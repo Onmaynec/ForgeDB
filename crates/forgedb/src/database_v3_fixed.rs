@@ -416,7 +416,8 @@ impl Database {
                 observed: u64::MAX,
             })?;
         }
-        DbIterator::new(sources, snapshot, owned_range, read_options.limit)
+        Ok(DbIterator::new(sources, snapshot, owned_range, read_options.limit)?
+            .with_version_lease(version))
     }
 
     /// Синхронно переводит immutable memtable в установленный L0 SSTable.
