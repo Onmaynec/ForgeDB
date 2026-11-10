@@ -1,4 +1,4 @@
-# Контракт проверки ForgeDB v0.6.0
+# Контракт проверки ForgeDB v0.6.1
 
 Каждое изменение core, persisted-форматов или recovery обязано проходить GitHub Actions на Linux, Windows и минимально поддерживаемой версии Rust 1.89. Успешный compile не заменяет unit, model, integration и crash tests.
 
@@ -35,6 +35,15 @@ cargo +1.89 test --locked --workspace --all-features
 - Windows lock/sync/rename semantics и Rust 1.89.
 
 Новые persisted-форматы требуют ADR, фиксированного layout, fixtures, migration/rollback и rejection tests.
+
+## Проверки исправительного обновления v0.6.1
+
+- fault injection при WAL/MANIFEST sync внутри close и последующее успешное закрытие;
+- удержание LOCK после ошибочного close, idempotent repeated close и reopen;
+- continuous writes с bounded memtable и automatic synchronous flush/retry;
+- oversized batch не имеет частично опубликованных mutations;
+- автоматическая безопасная очистка retired SST после compaction, защита активных scan cursors и snapshots;
+- сохранение неизвестных и orphan SST после restart.
 
 ## Cache and performance checks
 
