@@ -30,22 +30,27 @@ pub struct Transaction {
     database: StreamingDatabase,
     snapshot: Option<Snapshot>,
     read_set: BTreeSet<Vec<u8>>,
+    read_set_bytes: usize,
     write_batch: WriteBatch,
     state: TransactionState,
     max_tracked_reads: usize,
+    max_tracked_bytes: usize,
 }
 
 impl Transaction {
     pub(crate) fn begin(database: &StreamingDatabase) -> Result<Self> {
         let snapshot = database.snapshot()?;
-        let (write_batch, max_tracked_reads) = database.new_transaction_batch()?;
+        let (write_batch, max_tracked_reads, max_tracked_bytes) =
+            database.new_transaction_batch()?;
         Ok(Self {
             database: database.transaction_handle(),
             snapshot: Some(snapshot),
             read_set: BTreeSet::new(),
+            read_set_bytes: 0,
             write_batch,
             state: TransactionState::Active,
             max_tracked_reads,
+            max_tracked_bytes,
         })
     }
 
@@ -59,6 +64,7 @@ impl Transaction {
     pub fn get(&mut self, key: impl AsRef<[u8]>) -> Result<Option<Vec<u8>>> {
         self.ensure_active()?;
         let key = key.as_ref();
+        self.database.validate_transaction_key(key)?;
         if let Some(own) = self.own_write(key) {
             return Ok(own);
         }
@@ -71,7 +77,23 @@ impl Transaction {
                         .unwrap_or(u64::MAX),
                 });
             }
+            let next_bytes =
+                self.read_set_bytes
+                    .checked_add(key.len())
+                    .ok_or(Error::ResourceLimit {
+                        resource: "transaction_read_set_bytes",
+                        limit: u64::try_from(self.max_tracked_bytes).unwrap_or(u64::MAX),
+                        observed: u64::MAX,
+                    })?;
+            if next_bytes > self.max_tracked_bytes {
+                return Err(Error::ResourceLimit {
+                    resource: "transaction_read_set_bytes",
+                    limit: u64::try_from(self.max_tracked_bytes).unwrap_or(u64::MAX),
+                    observed: u64::try_from(next_bytes).unwrap_or(u64::MAX),
+                });
+            }
             self.read_set.insert(key.to_vec());
+            self.read_set_bytes = next_bytes;
         }
         let snapshot = self.snapshot.as_ref().ok_or(Error::InternalInvariant {
             invariant: "I-TRANSACTION-ACTIVE-SNAPSHOT",
@@ -143,6 +165,7 @@ impl Transaction {
         self.ensure_active()?;
         self.write_batch = WriteBatch::new();
         self.read_set.clear();
+        self.read_set_bytes = 0;
         self.snapshot.take();
         self.state = TransactionState::RolledBack;
         Ok(())
@@ -345,6 +368,68 @@ mod tests {
         let result = transaction.commit(WriteOptions::disable_wal());
         assert!(matches!(result, Err(Error::InvalidArgument { .. })));
         assert_eq!(transaction.state(), TransactionState::Failed);
+        database.close()?;
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
+    #[test]
+    fn read_set_rejects_oversized_keys_and_total_bytes_before_allocation() -> Result<()> {
+        let directory = temporary_directory("read-set-budget")?;
+        let options = Options {
+            max_key_size: 4,
+            max_value_size: 4,
+            max_batch_size: 8,
+            max_batch_operations: 10,
+            ..Options::default()
+        };
+        let database = Database::open(&directory, options)?;
+        let mut transaction = database.begin_transaction()?;
+
+        assert!(matches!(
+            transaction.get(b"12345"),
+            Err(Error::ResourceLimit {
+                resource: "key_size",
+                ..
+            })
+        ));
+        assert_eq!(transaction.get(b"aaaa")?, None);
+        assert_eq!(transaction.get(b"bbbb")?, None);
+        assert!(matches!(
+            transaction.get(b"cccc"),
+            Err(Error::ResourceLimit {
+                resource: "transaction_read_set_bytes",
+                ..
+            })
+        ));
+        // Повторное чтение уже учтённого ключа не расходует бюджет повторно.
+        assert_eq!(transaction.get(b"aaaa")?, None);
+        transaction.rollback()?;
+        database.close()?;
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
+    #[test]
+    fn active_transaction_preserves_snapshot_across_leveled_compaction() -> Result<()> {
+        let directory = temporary_directory("snapshot-compaction")?;
+        let database = Database::open(&directory, Options::default())?;
+        database.put(b"key", b"old", WriteOptions::sync())?;
+        database.flush()?;
+        let mut transaction = database.begin_transaction()?;
+        assert_eq!(transaction.get(b"key")?, Some(b"old".to_vec()));
+        database.put(b"key", b"new", WriteOptions::sync())?;
+        database.flush()?;
+        database.compact_range(None, None)?;
+        assert_eq!(transaction.get(b"key")?, Some(b"old".to_vec()));
+        transaction.put(b"key", b"transaction")?;
+        assert!(matches!(
+            transaction.commit(WriteOptions::sync()),
+            Err(Error::Conflict { .. })
+        ));
+        assert_eq!(database.get(b"key")?, Some(b"new".to_vec()));
         database.close()?;
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
