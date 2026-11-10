@@ -175,10 +175,17 @@ impl StreamingDatabase {
         }
     }
 
-    pub(crate) fn new_transaction_batch(&self) -> Result<(WriteBatch, usize)> {
+    pub(crate) fn new_transaction_batch(&self) -> Result<(WriteBatch, usize, usize)> {
         let limits = self.inner.options.limits()?;
-        let max_tracked_reads = limits.max_batch_operations;
-        Ok((WriteBatch::with_limits(limits), max_tracked_reads))
+        Ok((
+            WriteBatch::with_limits(limits),
+            limits.max_batch_operations,
+            limits.max_batch_size,
+        ))
+    }
+
+    pub(crate) fn validate_transaction_key(&self, key: &[u8]) -> Result<()> {
+        self.inner.options.limits()?.validate_key(key)
     }
 
     pub(crate) fn commit_transaction(
