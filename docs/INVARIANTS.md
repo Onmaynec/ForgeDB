@@ -21,7 +21,7 @@
 | I-010 | Snapshot никогда не видит sequence выше собственного snapshot sequence. | обеспечен v0.3.0 | snapshot/read model tests |
 | I-011 | Compaction не удаляет version, которая может быть видима active snapshot. | draft v0.4.0 | `retain_versions`; oldest-snapshot boundary unit test |
 | I-012 | Tombstone удаляется только при доказанной безопасности. | draft v0.4.0 | bottommost + oldest snapshot condition; tombstone unit test |
-| I-013 | Obsolete file не удаляется, пока используется Version/reader/compaction/checkpoint. | частично v0.6.0 | process-local manual cleanup отслеживает reader weak refs; полноценный restart-aware lifecycle не реализован |
+| I-013 | Obsolete file не удаляется, пока используется Version/reader/compaction/checkpoint. | частично v0.6.1 | process-local best-effort cleanup после compaction и explicit retry отслеживает reader weak refs; restart-aware lifecycle не реализован |
 | I-014 | Persisted length/offset проверяется до allocation/read. | draft для MANIFEST V2, обеспечен для V1 | bounded codec, checked arithmetic, max batch/key limits |
 | I-015 | Неизвестная future persisted version не открывается как текущая. | draft для MANIFEST V2, обеспечен для V1 | MANIFEST accepts only 1..=2; unknown tags/versions rejected |
 | I-016 | Verify не изменяет базу. | обеспечен v0.3.0 | verify/inventory tests |
@@ -62,12 +62,12 @@
 | I-051 | Retired SST не удаляется до durable MANIFEST installation или при наличии живого TableReader. | обеспечен v0.6.0 | per-reader weak pin; `active_scan_defers_retired_sst_until_iterator_is_dropped`; synced edit queue |
 | I-052 | Normal open/cleanup не удаляет неподтверждённый orphan SST после рестарта. | обеспечен v0.6.0 | `cleanup_never_guesses_origin_of_orphan_after_restart` |
 | I-053 | Read snapshot сохраняет старую версию данных после compaction и физической очистки retired input. | обеспечен v0.6.0 | `registered_snapshot_still_reads_old_version_after_cleanup` |
-| I-054 | Ошибка sync при close не переводит базу в Closed и не освобождает WAL/MANIFEST writers и native LOCK. | draft v0.6.1 | deterministic WAL/MANIFEST sync injection, retry, reopen test |
-| I-055 | Публичный write при memtable limit либо полностью коммитит batch после одного flush/retry, либо не публикует его. | draft v0.6.1 | `stability_v061` automatic flush and oversized atomic batch tests |
-| I-056 | После compaction физически удаляются только доказанно retired SST без живых TableReader. | draft v0.6.1 | `manual_compaction_reclaims_unpinned_retired_sst_automatically`; active scan regression |
+| I-054 | Ошибка sync при close не переводит базу в Closed и не освобождает WAL/MANIFEST writers и native LOCK. | обеспечен v0.6.1 | deterministic WAL/MANIFEST sync injection, retry, reopen test; CI 42880868115 |
+| I-055 | Публичный write при memtable limit либо полностью коммитит batch после одного flush/retry, либо не публикует его. | обеспечен v0.6.1 | `stability_v061` automatic flush and oversized atomic batch tests; CI 42880868115 |
+| I-056 | После compaction физически удаляются только доказанно retired SST без живых TableReader. | обеспечен v0.6.1 | `manual_compaction_reclaims_unpinned_retired_sst_automatically`; active scan regression; CI 42880868115 |
 
 ## Правило изменения
 
 Новый persisted-протокол или изменение write/recovery path обязаны обновить эту таблицу и добавить автоматическое доказательство соответствующего инварианта. Одной документации недостаточно для статуса **обеспечен**.
 
-I-041–I-047 подтверждены проверками feature head `70bdad2586fb4f2cd9208f584fb5536a692186d1` (CI run `42780867814`: Ubuntu stable, Windows stable, Rust 1.89). Выпуск дополнительно проходит отдельный release gate. Для старых `draft v0.4.0` статус намеренно не повышен автоматически: требуется предметная проверка покрытия каждого инварианта. I-048–I-053 подтверждены тестами в CI run `42787135076` на feature head `f6e96f8de494fb15cd85c9e7894ec973eaf191be` (Ubuntu stable, Windows stable, Rust 1.89). Отдельный release workflow повторяет Linux gate. I-013 остаётся **частично**: process-local cleanup реализован, cross-restart garbage collection не заявляется.
+I-041–I-047 подтверждены проверками feature head `70bdad2586fb4f2cd9208f584fb5536a692186d1` (CI run `42780867814`: Ubuntu stable, Windows stable, Rust 1.89). Выпуск дополнительно проходит отдельный release gate. Для старых `draft v0.4.0` статус намеренно не повышен автоматически: требуется предметная проверка покрытия каждого инварианта. I-048–I-053 подтверждены тестами в CI run `42787135076` на feature head `f6e96f8de494fb15cd85c9e7894ec973eaf191be` (Ubuntu stable, Windows stable, Rust 1.89). Отдельный release workflow повторяет Linux gate. I-054–I-056 подтверждены feature head `bea0b52ed9ccabcd144b91ad55f7e6130453f2b8` (CI run `42880868115`: Ubuntu stable, Windows stable, Rust 1.89). I-013 остаётся **частично**: process-local cleanup реализован, cross-restart garbage collection не заявляется.
