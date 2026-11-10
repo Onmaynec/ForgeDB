@@ -49,7 +49,7 @@ struct DatabaseState {
     manifest_writer: Option<ManifestWriter<File>>,
     manifest: ManifestState,
     version: Arc<VersionSet>,
-    retired_sstables: Vec<RetiredSstables>,
+    retired_sstables: Vec<RetiredSstable>,
     next_sequence: SequenceNumber,
     last_sequence: Option<SequenceNumber>,
     fatal_write_error: Option<String>,
