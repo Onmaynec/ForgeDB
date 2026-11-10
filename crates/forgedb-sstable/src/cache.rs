@@ -136,11 +136,14 @@ impl BlockCache {
             }
         }
         let access = state.next_access();
-        state.bytes = state.bytes.checked_add(charge).ok_or(Error::ResourceLimit {
-            resource: "block_cache_bytes",
-            limit: u64::try_from(self.capacity_bytes).unwrap_or(u64::MAX),
-            observed: u64::MAX,
-        })?;
+        state.bytes = state
+            .bytes
+            .checked_add(charge)
+            .ok_or(Error::ResourceLimit {
+                resource: "block_cache_bytes",
+                limit: u64::try_from(self.capacity_bytes).unwrap_or(u64::MAX),
+                observed: u64::MAX,
+            })?;
         state.blocks.insert(
             key,
             CachedBlock {
@@ -163,7 +166,11 @@ impl BlockCache {
 
 fn estimated_bytes(entries: &Vec<TableEntry>) -> Result<usize> {
     let mut sum = mem::size_of::<Vec<TableEntry>>()
-        .checked_add(entries.capacity().saturating_mul(mem::size_of::<TableEntry>()))
+        .checked_add(
+            entries
+                .capacity()
+                .saturating_mul(mem::size_of::<TableEntry>()),
+        )
         .ok_or(Error::ResourceLimit {
             resource: "block_cache_bytes",
             limit: u64::MAX,
@@ -203,7 +210,10 @@ mod tests {
         let first = cache.get_or_decode(1, 0, || block(b"a"))?;
         assert_eq!(first.len(), 1);
         let second = cache.get_or_decode(1, 0, || {
-            Err(Error::corruption("test", "попытка повторно декодировать cached block"))
+            Err(Error::corruption(
+                "test",
+                "попытка повторно декодировать cached block",
+            ))
         })?;
         assert_eq!(second.len(), 1);
         for index in 1..8 {
@@ -231,11 +241,13 @@ mod tests {
     #[test]
     fn decode_failure_is_not_cached() -> Result<()> {
         let cache = BlockCache::new(4096);
-        assert!(cache
-            .get_or_decode(3, 0, || {
-                Err(Error::corruption("test", "corrupted data block"))
-            })
-            .is_err());
+        assert!(
+            cache
+                .get_or_decode(3, 0, || {
+                    Err(Error::corruption("test", "corrupted data block"))
+                })
+                .is_err()
+        );
         cache.get_or_decode(3, 0, || block(b"d"))?;
         let stats = cache.stats()?;
         assert_eq!(stats.misses, 2);

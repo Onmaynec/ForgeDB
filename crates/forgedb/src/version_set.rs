@@ -200,12 +200,12 @@ impl VersionSet {
         }
         for level in self.levels.iter().skip(1) {
             // L1+ ranges не пересекаются: binary search вместо линейного обхода уровня.
-            let index = level.partition_point(|table| {
-                table.metadata.largest_user_key.as_slice() < user_key
-            });
-            let Some(table) = level.get(index).filter(|table| {
-                table.metadata.may_contain_user_key(user_key)
-            }) else {
+            let index = level
+                .partition_point(|table| table.metadata.largest_user_key.as_slice() < user_key);
+            let Some(table) = level
+                .get(index)
+                .filter(|table| table.metadata.may_contain_user_key(user_key))
+            else {
                 continue;
             };
             let lookup = table
@@ -236,11 +236,11 @@ impl VersionSet {
                 {
                     continue;
                 }
-                if let Some(sequence) = table.reader.latest_sequence_after_cached(
-                    user_key,
-                    after,
-                    &self.block_cache,
-                )? {
+                if let Some(sequence) =
+                    table
+                        .reader
+                        .latest_sequence_after_cached(user_key, after, &self.block_cache)?
+                {
                     newest = Some(newest.map_or(sequence, |current| current.max(sequence)));
                 }
             }
@@ -357,11 +357,7 @@ pub(crate) fn convert_lookup(lookup: TableLookup) -> TableSnapshotLookup {
     }
 }
 
-fn validate_level_metadata(
-    level_index: usize,
-    files: &[TableMeta],
-    limits: &Limits,
-) -> Result<()> {
+fn validate_level_metadata(level_index: usize, files: &[TableMeta], limits: &Limits) -> Result<()> {
     for file in files {
         file.validate(limits)?;
     }

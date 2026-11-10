@@ -29,11 +29,11 @@ pub use forgedb_core::{
     BatchOperation, ColumnFamilyId, DatabaseId, Error, InternalKey, InternalKeyCodec,
     InternalKeyComparator, Limits, Result, SequenceNumber, ValueType, WriteBatch,
 };
+pub use forgedb_sstable::CacheStats;
 pub use inventory::FileInventory;
 pub use iterator::DbIterator;
 pub use options::Options;
 pub use read_options::ReadOptions;
-pub use forgedb_sstable::CacheStats;
 pub use recovery_plan::RecoveryPlan;
 pub use snapshot::Snapshot;
 pub use transaction::{Transaction, TransactionState};
