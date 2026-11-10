@@ -23,7 +23,7 @@ use forgedb_wal::{
 use crate::inventory::FileInventory;
 use crate::iterator::{DbIterator, OwnedRange};
 use crate::mvcc_memtable::{MemLookup, MvccMemTable};
-use crate::obsolete::{CleanupReport, RetiredSstables};
+use crate::obsolete::{CleanupReport, RetiredSstable};
 use crate::snapshot::SnapshotRegistry;
 use crate::table_scan::{self, TableSnapshotLookup};
 use crate::verify::{VerifyOptions, VerifyReport, verify_version};
@@ -508,46 +508,41 @@ impl Database {
 
         let current = Arc::clone(&state.version);
         let mut report = CleanupReport::default();
-        let mut pending = Vec::new();
+        let mut pending = Vec::<RetiredSstable>::new();
         for retired in std::mem::take(&mut state.retired_sstables) {
-            let pinned = retired.old_version.upgrade().is_some();
-            let mut retry = Vec::new();
-            for number in retired.file_numbers {
-                let name = sst_file_name(number);
-                if current.is_live_file(number) {
-                    report.failed.push(format!(
-                        "{name}: номер всё ещё присутствует в live VersionSet"
-                    ));
-                    retry.push(number);
-                    continue;
-                }
-                if pinned {
-                    report.deferred.push(name);
-                    retry.push(number);
-                    continue;
-                }
-
-                let path = self.directory.join(&name);
-                match std::fs::remove_file(&path) {
-                    Ok(()) => {
-                        current.evict_cached_table(number)?;
-                        report.removed.push(name);
-                    }
-                    Err(source) if source.kind() == ErrorKind::NotFound => {
-                        current.evict_cached_table(number)?;
-                        report.absent.push(name);
-                    }
-                    Err(source) => {
-                        report.failed.push(format!("{name}: {source}"));
-                        retry.push(number);
-                    }
-                }
+            let number = retired.file_number;
+            let name = sst_file_name(number);
+            if current.is_live_file(number) {
+                report
+                    .failed
+                    .push(format!("{name}: номер всё ещё присутствует в live VersionSet"));
+                pending.push(retired);
+                continue;
             }
-            if !retry.is_empty() {
-                pending.push(RetiredSstables {
-                    old_version: retired.old_version,
-                    file_numbers: retry,
-                });
+            if retired.reader.upgrade().is_some() {
+                report.deferred.push(name);
+                pending.push(retired);
+                continue;
+            }
+
+            let path = self.directory.join(&name);
+            match std::fs::remove_file(&path) {
+                Ok(()) => {
+                    if let Err(error) = current.evict_cached_table(number) {
+                        report.failed.push(format!("{name}: cache eviction: {error}"));
+                    }
+                    report.removed.push(name);
+                }
+                Err(source) if source.kind() == ErrorKind::NotFound => {
+                    if let Err(error) = current.evict_cached_table(number) {
+                        report.failed.push(format!("{name}: cache eviction: {error}"));
+                    }
+                    report.absent.push(name);
+                }
+                Err(source) => {
+                    report.failed.push(format!("{name}: {source}"));
+                    pending.push(retired);
+                }
             }
         }
         state.retired_sstables = pending;
