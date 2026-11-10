@@ -1,8 +1,8 @@
-//! Публичный API ForgeDB v0.5.0.
+//! Публичный API ForgeDB v0.6.1.
 //!
-//! Версия добавляет optimistic snapshot-isolation transactions, own-write visibility,
-//! write-write conflict detection и atomic transaction commit поверх существующего single-writer
-//! WAL/LSM path. Persisted WAL/SSTable/MANIFEST форматы не меняются.
+//! WAL/LSM storage core с snapshot isolation, индексными SST reads, bounded
+//! decoded-block cache, безопасной очисткой retired SST и повторяемым close.
+//! Persisted WAL/SSTable/MANIFEST форматы в v0.6.1 не меняются.
 
 mod database_v3_fixed {
     include!("database_v3_fixed.rs");
