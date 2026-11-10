@@ -4,7 +4,7 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## Статус версий
 
-- текущий milestone: **v0.5.0 — MVCC Transactions**;
+- текущая опубликованная версия: **v0.5.0 — MVCC Transactions**, GitHub Pre-release;
 - следующий milestone: **v0.6.0 — Cache and Performance**.
 
 ## Возможности v0.5.0

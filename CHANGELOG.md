@@ -62,7 +62,7 @@ v0.5.0 не меняет persisted layout.
 - Full FQL parser/shell остаётся milestone v0.8.0.
 - SSTable conflict lookup correctness-first и может быть оптимизирован в v0.6 только после benchmark.
 
-## [0.4.0] — 2026-08-07
+## [0.4.0] — 2026-11-10
 
 ### Добавлено
 
