@@ -70,7 +70,9 @@ fn registered_snapshot_still_reads_old_version_after_cleanup() -> Result<()> {
     database.flush()?;
     database.compact_range(None, None)?;
     let report = database.cleanup_obsolete_sstables()?;
-    assert!(!report.removed.is_empty());
+    // After v0.6.1, compaction may already reclaim the unpinned input files.
+    assert!(report.failed.is_empty());
+    assert!(database.file_inventory()?.orphan_sst.is_empty());
     assert_eq!(
         database.get_with_options(b"account", ReadOptions::from_snapshot(&snapshot))?,
         Some(b"before".to_vec())
