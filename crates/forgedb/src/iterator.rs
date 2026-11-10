@@ -1,11 +1,13 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::ops::{Bound, RangeBounds};
+use std::sync::Arc;
 
 use forgedb_core::{Error, InternalKey, Result, SequenceNumber, ValueType};
 use forgedb_sstable::{TableEntry, TableMeta};
 
 use crate::entry_cursor::{EntryCursor, VecEntryCursor};
+use crate::version_set::VersionSet;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RangePosition {
@@ -142,6 +144,8 @@ pub struct DbIterator {
     limit: Option<usize>,
     emitted: usize,
     failed: bool,
+    // Пинним поколение файлов для Windows-safe lifetime SST cursors.
+    _version_lease: Option<Arc<VersionSet>>,
 }
 
 impl DbIterator {
@@ -187,6 +191,7 @@ impl DbIterator {
             limit,
             emitted: 0,
             failed: false,
+            _version_lease: None,
         };
         for source_index in 0..iterator.sources.len() {
             iterator.queue_current(source_index)?;
@@ -203,7 +208,13 @@ impl DbIterator {
             limit,
             emitted: 0,
             failed: false,
+            _version_lease: None,
         }
+    }
+
+    pub(crate) fn with_version_lease(mut self, version: Arc<VersionSet>) -> Self {
+        self._version_lease = Some(version);
+        self
     }
 
     fn queue_current(&mut self, source_index: usize) -> Result<()> {
