@@ -437,6 +437,54 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_commits_to_same_key_have_one_winner() -> Result<()> {
+        use std::sync::{Arc, Barrier};
+
+        let directory = temporary_directory("concurrent-commit")?;
+        let database = Database::open(&directory, Options::default())?;
+        database.put(b"key", b"initial", WriteOptions::sync())?;
+        let mut first = database.begin_transaction()?;
+        let mut second = database.begin_transaction()?;
+        first.put(b"key", b"first")?;
+        second.put(b"key", b"second")?;
+
+        let barrier = Arc::new(Barrier::new(3));
+        let first_barrier = Arc::clone(&barrier);
+        let second_barrier = Arc::clone(&barrier);
+        let first_thread = std::thread::spawn(move || {
+            first_barrier.wait();
+            first.commit(WriteOptions::sync())
+        });
+        let second_thread = std::thread::spawn(move || {
+            second_barrier.wait();
+            second.commit(WriteOptions::sync())
+        });
+        barrier.wait();
+
+        let first_result = first_thread.join().map_err(|_| Error::InternalInvariant {
+            invariant: "I-TRANSACTION-THREAD",
+            reason: "первый поток завершился с panic".to_owned(),
+        })?;
+        let second_result = second_thread.join().map_err(|_| Error::InternalInvariant {
+            invariant: "I-TRANSACTION-THREAD",
+            reason: "второй поток завершился с panic".to_owned(),
+        })?;
+        assert!(matches!(
+            (first_result, second_result),
+            (Ok(()), Err(Error::Conflict { .. }))
+                | (Err(Error::Conflict { .. }), Ok(()))
+        ));
+        assert!(matches!(
+            database.get(b"key")?,
+            Some(value) if value == b"first" || value == b"second"
+        ));
+        database.close()?;
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
+    #[test]
     fn committed_transaction_recovers_as_one_wal_batch() -> Result<()> {
         let directory = temporary_directory("recovery")?;
         let database = Database::open(&directory, Options::default())?;
