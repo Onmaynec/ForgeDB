@@ -268,6 +268,11 @@ impl Database {
 
     /// Применяет WriteBatch атомарно после выбранной WAL durability boundary.
     pub fn write(&self, batch: WriteBatch, write_options: WriteOptions) -> Result<()> {
+        self.write_ref(&batch, write_options)
+    }
+
+    /// Borrowed batch path lets the public wrapper flush and retry without cloning a large batch.
+    fn write_ref(&self, batch: &WriteBatch, write_options: WriteOptions) -> Result<()> {
         self.ensure_open()?;
         if self.options.read_only {
             return Err(Error::ReadOnly);
@@ -288,7 +293,7 @@ impl Database {
         let next_sequence = sequence_end.checked_next()?;
         let prepared = state.mutable.prepare(
             sequence_start,
-            &batch,
+            batch,
             &limits,
             self.options.memtable_size,
         )?;
@@ -301,7 +306,7 @@ impl Database {
                     invariant: "I-WAL-WRITER-PRESENT",
                     reason: "write path не содержит WAL writer".to_owned(),
                 })?
-                .append_batch(sequence_start, &batch, &limits, true)
+                .append_batch(sequence_start, batch, &limits, true)
                 .map(|_| ()),
             Durability::NoSync => state
                 .wal
@@ -310,7 +315,7 @@ impl Database {
                     invariant: "I-WAL-WRITER-PRESENT",
                     reason: "write path не содержит WAL writer".to_owned(),
                 })?
-                .append_batch(sequence_start, &batch, &limits, false)
+                .append_batch(sequence_start, batch, &limits, false)
                 .map(|_| ()),
             Durability::DisableWal => Ok(()),
         };
@@ -552,24 +557,36 @@ impl Database {
         Ok(report)
     }
 
-    /// Синхронизирует WAL и MANIFEST и освобождает process lock.
+    /// Синхронизирует WAL и MANIFEST. При ошибке оставляет writers и LOCK для retry.
     pub fn close(&self) -> Result<()> {
-        if self.closed.swap(true, Ordering::SeqCst) {
+        self.close_with_sync(|writer| writer.sync(), |writer| writer.sync())
+    }
+
+    /// Sync callbacks allow deterministic fault injection without altering persisted files.
+    fn close_with_sync(
+        &self,
+        sync_wal: impl FnOnce(&WalWriter<File>) -> Result<()>,
+        sync_manifest: impl FnOnce(&ManifestWriter<File>) -> Result<()>,
+    ) -> Result<()> {
+        let mut state = self.lock_state_allow_closed()?;
+        if self.closed.load(Ordering::SeqCst) {
             return Ok(());
         }
-        let mut state = self.lock_state_allow_closed()?;
         if state.flush_in_progress {
-            self.closed.store(false, Ordering::SeqCst);
             return Err(Error::Busy {
                 reason: "нельзя закрыть базу во время flush".to_owned(),
             });
         }
-        if let Some(writer) = state.wal.take() {
-            writer.sync()?;
+        if let Some(writer) = state.wal.as_ref() {
+            sync_wal(writer)?;
         }
-        if let Some(writer) = state.manifest_writer.take() {
-            writer.sync()?;
+        if let Some(writer) = state.manifest_writer.as_ref() {
+            sync_manifest(writer)?;
         }
+        // Publish Closed only after both sync boundaries succeeded while holding state mutex.
+        self.closed.store(true, Ordering::SeqCst);
+        state.wal.take();
+        state.manifest_writer.take();
         state.lock.take();
         Ok(())
     }
@@ -811,8 +828,11 @@ impl Database {
     }
 
     fn lock_state(&self) -> Result<MutexGuard<'_, DatabaseState>> {
+        // Recheck after acquiring the mutex: a concurrent close may have finished
+        // between the caller's first ensure_open() and entry into this section.
+        let state = self.lock_state_allow_closed()?;
         self.ensure_open()?;
-        self.lock_state_allow_closed()
+        Ok(state)
     }
 
     fn lock_state_allow_closed(&self) -> Result<MutexGuard<'_, DatabaseState>> {
@@ -1111,4 +1131,45 @@ mod tests {
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
         Ok(())
     }
+    #[test]
+    fn failed_close_sync_retains_writers_and_lock_until_retry() -> Result<()> {
+        let directory = temporary_directory("close-sync-retry")?;
+        let db = Database::open(&directory, Options::default())?;
+        db.put(b"key", b"durable", WriteOptions::sync())?;
+
+        let wal_failure = db.close_with_sync(
+            |_| Err(Error::invalid_argument("injected_wal_sync", "test failure")),
+            |_| Ok(()),
+        );
+        assert!(wal_failure.is_err());
+        assert!(!db.closed.load(Ordering::SeqCst));
+
+        let manifest_failure = db.close_with_sync(
+            |_| Ok(()),
+            |_| Err(Error::invalid_argument("injected_manifest_sync", "test failure")),
+        );
+        assert!(manifest_failure.is_err());
+        assert!(!db.closed.load(Ordering::SeqCst));
+        {
+            let state = db.lock_state()?;
+            assert!(state.wal.is_some());
+            assert!(state.manifest_writer.is_some());
+            assert!(state.lock.is_some());
+        }
+        assert!(Database::open(&directory, Options::default()).is_err());
+        assert_eq!(db.get(b"key")?, Some(b"durable".to_vec()));
+
+        db.close()?;
+        db.close()?;
+        assert!(matches!(db.get(b"key"), Err(Error::Closed)));
+        let reopened = Database::open(&directory, Options::default())?;
+        assert_eq!(reopened.get(b"key")?, Some(b"durable".to_vec()));
+        reopened.close()?;
+        drop(reopened);
+        drop(db);
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
 }

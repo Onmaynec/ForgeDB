@@ -1,4 +1,4 @@
-# Архитектура ForgeDB v0.6.0
+# Архитектура ForgeDB v0.6.1
 
 ## Назначение
 
@@ -20,7 +20,7 @@ ForgeDB — встраиваемый key-value storage engine с LSM-струк�
 
 ## Runtime
 
-Публичный `Database` экспортирует `StreamingDatabase`. Пока используется композиция исходников `database_v3_fixed.rs`, `database_streaming_wrapper.rs` и `compaction.rs` через `include!`. Это действующая реализация v0.4.0; объединение модулей — отдельный рефакторинг, не условие чтения persisted-форматов.
+Публичный `Database` экспортирует `StreamingDatabase`. Пока используется композиция исходников `database_v3_fixed.rs`, `database_streaming_wrapper.rs` и `compaction.rs` через `include!`. Это действующая реализация v0.6.1; объединение модулей — отдельный рефакторинг, не условие чтения persisted-форматов.
 
 Внутреннее состояние хранит:
 
@@ -31,11 +31,11 @@ ForgeDB — встраиваемый key-value storage engine с LSM-струк�
 - признак fatal write failure и `flush_in_progress`;
 - нативную эксклюзивную блокировку каталога.
 
-`SnapshotRegistry` отслеживает живые snapshot handles и oldest active sequence. `closed` проверяется на входе в публичные операции.
+`SnapshotRegistry` отслеживает живые snapshot handles и oldest active sequence. Закрытие удерживает mutex состояния, синхронизирует оба writer-а и только после успеха публикует `closed`. Ошибка sync не удаляет writer handles и не освобождает LOCK; после получения mutex выполняется дополнительная проверка `closed`.
 
 ## Путь записи
 
-Операции `put`, `delete` и `write` направляются в общий `Database::write`. Под mutex выполняются validation, резервирование sequence range, preflight mutable memtable, WAL append и, для `Sync`, синхронизация. Только после успешной WAL boundary изменения публикуются в memtable.
+Операции `put`, `delete` и `write` направляются в единый borrowed-batch write path. Под mutex выполняются validation, резервирование sequence range, preflight mutable memtable, WAL append и, для `Sync`, синхронизация. Только после успешной WAL boundary изменения публикуются в memtable. Если preflight отклоняет batch из-за `memtable_memory`, публичный wrapper делает один synchronous flush/retry; oversized batch будет отклонён повторно без частичной публикации.
 
 `DisableWal` допускает потерю неподтверждённого на диске состояния при аварийном завершении. Полный контракт: [WRITE_PATH.md](WRITE_PATH.md) и [DURABILITY.md](DURABILITY.md).
 
@@ -55,7 +55,7 @@ ForgeDB — встраиваемый key-value storage engine с LSM-струк�
 
 Flush синхронизирует current WAL перед rotation, фиксирует новые номера файлов, создаёт immutable SSTable и публикует новую L0-топологию через synced MANIFEST edit. Recovery различает current и previous WAL поколения.
 
-Leveled compaction выбирает L0→L1 или Ln→Ln+1, строит outputs и публикует их единым MANIFEST edit. До installation authoritative остаются inputs, после durable installation — outputs. Compaction синхронна; её входные SST не удаляются немедленно без reference-aware reaper. Правила: [COMPACTION.md](COMPACTION.md).
+Leveled compaction выбирает L0→L1 или Ln→Ln+1, строит outputs и публикует их единым MANIFEST edit. До installation authoritative остаются inputs, после durable installation — outputs. Compaction синхронна; её входные SST могут быть удалены best-effort после synced MANIFEST edit только при отсутствии reader references. Ошибки unlink не меняют успешность durable compaction, повторная попытка доступна через явный cleanup. Правила: [COMPACTION.md](COMPACTION.md).
 
 ## Persisted-файлы
 
@@ -71,10 +71,13 @@ TEMP/                 временные файлы сборки
 
 Reader отклоняет неизвестные future versions. Writable open старого MANIFEST V1 публикует новый V2 через crash-safe замену CURRENT, без изменения V1 in-place. Подробности: [COMPATIBILITY.md](COMPATIBILITY.md).
 
-## Границы v0.4.0
+## Границы v0.6.1
 
-- один writer path и эксклюзивный process lock; shared read-only opens не поддерживаются;
+- один public write gate и эксклюзивный process lock; shared read-only opens не поддерживаются;
+- optimistic transactions предоставляют snapshot isolation, но не serializable isolation;
 - compaction synchronous, её merge ограничен memory budget, но ещё не fully streaming;
-- reverse iterator и transactions отсутствуют;
-- manual process-local retired SST cleanup реализован, но restart-aware automatic GC отсутствует;
+- synchronous auto-flush/retry не заменяет фоновые flush workers;
+- reverse iterator и range tombstones отсутствуют;
+- process-local retired SST cleanup выполняется best-effort после compaction, restart-aware GC отсутствует;
+- `table_cache_capacity` и параметры background jobs зарезервированы, полноценное lazy reader eviction/worker pool отсутствует;
 - backup, unknown и user files normal recovery не удаляет.

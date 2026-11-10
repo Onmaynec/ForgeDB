@@ -62,6 +62,9 @@
 | I-051 | Retired SST не удаляется до durable MANIFEST installation или при наличии живого TableReader. | обеспечен v0.6.0 | per-reader weak pin; `active_scan_defers_retired_sst_until_iterator_is_dropped`; synced edit queue |
 | I-052 | Normal open/cleanup не удаляет неподтверждённый orphan SST после рестарта. | обеспечен v0.6.0 | `cleanup_never_guesses_origin_of_orphan_after_restart` |
 | I-053 | Read snapshot сохраняет старую версию данных после compaction и физической очистки retired input. | обеспечен v0.6.0 | `registered_snapshot_still_reads_old_version_after_cleanup` |
+| I-054 | Ошибка sync при close не переводит базу в Closed и не освобождает WAL/MANIFEST writers и native LOCK. | draft v0.6.1 | deterministic WAL/MANIFEST sync injection, retry, reopen test |
+| I-055 | Публичный write при memtable limit либо полностью коммитит batch после одного flush/retry, либо не публикует его. | draft v0.6.1 | `stability_v061` automatic flush and oversized atomic batch tests |
+| I-056 | После compaction физически удаляются только доказанно retired SST без живых TableReader. | draft v0.6.1 | `manual_compaction_reclaims_unpinned_retired_sst_automatically`; active scan regression |
 
 ## Правило изменения
 

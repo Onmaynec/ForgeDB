@@ -29,7 +29,7 @@ ForgeDB считает недоверенными:
 Parsers используют checked arithmetic, точные границы layout и настроенные allocation limits. Неизвестные версии,
 ненулевые reserved fields и checksum mismatch отклоняются.
 
-## Что проверяется в v0.1.0
+## Контроль повреждений и жизненного цикла в v0.6.1
 
 - exclusive process-level lock;
 - database identity в WAL;
@@ -38,7 +38,13 @@ Parsers используют checked arithmetic, точные границы lay
 - непротиворечивый sequence range;
 - полное декодирование batch до применения;
 - запрет resynchronization после mid-file corruption;
-- безопасный trailing partial frame только в конце файла.
+- безопасный trailing partial frame только в конце файла;
+- контроль checksums, структуры и границ SSTable V1;
+- MANIFEST V1/V2 и безопасная установка версии через CURRENT;
+- snapshot-aware recovery после WAL rotation, flush и compaction;
+- защита от частичного `WriteBatch` при recovery;
+- синхронизация WAL/MANIFEST до завершения `close()` с возможностью retry при ошибке;
+- reference-aware удаление только доказанно устаревших SSTable, без удаления непроверенных orphan-файлов.
 
 ## Что не предоставляется
 

@@ -282,12 +282,21 @@ impl StreamingDatabase {
     pub fn compact_range(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<()> {
         self.inner.flush()?;
         while self.inner.compact_once(start, end, true)? {}
+        self.try_cleanup_retired();
         Ok(())
     }
 
     fn compact_if_needed(&self) -> Result<()> {
         while self.inner.compact_once(None, None, false)? {}
+        self.try_cleanup_retired();
         Ok(())
+    }
+
+    /// Очистка после durable MANIFEST installation не должна превращать уже
+    /// завершённую compaction в ошибку публичной операции. Неудачные unlink
+    /// остаются в очереди и доступны через явный cleanup с отчётом.
+    fn try_cleanup_retired(&self) {
+        let _ = self.inner.cleanup_obsolete_sstables();
     }
 
     fn apply_write_stall(&self) -> Result<()> {

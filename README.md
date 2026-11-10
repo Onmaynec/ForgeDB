@@ -4,11 +4,11 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## Статус версий
 
-- текущий выпуск: **v0.6.0 — Cache and Performance**, GitHub Pre-release;
-- предыдущая версия: **v0.5.0 — MVCC Transactions**;
+- версия исходников в feature branch: **v0.6.1 — Stability and Recovery** (до публикации);
+- последний опубликованный выпуск: **v0.6.0 — Cache and Performance**, GitHub Pre-release;
 - следующий milestone: **v0.7.0 — Column Families**.
 
-## Возможности v0.6.0
+## Возможности v0.6.1
 
 - WAL V1, atomic WriteBatch и durability modes;
 - SSTable V1 с checksums, blocks, index и Bloom filter;
@@ -35,7 +35,10 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 - бинарный поиск по non-overlapping L1+ ranges;
 - reference-aware manual cleanup доказанных retired SSTables после compaction;
 - public `compact_range`, file inventory, recovery plan и quick/deep verify;
-- CLI transaction/scan/compact/inventory/verify/inspect.
+- CLI transaction/scan/compact/inventory/verify/inspect;
+- повторяемый `close()`: writer handles и LOCK удерживаются до успешного sync WAL/MANIFEST;
+- однократный synchronous flush/retry для `put/delete/write` при переполнении mutable memtable;
+- best-effort reference-aware SST cleanup после успешной compaction (в рамках текущего open handle).
 
 ## Пример API
 
@@ -66,7 +69,7 @@ fn main() -> Result<()> {
 
 `Options::block_cache_size` ограничивает суммарный учитываемый объём **декодированных SST data blocks**; `0` отключает кеширование. `Database::cache_stats()` показывает hits, misses, evictions, bypasses и текущую residency кэша. SST reader использует Bloom filter и индекс, не материализуя всю таблицу при каждом point read или проверке конфликта транзакции.
 
-`Database::cleanup_obsolete_sstables()` консервативно удаляет только файлы, исключённые из MANIFEST успешной compaction в текущем открытом процессе, и ждёт освобождения их reader handles. После restart непроверенные orphan-файлы не удаляются. CLI `compact` вызывает безопасную очистку после compaction.
+`Database::cleanup_obsolete_sstables()` консервативно удаляет только файлы, исключённые из MANIFEST успешной compaction в текущем открытом процессе, и ждёт освобождения их reader handles. В v0.6.1 вызывается также best-effort очистка после успешной compaction. Ошибка удаления не превращает уже завершённую compaction в неуспешную запись; для диагностики и повторной очистки остаётся явный метод. После restart непроверенные orphan-файлы не удаляются.
 
 **Граница:** `TableReader::open` по-прежнему заранее читает исходный SST в память; `block_cache_size` ограничивает только кэш декодированных блоков, не весь RSS. Полноценный lazy table reader и использование `table_cache_capacity` остаются отдельной работой. Range iterator продолжает свой streaming scan path.
 
@@ -188,7 +191,7 @@ cargo build --locked --workspace --release
 
 Основная CI matrix: Ubuntu stable, Windows stable и Rust 1.89.
 
-## Ограничения v0.6.0
+## Ограничения v0.6.1
 
 - isolation — snapshot isolation, не serializable;
 - обязательна write-write conflict detection, но full read-write validation пока отсутствует;
@@ -196,7 +199,9 @@ cargo build --locked --workspace --release
 - full FQL parser/shell остаётся milestone v0.8.0;
 - compaction synchronous; background worker pool появится позже;
 - compaction merge bounded `max_compaction_bytes`, но materialized внутри этого budget;
-- retired SST очищаются по вызову из текущего открытого процесса с reader lifetime pinning; полноценной cross-restart garbage collection ещё нет;
+- retired SST очищаются автоматически после compaction и вручную по вызову при освобождении reader handles; кросс-рестартная GC отсутствует;
+- auto-flush при заполнении memtable синхронен, однократен и применяется только к публичным `put/delete/write`; транзакционный commit пока использует прежний путь;
+- `table_cache_capacity` и `max_background_flushes/max_background_compactions` пока зарезервированы и не управляют рабочими worker pools/reader eviction;
 - `TableReader` пока eager загружает физический SST в память независимо от decoded-block cache budget;
 - benchmark не задаёт фиксированных performance thresholds: результаты зависят от среды;
 - reverse iterator и range tombstones отсутствуют;
@@ -205,6 +210,8 @@ cargo build --locked --workspace --release
 ## Документация
 
 - [`docs/CACHE_AND_PERFORMANCE.md`](docs/CACHE_AND_PERFORMANCE.md);
+- [`docs/OPTIONS.md`](docs/OPTIONS.md);
+- [`docs/releases/V0.6.1.md`](docs/releases/V0.6.1.md);
 - [`docs/TRANSACTIONS.md`](docs/TRANSACTIONS.md);
 - [`docs/COMPACTION.md`](docs/COMPACTION.md);
 - [`docs/formats/MANIFEST_V2.md`](docs/formats/MANIFEST_V2.md);

@@ -24,6 +24,8 @@ Validation/preflight ошибки до WAL не изменяют состоян�
 
 Public write path при переполнении L0 пытается снизить pressure через synchronous compaction; если stop threshold по-прежнему превышен, возвращается `Busy`. Читатели продолжают работать с выбранным immutable `VersionSet`.
 
+Если preflight mutable memtable возвращает `ResourceLimit { resource: "memtable_memory", .. }`, публичные `put/delete/write` v0.6.1 выполняют один синхронный flush/retry под write gate. При повторной ошибке batch остаётся неопубликованным; WAL append до успешного preflight не происходит. Это не background flush и не применяется к транзакционному commit.
+
 ## Flush
 
 `Database::flush()`:
@@ -41,7 +43,7 @@ Public write path при переполнении L0 пытается снизи
 
 После публичного `flush` wrapper запускает synchronous compaction при достижении trigger. Также доступен `Database::compact_range` с half-open range.
 
-Compaction резервирует output file numbers durable edit, строит все outputs и устанавливает их одним MANIFEST V2 edit. Версии, необходимые активным snapshots, сохраняются. Старые input SST переходят в process-local retirement queue только после synced installation edit; manual `cleanup_obsolete_sstables()` удаляет их после освобождения читателей. При restart не предпринимается speculative orphan deletion.
+Compaction резервирует output file numbers durable edit, строит все outputs и устанавливает их одним MANIFEST V2 edit. Версии, необходимые активным snapshots, сохраняются. Старые input SST переходят в process-local retirement queue только после synced installation edit; best-effort cleanup после compaction удаляет их после освобождения читателей; при ошибках доступна явная повторная очистка `cleanup_obsolete_sstables()` с отчётом. При restart не предпринимается speculative orphan deletion.
 
 Полный порядок installation и retention: [COMPACTION.md](COMPACTION.md).
 
