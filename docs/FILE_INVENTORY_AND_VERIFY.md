@@ -103,11 +103,8 @@ Deep verify дополнительно открывает каждый live SSTa
 
 ## Безопасность cleanup
 
-Автоматический cleanup не входит в `v0.3.0`. Будущая реализация обязана:
+Начиная с v0.6.0 `Database::cleanup_obsolete_sstables()` удаляет **только process-local proven retired SSTable inputs** после synced MANIFEST compaction installation и освобождения конкретного `TableReader`, включая старые итераторы. Результат содержит списки `removed`, `deferred`, `absent` и `failed`. Команда `forgedb compact` вызывает эту проверку после compaction.
 
-1. зафиксировать authoritative VersionSet;
-2. доказать отсутствие ссылки из current/previous metadata;
-3. переместить объект в quarantine через atomic rename;
-4. синхронизировать каталог;
-5. удалить объект только отдельным шагом;
-6. сохранить диагностическую запись операции.
+Этот путь не пытается восстанавливать историю удаления по directory listing после restart. `FileInventory` и `RecoveryPlan` остаются неразрушающими и **не дают разрешения на удаление** `orphan_sst`, даже если файл имеет canonical SST name. Backup, user, unknown и произвольные temporary objects исключены из удаления.
+
+Полноценная restart-aware garbage collection и карантин с persistent journal ещё не реализованы; соответствующие гарантии не заявляются. См. [CACHE_AND_PERFORMANCE.md](CACHE_AND_PERFORMANCE.md) и ADR 0013.

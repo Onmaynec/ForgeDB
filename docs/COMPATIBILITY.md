@@ -2,13 +2,13 @@
 
 ## Версия библиотеки
 
-`v0.5.0` является pre-release milestone. Публичный API может изменяться до `v1.0.0`, но persisted-форматы меняются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
+`v0.6.0` является следующим pre-release milestone. Публичный API может изменяться до `v1.0.0`, но persisted-форматы меняются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
 ## Поддерживаемый Rust
 
 Минимальная поддерживаемая версия: Rust 1.89. CI также проверяет текущий stable на Ubuntu и Windows.
 
-## Persisted-форматы v0.5.0
+## Persisted-форматы v0.6.0
 
 | Компонент | Writer | Reader | Неизвестная будущая версия |
 |---|---|---|---|
@@ -21,7 +21,7 @@
 
 Reader не пытается интерпретировать future version как текущий layout.
 
-## Transaction compatibility v0.5.0
+## Transaction compatibility v0.5.0–v0.6.0
 
 v0.5.0 не вводит отдельный persisted transaction format.
 
@@ -54,11 +54,11 @@ MANIFEST V2 введён в v0.4.0 для persisted L1+ placement.
 
 WAL V1 привязан к database identity, canonical numbered generation, little-endian layout, CRC32C Castagnoli и operation payload V1. Изменение обязательного layout требует WAL V2 или отдельного совместимого extension protocol.
 
-Transaction commit v0.5.0 не добавляет новый WAL record type: используется тот же atomic WriteBatch frame.
+Transaction commit v0.5.0/v0.6.0 не добавляет новый WAL record type: используется тот же atomic WriteBatch frame.
 
 ## SSTable V1
 
-Compaction и transaction support v0.5.0 не меняют SSTable layout. Input и output tables используют один и тот же SSTable V1 contract; level placement является MANIFEST metadata, а transaction conflict validation читает обычные MVCC sequence numbers из существующих internal keys.
+Compaction, transaction support и индексный point lookup v0.6.0 не меняют SSTable layout. Input и output tables используют один и тот же SSTable V1 contract; level placement является MANIFEST metadata, а transaction conflict validation читает обычные MVCC sequence numbers из существующих internal keys. Блоковый кэш имеет только in-memory metadata; process-local retired SST cleanup удаляет физические inputs без изменения логического MANIFEST состояния.
 
 ## Операционные системы
 

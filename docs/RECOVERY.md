@@ -1,4 +1,4 @@
-# Восстановление ForgeDB v0.4.0
+# Восстановление ForgeDB v0.6.0
 
 ## Авторитетное состояние
 
@@ -33,7 +33,7 @@ Flush резервирует номера и сохраняет отдельно
 
 Crash до installation сохраняет inputs authoritative; после него authoritative становятся outputs. Output SST без MANIFEST reference является orphan.
 
-Неразмеченные, backup и user files не удаляются normal recovery. Старые physical compaction inputs в v0.4.0 сохраняются консервативно до реализации reference-aware cleanup.
+Неразмеченные, backup и user files не удаляются normal recovery. В v0.6.0 после synced compaction edit можно вручную вызвать `cleanup_obsolete_sstables()`: метод удаляет только retired inputs, доказанно исключённые из live topology в текущем open handle и больше не используемые `TableReader`. После restart неклассифицированные orphan SST остаются нетронутыми, потому что process-local retirement queue не восстанавливается автоматически.
 
 ## Диагностика
 

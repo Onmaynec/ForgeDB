@@ -100,9 +100,9 @@ Crash до installation оставляет старые inputs authoritative. Cr
 
 ## Obsolete physical files
 
-v0.4.0 намеренно не удаляет physical input SSTable немедленно после installation, потому что текущая read architecture ещё не содержит отдельного reference-aware obsolete-file reaper, доказанного для Windows open-handle semantics. Unreferenced files не включаются обратно в live state и отображаются inventory как orphan/unreferenced SST.
+В v0.6.0 input SST включаются в process-local retirement queue только после durable MANIFEST compaction installation edit. Каждый retired file хранит weak reference на исходный `TableReader`, который может использоваться многими версиями LSM и активными итераторами. `cleanup_obsolete_sstables()` удаляет только proven retired files после освобождения reader и отсутствия номера в live VersionSet. CLI `compact` вызывает эту проверку после compaction.
 
-Это консервативная safety policy: она может временно увеличивать disk usage, но не рискует удалить файл, удерживаемый reader/старым Version handle. Полный asynchronous reference-aware cleanup остаётся отдельным hardening step.
+Это manual conservative cleanup, а не full cross-restart garbage collection: после нового открытия неподтверждённые orphan-файлы не удаляются. При ошибке удаления файл остаётся в очереди для повторной попытки. Подробности: [CACHE_AND_PERFORMANCE.md](CACHE_AND_PERFORMANCE.md) и ADR 0013.
 
 ## Write backpressure
 
@@ -126,6 +126,6 @@ Reads продолжают использовать immutable VersionSet.
 
 - compaction synchronous, без background worker pool;
 - merge bounded, но materialized внутри `max_compaction_bytes`;
-- obsolete SST reaper отсутствует;
+- process-local manual retired SST cleanup есть; restart-aware/automatic garbage collection ещё нет;
 - compaction metrics/statistics появятся вместе с observability milestone;
 - range tombstones отсутствуют.

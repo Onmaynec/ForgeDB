@@ -85,6 +85,16 @@ fn run() -> Result<()> {
             ensure_no_extra(arguments)?;
             let database = Database::open(PathBuf::from(path), Options::default())?;
             database.compact_range(start.as_deref(), end.as_deref())?;
+            let cleanup = database.cleanup_obsolete_sstables()?;
+            for name in cleanup.removed {
+                println!("removed obsolete SST: {name}");
+            }
+            for name in cleanup.deferred {
+                eprintln!("deferred obsolete SST: {name}");
+            }
+            for name in cleanup.failed {
+                eprintln!("obsolete SST cleanup failed: {name}");
+            }
             database.close()
         }
         "inventory" => {

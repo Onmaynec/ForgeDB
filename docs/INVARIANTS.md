@@ -7,7 +7,7 @@
 - **частично** — обеспечена безопасная часть инварианта, но lifecycle ещё неполон;
 - **запланирован** — feature нельзя заявлять до указанного milestone.
 
-| ID | Инвариант | Статус v0.5.0 | Доказательство |
+| ID | Инвариант | Статус v0.6.0 | Доказательство |
 |---|---|---|---|
 | I-001 | Один каталог базы одновременно открыт не более чем одним процессом ForgeDB. | обеспечен | native lock tests; lock удерживается до close/drop/process exit |
 | I-002 | Номер persisted-файла не переиспользуется. | draft v0.4.0 | `next_file_number`; MANIFEST validation; flush reservation; compaction reservation edit до output creation |
@@ -21,7 +21,7 @@
 | I-010 | Snapshot никогда не видит sequence выше собственного snapshot sequence. | обеспечен v0.3.0 | snapshot/read model tests |
 | I-011 | Compaction не удаляет version, которая может быть видима active snapshot. | draft v0.4.0 | `retain_versions`; oldest-snapshot boundary unit test |
 | I-012 | Tombstone удаляется только при доказанной безопасности. | draft v0.4.0 | bottommost + oldest snapshot condition; tombstone unit test |
-| I-013 | Obsolete file не удаляется, пока используется Version/reader/compaction/checkpoint. | частично v0.4.0 | v0.4 консервативно не удаляет physical compaction inputs вообще; reference-aware reaper ещё не реализован |
+| I-013 | Obsolete file не удаляется, пока используется Version/reader/compaction/checkpoint. | частично v0.6.0 | process-local manual cleanup отслеживает reader weak refs; полноценный restart-aware lifecycle не реализован |
 | I-014 | Persisted length/offset проверяется до allocation/read. | draft для MANIFEST V2, обеспечен для V1 | bounded codec, checked arithmetic, max batch/key limits |
 | I-015 | Неизвестная future persisted version не открывается как текущая. | draft для MANIFEST V2, обеспечен для V1 | MANIFEST accepts only 1..=2; unknown tags/versions rejected |
 | I-016 | Verify не изменяет базу. | обеспечен v0.3.0 | verify/inventory tests |
@@ -56,9 +56,15 @@
 | I-045 | Active transaction удерживает зарегистрированный snapshot до commit/rollback/conflict/failure. | обеспечен v0.5.0 | `Transaction.snapshot`; terminal paths вызывают `take`; existing SnapshotRegistry oldest-sequence retention |
 | I-046 | Transaction commit не принимает `DisableWal`. | обеспечен v0.5.0 | explicit validation + rejection/no-publication test + CLI integration test |
 | I-047 | Transaction read set не выделяет память для invalid/oversized keys и ограничивает число и общую длину сохраняемых ключей. | обеспечен v0.5.0 | `read_set_rejects_oversized_keys_and_total_bytes_before_allocation` |
+| I-048 | Snapshot-aware indexed SST lookup сохраняет tombstone и первую видимую версию при разрезании user key между blocks. | draft v0.6.0 | SST unit test `snapshot_lookup_across_multiple_data_blocks_uses_cache`; integration `block_cache_preserves_snapshot_versions_across_sst_blocks` |
+| I-049 | LRU-кэш хранит только validated decoded blocks и не превышает учтённый decoded-block budget. | draft v0.6.0 | cache hit/eviction/disabled/failure unit tests; integration small-cache test |
+| I-050 | Оптимистическая write-write conflict validation не пропускает newest sequence ключа после flush в SSTable даже при отключённом кэше. | draft v0.6.0 | `cache_can_be_disabled_and_transaction_conflict_still_detected` |
+| I-051 | Retired SST не удаляется до durable MANIFEST installation или при наличии живого TableReader. | draft v0.6.0 | per-reader weak pin; `active_scan_defers_retired_sst_until_iterator_is_dropped`; synced edit queue |
+| I-052 | Normal open/cleanup не удаляет неподтверждённый orphan SST после рестарта. | draft v0.6.0 | `cleanup_never_guesses_origin_of_orphan_after_restart` |
+| I-053 | Read snapshot сохраняет старую версию данных после compaction и физической очистки retired input. | draft v0.6.0 | `registered_snapshot_still_reads_old_version_after_cleanup` |
 
 ## Правило изменения
 
 Новый persisted-протокол или изменение write/recovery path обязаны обновить эту таблицу и добавить автоматическое доказательство соответствующего инварианта. Одной документации недостаточно для статуса **обеспечен**.
 
-I-041–I-047 подтверждены проверками feature head `70bdad2586fb4f2cd9208f584fb5536a692186d1` (CI run `42780867814`: Ubuntu stable, Windows stable, Rust 1.89). Выпуск дополнительно проходит отдельный release gate. Для старых `draft v0.4.0` статус намеренно не повышен автоматически: требуется предметная проверка покрытия каждого инварианта. I-013 остаётся **частично** до реализации reference-aware obsolete-file reaper.
+I-041–I-047 подтверждены проверками feature head `70bdad2586fb4f2cd9208f584fb5536a692186d1` (CI run `42780867814`: Ubuntu stable, Windows stable, Rust 1.89). Выпуск дополнительно проходит отдельный release gate. Для старых `draft v0.4.0` статус намеренно не повышен автоматически: требуется предметная проверка покрытия каждого инварианта. I-013 остаётся **частично**: process-local retired cleanup реализован, но полноценная cross-restart garbage collection намеренно не заявляется. Статусы `draft v0.6.0` повышаются только после проверки CI на конечном commit.

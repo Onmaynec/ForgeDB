@@ -253,6 +253,16 @@ impl Database {
         }
 
         append_manifest_edit(&mut state, &edit, limits)?;
+
+        // Только synced MANIFEST deletions ставим в очередь cleanup.
+        // Пинним lifetime конкретного TableReader: он может разделяться несколькими
+        // поколениями VersionSet, включая давно созданный streaming iterator.
+        state.retired_sstables.extend(plan.inputs.iter().map(|(_, table)| {
+            crate::obsolete::RetiredSstable {
+                file_number: table.metadata().file_number,
+                reader: table.reader_weak(),
+            }
+        }));
         state.version = Arc::new(next_version);
         state.flush_in_progress = false;
         Ok(())

@@ -118,7 +118,8 @@ impl StreamingDatabase {
                 observed: u64::MAX,
             })?;
         }
-        DbIterator::new_cursors(sources, snapshot, owned_range, read_options.limit)
+        Ok(DbIterator::new_cursors(sources, snapshot, owned_range, read_options.limit)?
+            .with_version_lease(version))
     }
 
     /// Сохраняет compile-ссылку на materialized scan до объединения wrapper и storage core.
@@ -149,6 +150,16 @@ impl StreamingDatabase {
     /// Выполняет quick или deep verification live state.
     pub fn verify(&self, verify_options: VerifyOptions) -> Result<VerifyReport> {
         self.inner.verify(verify_options)
+    }
+
+    /// Текущие hits/misses/evictions и residency bounded SST block cache.
+    pub fn cache_stats(&self) -> Result<CacheStats> {
+        self.inner.cache_stats()
+    }
+
+    /// Безопасно убирает выведенные из MANIFEST SST после освобождения readers.
+    pub fn cleanup_obsolete_sstables(&self) -> Result<crate::CleanupReport> {
+        self.inner.cleanup_obsolete_sstables()
     }
 
     /// Синхронизирует writers и освобождает process lock.

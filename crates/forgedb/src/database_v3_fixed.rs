@@ -14,7 +14,7 @@ use forgedb_manifest::{
     CURRENT_FILE_NAME, ManifestState, ManifestWriter, VersionEdit, create_manifest, open_manifest,
 };
 use forgedb_sstable::{
-    TableBuildOptions, TableBuildRequest, TableReader, build_table, sst_file_name,
+    CacheStats, TableBuildOptions, TableBuildRequest, TableReader, build_table, sst_file_name,
 };
 use forgedb_wal::{
     WalBatch, WalWriter, create_wal, open_wal_numbered, replay_wal_numbered, wal_file_name,
@@ -23,6 +23,7 @@ use forgedb_wal::{
 use crate::inventory::FileInventory;
 use crate::iterator::{DbIterator, OwnedRange};
 use crate::mvcc_memtable::{MemLookup, MvccMemTable};
+use crate::obsolete::{CleanupReport, RetiredSstable};
 use crate::snapshot::SnapshotRegistry;
 use crate::table_scan::{self, TableSnapshotLookup};
 use crate::verify::{VerifyOptions, VerifyReport, verify_version};
@@ -48,6 +49,7 @@ struct DatabaseState {
     manifest_writer: Option<ManifestWriter<File>>,
     manifest: ManifestState,
     version: Arc<VersionSet>,
+    retired_sstables: Vec<RetiredSstable>,
     next_sequence: SequenceNumber,
     last_sequence: Option<SequenceNumber>,
     fatal_write_error: Option<String>,
@@ -207,6 +209,7 @@ impl Database {
             &limits,
             options.level_count,
             options.max_compaction_bytes,
+            options.block_cache_size,
         )?);
         let inventory = inventory_for(version.as_ref(), &manifest)?;
         if !inventory.blockers.is_empty() {
@@ -233,6 +236,7 @@ impl Database {
                 manifest_writer,
                 manifest,
                 version,
+                retired_sstables: Vec::new(),
                 next_sequence,
                 last_sequence: recovered_last,
                 fatal_write_error: None,
@@ -415,7 +419,8 @@ impl Database {
                 observed: u64::MAX,
             })?;
         }
-        DbIterator::new(sources, snapshot, owned_range, read_options.limit)
+        Ok(DbIterator::new(sources, snapshot, owned_range, read_options.limit)?
+            .with_version_lease(version))
     }
 
     /// Синхронно переводит immutable memtable в установленный L0 SSTable.
@@ -476,6 +481,75 @@ impl Database {
             self.snapshots.oldest_active_sequence()?,
             verify_options,
         )
+    }
+
+    /// Счётчики point-lookup block cache этого open handle.
+    pub fn cache_stats(&self) -> Result<CacheStats> {
+        self.ensure_open()?;
+        let version = Arc::clone(&self.lock_state()?.version);
+        version.cache_stats()
+    }
+
+    /// Удаляет только SSTable inputs, выведенные из live MANIFEST в этом open handle.
+    ///
+    /// Старое VersionSet поколение и его streaming cursors должны полностью освободиться.
+    /// При restart непроверенные orphan SST не попадают в очередь удаления.
+    pub fn cleanup_obsolete_sstables(&self) -> Result<CleanupReport> {
+        self.ensure_open()?;
+        if self.options.read_only {
+            return Err(Error::ReadOnly);
+        }
+        let mut state = self.lock_state()?;
+        if state.flush_in_progress {
+            return Err(Error::Busy {
+                reason: "cleanup запрещён во время flush/compaction".to_owned(),
+            });
+        }
+
+        let current = Arc::clone(&state.version);
+        let mut report = CleanupReport::default();
+        let mut pending = Vec::<RetiredSstable>::new();
+        for retired in std::mem::take(&mut state.retired_sstables) {
+            let number = retired.file_number;
+            let name = sst_file_name(number);
+            if current.is_live_file(number) {
+                report
+                    .failed
+                    .push(format!("{name}: номер всё ещё присутствует в live VersionSet"));
+                pending.push(retired);
+                continue;
+            }
+            if retired.reader.upgrade().is_some() {
+                report.deferred.push(name);
+                pending.push(retired);
+                continue;
+            }
+
+            let path = self.directory.join(&name);
+            match std::fs::remove_file(&path) {
+                Ok(()) => {
+                    if let Err(error) = current.evict_cached_table(number) {
+                        report.failed.push(format!("{name}: cache eviction: {error}"));
+                    }
+                    report.removed.push(name);
+                }
+                Err(source) if source.kind() == ErrorKind::NotFound => {
+                    if let Err(error) = current.evict_cached_table(number) {
+                        report.failed.push(format!("{name}: cache eviction: {error}"));
+                    }
+                    report.absent.push(name);
+                }
+                Err(source) => {
+                    report.failed.push(format!("{name}: {source}"));
+                    pending.push(retired);
+                }
+            }
+        }
+        state.retired_sstables = pending;
+        if !report.removed.is_empty() {
+            NativeFileSystem.sync_directory(&self.directory)?;
+        }
+        Ok(report)
     }
 
     /// Синхронизирует WAL и MANIFEST и освобождает process lock.

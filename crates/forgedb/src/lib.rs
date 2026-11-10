@@ -13,6 +13,7 @@ mod entry_cursor;
 mod inventory;
 mod iterator;
 mod mvcc_memtable;
+mod obsolete;
 mod options;
 mod read_options;
 mod recovery_plan;
@@ -29,8 +30,10 @@ pub use forgedb_core::{
     BatchOperation, ColumnFamilyId, DatabaseId, Error, InternalKey, InternalKeyCodec,
     InternalKeyComparator, Limits, Result, SequenceNumber, ValueType, WriteBatch,
 };
+pub use forgedb_sstable::CacheStats;
 pub use inventory::FileInventory;
 pub use iterator::DbIterator;
+pub use obsolete::CleanupReport;
 pub use options::Options;
 pub use read_options::ReadOptions;
 pub use recovery_plan::RecoveryPlan;
