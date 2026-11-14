@@ -70,6 +70,7 @@
 | I-059 | Active CF registry содержит только проверенные уникальные ID/names и публикуется после durable child initialization. | draft v0.7.0 | registry CRC32C/malformed rejection; `corrupted_registry_fails_closed_without_silent_reset` |
 | I-060 | Удалённые/неопознанные CF directories не подключаются и не удаляются по догадке; числовой ID не переиспользуется. | draft v0.7.0 | `drop_is_logical_and_name_reuse_cannot_recover_old_data`, `orphan_directory_from_crash_is_not_reused_or_cleaned` |
 | I-061 | Snapshot/transaction не смешивает состояния разных named CF, а read-only/open error не создаёт новую живую family. | draft v0.7.0 | `transaction_snapshots_and_conflicts_are_scoped_to_one_family`, `readonly_rejects_mutations_and_missing_registered_family_is_corruption` |
+| I-062 | Операции с CF registry и закрытие facade сериализованы; symlink/missing orphan path не превращается в live family. | draft v0.7.0 | `column_families.rs` registry mutex + symlink metadata; integration reopen/drop/orphan tests |
 
 ## Правило изменения
 
