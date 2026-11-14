@@ -535,8 +535,10 @@ mod tests {
 
     #[test]
     fn registry_rejects_damage_and_duplicate_names() -> Result<()> {
-        let mut data = RegistryData::default();
-        data.next_id = 3;
+        let mut data = RegistryData {
+            next_id: 3,
+            ..RegistryData::default()
+        };
         data.names.insert(1, "events".to_owned());
         data.names.insert(2, "sessions".to_owned());
         let bytes = encode_registry(&data)?;
