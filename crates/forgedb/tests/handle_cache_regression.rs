@@ -72,8 +72,7 @@ fn point_read_budget_one_evicts_and_reopens_without_losing_values() -> Result<()
 
     database.close()?;
     drop(database);
-    fs::remove_dir_all(&path)
-        .map_err(|source| Error::io("remove_test_dir", Some(path), source))?;
+    fs::remove_dir_all(&path).map_err(|source| Error::io("remove_test_dir", Some(path), source))?;
     Ok(())
 }
 
@@ -109,8 +108,7 @@ fn pinned_scan_survives_compaction_and_retirement_evicts_windows_handles() -> Re
 
     database.close()?;
     drop(database);
-    fs::remove_dir_all(&path)
-        .map_err(|source| Error::io("remove_test_dir", Some(path), source))?;
+    fs::remove_dir_all(&path).map_err(|source| Error::io("remove_test_dir", Some(path), source))?;
     Ok(())
 }
 
