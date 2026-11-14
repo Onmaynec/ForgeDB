@@ -1,72 +1,54 @@
-# ForgeDB v0.8.1 — SST Handle Cache & Reliability
+# ForgeDB v0.8.2 — Streaming SST Handle Pool
 
 Статус: GitHub Pre-release.
 
-Исправительный выпуск v0.8.1 сокращает число постоянно открытых SST-файлов при обычных точечных чтениях и исправляет порядок освобождения дескрипторов перед очисткой retired SSTable на Windows. Форматы хранения и совместимость баз v0.8.0 сохранены.
+В этой версии продолжаю работу над контролем количества открытых SST-файлов. В v0.8.1 общий кэш дескрипторов использовался точечными чтениями (`GET`), но потоковые курсоры `SCAN` удерживали по одному `File` на весь срок жизни итератора. Теперь они читают следующие блоки через тот же bounded LRU, что и GET. Аналогичный путь используется для чтения входных SST во время compaction. Форматы данных на диске не меняются.
 
-## Новый SST handle cache
+## Изменения
 
-Раньше `TableReader` удерживал отдельный физический файловый дескриптор до окончания жизни `VersionSet`. При большом количестве SSTable это могло исчерпать лимит открытых файлов, несмотря на lazy data block reads.
+- `SstEntryCursor::open_pooled` валидирует header, footer, index, Bloom filter, properties и первый data block SST, после чего закрывает отдельный исходный `File`. При переходе к очередному data block получает дескриптор через общий `Arc<TableHandlePool>`.
+- `Database::scan` теперь подключает streaming cursors к тому же LRU, что и point `GET`. Открытые итераторы продолжают удерживать исходное поколение `VersionSet`, поэтому закрытие File в LRU не разрешает преждевременное удаление SST.
+- Compaction читает входные SST через `table_scan::read_entries_pooled`: вместо `fs::read` всего файла используется потоковый cursor с ограничением числа resident SST handles.
+- При повторном открытии pooled File проверяются физический размер, идентификатор базы, номер SST, диапазон sequence numbers и контрольная сумма заголовка. CRC32C каждого data block и прежние инварианты чтения сохранены.
+- `table_handle_stats()` для `Database` и `ColumnFamilies` отражает resident read pool: `capacity`, `open_handles`, `hits`, `misses`, `evictions`, `reopens`.
+- После удаления доказанно retired SST его номер очищается из `seen` кэша; нет бесконечного накопления IDs уже удалённых таблиц.
 
-Теперь `Options::table_cache_capacity` действительно задаёт максимальное число одновременно хранимых native **point-read** SST handles внутри одной базы (по умолчанию 512). Кэш использует LRU eviction. Дескриптор открывается при первом физическом чтении data block и закрывается при вытеснении. Все поколения `VersionSet`, включая старые snapshots, используют общий pool.
+## Контракт для файловых дескрипторов
 
-При повторном открытии файла проверяются его размер, database identity, номер SST, диапазон sequence numbers и checksum заголовка. Прочитанные data blocks проходят существующую проверку BlockHandle, CRC32C и decoder. Физический FD закрывается *перед* открытием следующего при заполненном pool. Один mutex обеспечивает строго ограниченную вместимость, но может уменьшить параллелизм точечных SST чтений.
+`Options::table_cache_capacity` ограничивает одновременно открытые **resident File внутри общего SST read pool** одного `Database`. Это относится к `GET`, следующим блокам `SCAN` и входным SST compaction. При переполнении LRU сначала закрывает прежний дескриптор, затем открывает новый. Пул сериализует операции mutex, сохраняя строгую квоту для собственной резидентности.
 
-## Метрики
+**Ограничение:** это не process-wide OS FD limit. Начальная валидация каждого cursor кратковременно открывает отдельный File вне pool, а создание SST outputs, WAL, MANIFEST, LOCK, deep verify и другие базы/именованные семьи используют отдельные descriptors. В момент проверки нового cursor все открытые FD процесса могут превышать `table_cache_capacity`; статистика показывает только resident pool. Общая задача #31 остаётся открытой.
 
-Доступна диагностика через `Database::table_handle_stats()` или `ColumnFamilies::table_handle_stats(id)`:
+Новый доступ к файлам не означает автоматического улучшения throughput, latency или RSS: shared mutex может ограничить параллелизм чтений. Для выводов о производительности нужны отдельные воспроизводимые benchmarks.
 
-```rust
-let stats = database.table_handle_stats()?;
-println!(
-    "open={}/{} hits={} misses={} evictions={} reopens={}",
-    stats.open_handles, stats.capacity, stats.hits, stats.misses,
-    stats.evictions, stats.reopens
-);
-```
+## Регрессионные тесты
 
-`Database::cache_stats()` по-прежнему относится к отдельному кэшу decoded data blocks в памяти. Значение `block_cache_size` никак не подменяется новым лимитом.
+- 48 SST, 480 записей и `table_cache_capacity=1`: проверены все значения, сортировка, LRU eviction, повторное открытие ранее вытесненного SST и reopening базы.
+- Четыре параллельных `GET` worker и потоковый `SCAN` одновременно используют один LRU с capacity 1.
+- Compaction с несколькими многоблочными SST inputs использует общий pool; активный старый iterator сохраняет право на чтение, а очистка удаляет retired SST только после release.
+- Добавлен отдельный ручной тест на 1024 SST. Он помечен `#[ignore]` и не считается пройденным в стандартном CI.
+- Сохранены прежние тесты recovery, MVCC transactions, FQL, named Column Families и checksum.
 
-## Windows-safe cleanup
+Функциональный PR [#43](https://github.com/Onmaynec/ForgeDB/pull/43), head `771f9a0feaf916e2ac9d53544364b60bf5bd6fb7`. [CI #43560292687](https://github.com/Onmaynec/ForgeDB/actions/runs/43560292687) завершён успешно: Ubuntu stable, Windows stable и Rust 1.89.
 
-После compaction удаляются только файлы, которые были выведены из подтверждённой MANIFEST topology и более не удерживаются `TableReader`. Очистка теперь сначала закрывает сохранённый в pool файловый дескриптор, а затем вызывает `remove_file`, устраняя sharing violation для такого read handle на Windows. При живом старом iterator/snapshot reader физическое удаление по-прежнему откладывается.
+## Совместимость
 
-Неизвестные orphan SST после restart не удаляются автоматически.
+Форматы IDENTITY V1, WAL V1, Internal Key V1, SSTable V1, MANIFEST reader V1–V2 / writer V2, CURRENT V1 и CF_REGISTRY V1 не меняются. Базы из v0.8.1 не требуют миграции. Команды `forgedb fql`, `forgedb shell`, `forgedb cf` и остальные CLI продолжают работать.
 
-## Проверки
+Компактация по-прежнему формирует bounded набор entries для merge: поддержка общего дескрипторного пула не является новым алгоритмом потоковой записи. Никаких mixed-family atomic transactions или глобального FD budget для нескольких открытых child DB в этой версии нет.
 
-Feature PR [#40](https://github.com/Onmaynec/ForgeDB/pull/40), head `d3a39c211efb1865fd8dd10b92bdfcb63e97d58e`, [CI #43558647759](https://github.com/Onmaynec/ForgeDB/actions/runs/43558647759): Ubuntu stable, Windows stable, Rust 1.89 — **success**.
+## Сборки и загрузки
 
-Добавлены тесты:
-- `point_read_budget_one_evicts_and_reopens_without_losing_values` — capacity=1, несколько SST, LRU eviction, restart;
-- `native_handle_cache_reopens_with_bounded_fd_and_rechecks_header` — повреждённый header после eviction отвергается, восстановленный файл снова читается;
-- `pinned_scan_survives_compaction_and_retirement_evicts_windows_handles` — reference-aware compaction/cleanup и порядок удаления;
-- `transaction_conflicts_and_snapshot_reads_survive_fd_eviction` — MVCC snapshots и optimistic transaction conflicts после reopen.
+В GitHub Pre-release публикуются готовые x86-64 CLI:
 
-Предварительные CI проверяют rustfmt, Clippy `-D warnings`, workspace tests, doctests, release build и benchmark smoke; release workflow повторяет Linux gate.
+- `forgedb-v0.8.2-windows-x86_64.zip` — `forgedb.exe`;
+- `forgedb-v0.8.2-linux-x86_64.tar.gz` — `forgedb`.
 
-## Честные ограничения
-
-**Это не общий лимит всех файловых дескрипторов процесса.** `table_cache_capacity` учитывает только point-read pool одного `Database`; streaming range cursors, compaction, temporary writes, WAL/MANIFEST/LOCK и другие named Column Families работают с отдельными дескрипторами. Поэтому общая [Issue #31](https://github.com/Onmaynec/ForgeDB/issues/31) остаётся открытой.
-
-Скорость запросов и RSS не объявляются улучшенными без воспроизводимого сравнения: shared mutex сериализует point-read physical I/O и имеет trade-off по throughput. Unified Column Families и mixed-CF atomic WAL из [Issue #35](https://github.com/Onmaynec/ForgeDB/issues/35) не входят в v0.8.1.
-
-Persisted IDENTITY V1, WAL V1, Internal Key V1, SSTable V1, MANIFEST writer V2/reader V1–V2, CURRENT V1 и CF_REGISTRY V1 не менялись. Миграция не требуется.
-
-## CLI для Windows и Linux
-
-GitHub Pre-release публикует два x86-64 архива и отдельные SHA-256 checksums:
-
-- `forgedb-v0.8.1-windows-x86_64.zip` — `forgedb.exe`;
-- `forgedb-v0.8.1-linux-x86_64.tar.gz` — `forgedb`.
-
-Существующие `forgedb fql`, `forgedb shell`, `forgedb cf` и остальные CLI команды не изменены. Инструкция по установке и проверке checksum: `docs/QUICKSTART.md`.
+Для каждого архива публикуется отдельная `.sha256` с контрольной суммой. Дополнительный Rust toolchain для запуска не нужен. Подробности установки и проверки: `docs/QUICKSTART.md`.
 
 ## Документация
 
-- `docs/releases/V0.8.1.md`;
-- `docs/adr/0017-bounded-sst-handle-cache.md`;
-- `docs/CACHE_AND_PERFORMANCE.md`;
-- `docs/OPTIONS.md`;
-- `docs/INVARIANTS.md`;
+- `docs/releases/V0.8.2.md` — scope и проверки версии;
+- `docs/adr/0018-streaming-sst-handle-leases.md` — lifetime cursors и ресурсные границы;
+- `docs/CACHE_AND_PERFORMANCE.md`, `docs/OPTIONS.md`, `docs/INVARIANTS.md`;
 - `CHANGELOG.md`.
