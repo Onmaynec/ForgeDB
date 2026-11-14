@@ -11,6 +11,7 @@
 - SST read handle LRU дополнен `BTreeSet<(last_access, file_number)>`; выбор File для eviction O(log N) вместо O(N) прохода по resident map. Hit/miss/retirement синхронно обновляют оба индекса. Сам hit получает дополнительные O(log N) действия по LRU и O(N) дополнительную память индекса.
 - `DbIterator::advance_source` копирует только `InternalKey`, а не `TableEntry` с value. `consume_item` не клонирует value у старых/невидимых MVCC версий, сохраняя проверку source ordering, snapshot visibility и tombstone.
 - `VersionSet::latest_sequence_after` выполняет newest-first L0 с sequence cutoff, binary search L1+ по дискретным key ranges вместо линейного перебора файлов каждого уровня.
+- Публичный streaming `scan` использует `VersionSet::files_for_scan()` с borrowed handles вместо O(N) выделения `Vec<TableHandle>` и клонирования ссылок на все SST. Пересечения range проверяются до открытия cursor; сам overlap-check пока O(N).
 - Добавлен `examples/performance_bench.rs` для cold/warm GET, streaming SCAN, p50/p95/p99, ops/sec и SST FD metrics, новый benchmark smoke включён в Ubuntu/Windows CI, а расширенный Linux workload с 8192 ключами и capacity=8 проверяет, что реальное eviction произошло.
 - Регрессии: LRU 2/3 SST с точными counters, leveled compaction+transaction conflicts, 128-KiB values и исторические snapshot версии.
 
