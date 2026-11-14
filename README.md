@@ -330,6 +330,7 @@ cargo build --locked --workspace --release
 ## Документация
 
 - [`docs/GA_READINESS.md`](docs/GA_READINESS.md);
+- [`docs/MIGRATION_TO_V1.md`](docs/MIGRATION_TO_V1.md);
 - [`docs/releases/V1.0.0.md`](docs/releases/V1.0.0.md);
 - [`docs/formats/LOGICAL_ARCHIVE_V1.md`](docs/formats/LOGICAL_ARCHIVE_V1.md);
 - [`docs/adr/0020-stable-ga-portable-archive.md`](docs/adr/0020-stable-ga-portable-archive.md);
