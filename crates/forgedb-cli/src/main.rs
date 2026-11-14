@@ -221,7 +221,10 @@ fn run_doctor(path: PathBuf, deep: bool) -> Result<()> {
     if !plan.can_open_normally() {
         return Err(Error::corruption(
             "doctor recovery plan",
-            format!("обнаружено {} blockers; исправления и удаление не выполнялись", plan.blockers.len()),
+            format!(
+                "обнаружено {} blockers; исправления и удаление не выполнялись",
+                plan.blockers.len()
+            ),
         ));
     }
     let database = Database::open(
