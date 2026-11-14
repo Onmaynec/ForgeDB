@@ -80,6 +80,9 @@
 | I-069 | Streaming SST cursor после проверки metadata/первого блока не хранит отдельный долгоживущий File; все последующие blocks используют общий resident handle LRU. | обеспечен v0.8.2 | `scan_many_sst_with_capacity_one_and_reopen_preserves_order_and_bytes`; `concurrent_get_and_streaming_scans_share_one_fd_budget` |
 | I-070 | Compaction inputs используют тот же SST read pool, но старый iterator по-прежнему удерживает VersionSet и защищает физические SST от premature deletion. | обеспечен v0.8.2 | `compaction_inputs_use_bounded_pool_and_cleanup_preserves_old_scan` |
 | I-071 | LRU budget ограничивает resident SST read pool одного Database, не кратковременные init/metadata открытые File и не все дескрипторы процесса. | обеспечен v0.8.2 | `table_handle_stats()`, streaming pool regression suite, ADR 0018 |
+| I-072 | Native SST handle LRU index и resident File map согласованы на hit/miss/evict; выбор LRU не нарушает вместимость и правильный victim. | draft v0.9.0 | `ordered_handle_lru_keeps_most_recent_file_and_maintains_exact_metrics` |
+| I-073 | MVCC merge не меняет snapshot visibility, приоритет tombstone или обнаружение corrupt source при пропуске value clone. | draft v0.9.0 | `mvcc_merge_discards_large_invisible_values_without_losing_snapshot_semantics`, iterator unit tests |
+| I-074 | Conflict validation ищет максимальную committed sequence при перекрывающихся L0 и непересекающихся L1+ и не допускает stale transaction commit. | draft v0.9.0 | `conflict_validation_binary_search_finds_versions_in_leveled_sst`, transaction regression suite |
 
 ## Правило изменения
 
