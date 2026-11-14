@@ -310,6 +310,18 @@ impl VersionSet {
         self.block_cache.evict_table(file_number)
     }
 
+    /// Zero-allocation обход SST для публичного streaming scan.
+    /// Не клонирует Arc<TableReader> всех файлов при построении итератора:
+    /// сам DbIterator держит VersionSet lease и создаёт cursor только для
+    /// реально перекрывающих запрошенный range SST.
+    pub(crate) fn files_for_scan(&self) -> impl Iterator<Item = &TableHandle> {
+        self.levels
+            .first()
+            .into_iter()
+            .flat_map(|level| level.iter().rev())
+            .chain(self.levels.iter().skip(1).flat_map(|level| level.iter()))
+    }
+
     pub(crate) fn files_in_read_order(&self) -> Result<Vec<TableHandle>> {
         let level_zero = self.levels.first().ok_or(Error::InternalInvariant {
             invariant: "I-VERSIONSET-L0-PRESENT",
