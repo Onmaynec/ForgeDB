@@ -130,17 +130,24 @@ impl TableHandlePool {
             // линейного обхода всех resident handles при каждом eviction.
             // Сначала закрываем старый FD, чтобы не превышать budget на reopen.
             if state.opened.len() >= self.capacity {
-                let (access, oldest) = state.lru.iter().next().copied().ok_or(
-                    Error::InternalInvariant {
-                        invariant: "I-SST-HANDLE-LRU",
-                        reason: "open_handles > 0, но LRU пуст".to_owned(),
-                    },
-                )?;
+                let (access, oldest) =
+                    state
+                        .lru
+                        .iter()
+                        .next()
+                        .copied()
+                        .ok_or(Error::InternalInvariant {
+                            invariant: "I-SST-HANDLE-LRU",
+                            reason: "open_handles > 0, но LRU пуст".to_owned(),
+                        })?;
                 state.lru.remove(&(access, oldest));
-                state.opened.remove(&oldest).ok_or(Error::InternalInvariant {
-                    invariant: "I-SST-HANDLE-LRU",
-                    reason: "LRU ссылается на отсутствующий File".to_owned(),
-                })?;
+                state
+                    .opened
+                    .remove(&oldest)
+                    .ok_or(Error::InternalInvariant {
+                        invariant: "I-SST-HANDLE-LRU",
+                        reason: "LRU ссылается на отсутствующий File".to_owned(),
+                    })?;
                 state.evictions = state.evictions.saturating_add(1);
             }
             let actual_size = NativeFileSystem.file_size(path)?;
@@ -186,10 +193,14 @@ impl TableHandlePool {
         }
         // Всегда держим LRU и opened в одинаковом состоянии.
         // Даже при повторном чтении File владеет handle до конца callback.
-        let previous = state.opened.get(&number).ok_or(Error::InternalInvariant {
-            invariant: "I-SST-HANDLE-LRU",
-            reason: "открытый reader отсутствует в pool".to_owned(),
-        })?.access;
+        let previous = state
+            .opened
+            .get(&number)
+            .ok_or(Error::InternalInvariant {
+                invariant: "I-SST-HANDLE-LRU",
+                reason: "открытый reader отсутствует в pool".to_owned(),
+            })?
+            .access;
         if was_open && !state.lru.remove(&(previous, number)) {
             return Err(Error::InternalInvariant {
                 invariant: "I-SST-HANDLE-LRU",
@@ -198,10 +209,13 @@ impl TableHandlePool {
         }
         let access = state.tick();
         state.lru.insert((access, number));
-        let entry = state.opened.get_mut(&number).ok_or(Error::InternalInvariant {
-            invariant: "I-SST-HANDLE-LRU",
-            reason: "открытый reader отсутствует в pool".to_owned(),
-        })?;
+        let entry = state
+            .opened
+            .get_mut(&number)
+            .ok_or(Error::InternalInvariant {
+                invariant: "I-SST-HANDLE-LRU",
+                reason: "открытый reader отсутствует в pool".to_owned(),
+            })?;
         entry.access = access;
         read(&mut entry.file)
     }
