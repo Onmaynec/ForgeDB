@@ -181,7 +181,10 @@ impl ArchiveReader {
 
     fn finish(&mut self) -> Result<()> {
         if self.u8()? != ARCHIVE_END {
-            return Err(Error::corruption("logical archive", "отсутствует завершающий marker"));
+            return Err(Error::corruption(
+                "logical archive",
+                "отсутствует завершающий marker",
+            ));
         }
         let actual = !self.crc;
         let mut expected = [0_u8; 4];
@@ -201,7 +204,10 @@ impl ArchiveReader {
             .map_err(|source| Error::io("read_archive_trailing", None, source))?
             != 0
         {
-            return Err(Error::corruption("logical archive", "лишние байты после checksum"));
+            return Err(Error::corruption(
+                "logical archive",
+                "лишние байты после checksum",
+            ));
         }
         Ok(())
     }
@@ -216,25 +222,32 @@ fn exclusive_file(path: &Path) -> Result<File> {
 }
 
 fn temporary_path(path: &Path, suffix: &str) -> Result<PathBuf> {
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     if !parent.is_dir() {
-        return Err(Error::invalid_argument("path", "родительский каталог не существует"));
+        return Err(Error::invalid_argument(
+            "path",
+            "родительский каталог не существует",
+        ));
     }
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    Ok(parent.join(format!(
-        ".forgedb-{suffix}-{}-{stamp}",
-        std::process::id()
-    )))
+    Ok(parent.join(format!(".forgedb-{suffix}-{}-{stamp}", std::process::id())))
 }
 
 fn path_present(path: &Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
         Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(source) => Err(Error::io("stat_archive_path", Some(path.to_owned()), source)),
+        Err(source) => Err(Error::io(
+            "stat_archive_path",
+            Some(path.to_owned()),
+            source,
+        )),
     }
 }
 
@@ -243,7 +256,10 @@ fn path_present(path: &Path) -> Result<bool> {
 /// preventing overwrite of an existing user file even under a race.
 pub(crate) fn export(database_path: &Path, archive_path: &Path) -> Result<()> {
     if path_present(archive_path)? {
-        return Err(Error::invalid_argument("archive", "файл архива уже существует"));
+        return Err(Error::invalid_argument(
+            "archive",
+            "файл архива уже существует",
+        ));
     }
     let families = ColumnFamilies::open(
         database_path,
@@ -309,8 +325,9 @@ pub(crate) fn export(database_path: &Path, archive_path: &Path) -> Result<()> {
         families.close()?;
         // Unlike rename, hard_link cannot replace a pre-existing destination.
         // The staging and target share one parent/filesystem.
-        fs::hard_link(&temp, archive_path)
-            .map_err(|source| Error::io("publish_archive", Some(archive_path.to_owned()), source))?;
+        fs::hard_link(&temp, archive_path).map_err(|source| {
+            Error::io("publish_archive", Some(archive_path.to_owned()), source)
+        })?;
         Ok(())
     })();
     let cleanup = fs::remove_file(&temp);
@@ -326,7 +343,10 @@ pub(crate) fn export(database_path: &Path, archive_path: &Path) -> Result<()> {
 /// database is renamed into place.
 pub(crate) fn restore(archive_path: &Path, target: &Path) -> Result<()> {
     if path_present(target)? {
-        return Err(Error::invalid_argument("destination", "каталог назначения уже существует"));
+        return Err(Error::invalid_argument(
+            "destination",
+            "каталог назначения уже существует",
+        ));
     }
     let input = File::open(archive_path)
         .map_err(|source| Error::io("open_archive", Some(archive_path.to_owned()), source))?;
@@ -342,7 +362,10 @@ pub(crate) fn restore(archive_path: &Path, target: &Path) -> Result<()> {
             let mut names = std::collections::BTreeSet::new();
             for index in 0..families_count {
                 if archive.u8()? != FAMILY_START {
-                    return Err(Error::corruption("logical archive", "ожидалась запись family"));
+                    return Err(Error::corruption(
+                        "logical archive",
+                        "ожидалась запись family",
+                    ));
                 }
                 let name_size = usize::from(archive.u16()?);
                 let name = archive.vector(name_size, MAX_FAMILY_NAME_BYTES)?;
@@ -350,7 +373,10 @@ pub(crate) fn restore(archive_path: &Path, target: &Path) -> Result<()> {
                     Error::corruption("logical archive", "имя family не является UTF-8")
                 })?;
                 if !names.insert(name.clone()) {
-                    return Err(Error::corruption("logical archive", "дублирование имени family"));
+                    return Err(Error::corruption(
+                        "logical archive",
+                        "дублирование имени family",
+                    ));
                 }
                 let id = if index == 0 {
                     if name != "default" {
@@ -362,7 +388,10 @@ pub(crate) fn restore(archive_path: &Path, target: &Path) -> Result<()> {
                     ColumnFamilyId::DEFAULT
                 } else {
                     if name == "default" {
-                        return Err(Error::corruption("logical archive", "повторная default family"));
+                        return Err(Error::corruption(
+                            "logical archive",
+                            "повторная default family",
+                        ));
                     }
                     families.create(&name)?
                 };
@@ -396,10 +425,14 @@ pub(crate) fn restore(archive_path: &Path, target: &Path) -> Result<()> {
         import?;
         closing?;
         if path_present(target)? {
-            return Err(Error::invalid_argument("destination", "назначение появилось во время restore"));
+            return Err(Error::invalid_argument(
+                "destination",
+                "назначение появилось во время restore",
+            ));
         }
-        fs::rename(&temp, target)
-            .map_err(|source| Error::io("publish_restored_database", Some(target.to_owned()), source))
+        fs::rename(&temp, target).map_err(|source| {
+            Error::io("publish_restored_database", Some(target.to_owned()), source)
+        })
     })();
     if result.is_err() {
         let _ = fs::remove_dir_all(&temp);
