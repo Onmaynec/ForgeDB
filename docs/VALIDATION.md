@@ -71,6 +71,8 @@ cargo +1.89 test --locked --workspace --all-features
 - `ordered_handle_lru_keeps_most_recent_file_and_maintains_exact_metrics`: бюджет 2, три distinct SST, повторное обращение к alpha делает его MRU; появление третьего файла вытесняет правильный LRU. Точные `hits/misses/evictions/reopens`, нет превышения capacity.
 - `conflict_validation_binary_search_finds_versions_in_leveled_sst`: сотни записей, forced compaction, point reads из L1+, optimistic transaction conflict после BEGIN, reopen и latest.
 - `mvcc_merge_discards_large_invisible_values_without_losing_snapshot_semantics`: 128-KiB values, множество overwrites, read old snapshot и latest scan, tombstone suppression.
+- `narrow_range_scan_preserves_order_across_many_sst_without_handle_vector`: 48 SST, диапазон через границу двух SST, ключи внутри и вне half-open границ в правильном порядке.
+
 - Обязателен старый CI набор: WAL/manifest/corruption/recovery, FQL, named Column Families, streaming cursor, Windows-safe cleanup, Rust 1.89.
 - `cargo run --locked --release -p forgedb --example performance_bench -- 256 1024` — benchmark smoke на Ubuntu/Windows stable. Дополнительно Ubuntu выполняет полный workload `-- 8192 32768` и отвергает сценарий, в котором при 64 SST и `table_cache_capacity=8` не произошло ни одного eviction. Это проверка измерителя и задействованного пути, не подтверждение процентного ускорения.
 - Полный workload `-- 8192 32768`, сравнение с одинаковой конфигурацией на одной машине, несколько прогонов, оценка p50/p95/p99 и scan throughput. Описан в [PERFORMANCE_BENCHMARK.md](PERFORMANCE_BENCHMARK.md).
