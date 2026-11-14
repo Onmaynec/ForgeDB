@@ -2038,17 +2038,21 @@ mod tests {
         Ok(path)
     }
 
-    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 
     struct CountingReader {
         file: fs::File,
         bytes_read: Arc<AtomicUsize>,
+        corrupt_reads: Arc<AtomicBool>,
     }
 
     impl Read for CountingReader {
         fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
             let size = self.file.read(buffer)?;
             self.bytes_read.fetch_add(size, AtomicOrdering::Relaxed);
+            if size > 0 && self.corrupt_reads.load(AtomicOrdering::Relaxed) {
+                buffer[0] ^= 0xff;
+            }
             Ok(size)
         }
     }
@@ -2062,6 +2066,7 @@ mod tests {
     #[derive(Clone)]
     struct CountingFileSystem {
         bytes_read: Arc<AtomicUsize>,
+        corrupt_reads: Arc<AtomicBool>,
     }
 
     impl FileSystem for CountingFileSystem {
@@ -2082,6 +2087,7 @@ mod tests {
             Ok(CountingReader {
                 file: NativeFileSystem.open_random_access(path)?,
                 bytes_read: Arc::clone(&self.bytes_read),
+                corrupt_reads: Arc::clone(&self.corrupt_reads),
             })
         }
 
@@ -2131,6 +2137,7 @@ mod tests {
         let directory = temporary_directory("bounded-open")?;
         let fs = CountingFileSystem {
             bytes_read: Arc::new(AtomicUsize::new(0)),
+            corrupt_reads: Arc::new(AtomicBool::new(false)),
         };
         let limits = Limits::default();
         let id = DatabaseId::random();
@@ -2175,6 +2182,50 @@ mod tests {
             TableLookup::Value(vec![50; 700])
         );
         assert_eq!(fs.bytes_read.load(AtomicOrdering::Relaxed), after_first);
+        drop(reader);
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_data_block_checksum_is_verified_when_read_after_open() -> Result<()> {
+        let directory = temporary_directory("read-time-checksum")?;
+        let fs = CountingFileSystem {
+            bytes_read: Arc::new(AtomicUsize::new(0)),
+            corrupt_reads: Arc::new(AtomicBool::new(false)),
+        };
+        let limits = Limits::default();
+        let id = DatabaseId::random();
+        let meta = build_table(
+            &NativeFileSystem,
+            TableBuildRequest::new(
+                &directory,
+                &directory.join("TEMP"),
+                id,
+                32,
+                &entries(&limits)?,
+                &limits,
+                TableBuildOptions {
+                    data_block_size: 1024,
+                    restart_interval: 2,
+                    bloom_bits_per_key: 10,
+                },
+            ),
+        )?;
+        let reader = TableReader::open(&fs, &directory, id, &meta, &limits, 16 * 1024 * 1024)?;
+        let cache = BlockCache::new(64 * 1024);
+        fs.corrupt_reads.store(true, AtomicOrdering::Relaxed);
+        assert!(matches!(
+            reader.get_at_cached(b"alpha", Some(SequenceNumber::new(3)?), &cache),
+            Err(Error::Corruption { .. })
+        ));
+        assert_eq!(cache.stats()?.resident_blocks, 0);
+        fs.corrupt_reads.store(false, AtomicOrdering::Relaxed);
+        assert_eq!(
+            reader.get_at_cached(b"alpha", Some(SequenceNumber::new(3)?), &cache)?,
+            TableLookup::Value(b"one".to_vec())
+        );
         drop(reader);
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
