@@ -198,6 +198,24 @@ fn scan_limit_is_respected_and_read_only_refuses_mutations()
 }
 
 #[test]
+fn oversized_repl_line_is_discarded_without_desynchronizing_next_line(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let path = temporary_directory("oversized-repl")?;
+    let oversized = format!("PUT {} garbage\nPUT safe saved\nGET safe\nEXIT\n", "x".repeat(70_000));
+    let output = piped_shell(&path, &oversized)?;
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("fql_statement_bytes"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("'saved'\n"));
+    assert_eq!(fql(&path, "GET safe", true)?.stdout, b"'saved'\n");
+
+    let invalid_script = file_script(&path, &format!("# {}\nPUT too_late value\n", "a".repeat(70_000)))?;
+    assert_eq!(invalid_script.status.code(), Some(2));
+    assert_eq!(fql(&path, "GET too_late", true)?.stdout, b"NULL\n");
+    fs::remove_dir_all(path)?;
+    Ok(())
+}
+
+#[test]
 fn changing_families_during_transaction_is_rejected_and_not_applied()
 -> Result<(), Box<dyn std::error::Error>> {
     let path = temporary_directory("transaction-scope")?;
