@@ -48,6 +48,8 @@ Compaction inputs теперь выполняют `read_entries_pooled` на о�
 
 Transaction conflict detection `VersionSet::latest_sequence_after` использует L0 newest-first с sequence pruning; на непересекающихся L1+ выполняет `partition_point` по `largest_user_key`, выбирая один кандидат. Предварительно `VersionSet::validate` подтверждает disjoint ranges L1+, поэтому переход корректен.
 
+При streaming scan `VersionSet::files_for_scan()` выдаёт borrowed iterator, а не `files_in_read_order()` с клонированным `Vec<TableHandle>`. Фильтрация SST range выполняется перед созданием `SstEntryCursor`; `DbIterator` удерживает VersionSet lease как и прежде. Это снижает transient allocations, не превращая O(N) проверку диапазона в binary seek.
+
 Контракты/границы: [ADR 0019](adr/0019-performance-engine.md), [performance benchmark](PERFORMANCE_BENCHMARK.md). Нет изменений persisted WAL/SST/MANIFEST/CF_REGISTRY или глобальной FD-квоты.
 
 ## Состав workspace
