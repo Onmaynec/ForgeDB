@@ -264,6 +264,11 @@ impl VersionSet {
         self.handle_pool.stats()
     }
 
+    /// Все поколения VersionSet и streaming cursors разделяют один SST FD budget.
+    pub(crate) fn handle_pool(&self) -> Arc<TableHandlePool> {
+        Arc::clone(&self.handle_pool)
+    }
+
     pub(crate) fn is_live_file(&self, file_number: u64) -> bool {
         self.levels
             .iter()
