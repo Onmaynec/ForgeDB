@@ -25,6 +25,7 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace --all-features
       - run: cargo test --locked --workspace --doc
+      - run: cargo doc --locked --workspace --no-deps
       - run: cargo build --locked --workspace --release
       - run: cargo run --locked --release -p forgedb --example point_lookup_bench -- 256 1024
       - run: cargo run --locked --release -p forgedb --example performance_bench -- 256 1024
