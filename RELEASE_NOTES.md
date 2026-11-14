@@ -1,73 +1,81 @@
-# ForgeDB v0.9.0 — Performance Engine
+# ForgeDB v1.0.0 — Stable General Availability
 
-Статус: GitHub Pre-release.
+ForgeDB v1.0.0 — первый **стабильный выпуск** локального встраиваемого LSM key-value движка на Rust и консольного инструмента для Windows/Linux x86-64. В отличие от Pre-release версий v0.x, для него закреплены поддерживаемые API и форматы данных, обязательная кроссплатформенная проверка, документация перехода и выпуск бинарников только после их реального тестирования.
 
-Этот выпуск посвящён оптимизации горячих путей embedded key-value движка. Устранены лишний линейный поиск в SST handle LRU, копирования больших значений при MVCC merge, полный проход по непересекающимся SST во время проверки конфликтов транзакций и временное клонирование всех SST handles при запуске `SCAN`. Форматы данных на диске, транзакционная изоляция и существующий CLI сохранены.
+## Что нового в v1.0.0
 
-## 1. Индексированный SST handle LRU
+### 1. Перенос данных между системами: export и restore
 
-Native SST File pool теперь использует два согласованных индекса: `BTreeMap<file_number, CachedHandle>` и `BTreeSet<(last_access, file_number)>`. При заполненном пуле выбор жертвы больше не сканирует все N открытых файлов (`O(N)`), а берёт oldest из ordered index за `O(log N)`. Hit/miss/retirement обновляют индексы под общим mutex. Кэш не оставляет более `table_cache_capacity` resident File, включая параллельные GET, streaming SCAN и compaction inputs одного Database.
-
-**Обмен:** появляется одна служебная LRU запись на resident File, то есть O(N) дополнительной памяти, и обновление ordered index O(log N) на каждом hit. При маленьком количестве файлов отдельные операции могут не ускориться. Семантика Windows-safe cleanup остаётся: физическое удаление retired SST после освобождения readers и закрытия pooled FD.
-
-## 2. Меньше копирований в MVCC merge
-
-`DbIterator::advance_source` проверяет строгий порядок только по `InternalKey`, не клонирует целый `TableEntry.value`. `consume_item` пропускает copy value у истории ключа, которая не видна текущему snapshot или уже перекрыта найденной новой видимой записью. Ошибки нарушенного порядка, MVCC sequence, tombstones, snapshot visibility и `SCAN LIMIT` продолжают проверяться прежним способом.
-
-Это особенно актуально для больших values с многочисленными перезаписями, но не заменяет обязательное декодирование blocks и checksum validation.
-
-## 3. Быстрее выбор SST при проверке конфликтов
-
-`VersionSet::latest_sequence_after` продолжает проверять перекрывающиеся L0 (newest-first), но использует cutoff по `max(after_snapshot, newest_found)`, если SST физически не могла содержать новую sequence. На непересекающихся L1+ выбирается единственный возможный кандидат через `partition_point`, вместо линейного обхода всех SST в уровне. Оптимистическая транзакция по-прежнему не может записать stale value поверх более нового committed изменения.
-
-## 4. Легче запуск узких SCAN
-
-`VersionSet::files_for_scan()` возвращает заимствованный iterator по L0 newest-first и L1+ в порядке сортировки. Раньше `StreamingDatabase::scan` создавал временный `Vec<TableHandle>` для всех N live SST и клонировал каждый `Arc<TableReader>` до фильтрации range. Теперь сканирование проверяет overlaps непосредственно и создаёт курсоры только для подходящих SST.
-
-Временный список O(N) устранён, но проверка перекрытий по SST остаётся O(N): бинарный переход к первому диапазону `SCAN` не заявляется.
-
-## Регрессионные тесты
-
-- `ordered_handle_lru_keeps_most_recent_file_and_maintains_exact_metrics`: capacity 2, 3 SST, проверка MRU/LRU, точных cache hits, misses, evictions, reopens.
-- `conflict_validation_binary_search_finds_versions_in_leveled_sst`: 480 ключей, многослойная compaction, актуальные GET, optimistic transaction conflict, reopen.
-- `mvcc_merge_discards_large_invisible_values_without_losing_snapshot_semantics`: values 128 KiB, 16 исторических перезаписей, tombstones, old snapshot и latest scan.
-- `narrow_range_scan_preserves_order_across_many_sst_without_handle_vector`: 48 SST и узкий half-open range через соседние SST.
-- Весь прежний набор WAL/durability/recovery/crash, checksum/corruption, Column Families, FQL и Windows cleanup.
-
-Feature PR [#46](https://github.com/Onmaynec/ForgeDB/pull/46); feature head `78e7025c9807f3d9015819bb30721ab556e69c50`. [CI #43562510705](https://github.com/Onmaynec/ForgeDB/actions/runs/43562510705) успешно прошёл Ubuntu stable, Windows stable, Rust 1.89, rustfmt, strict Clippy, workspace tests/doctests, release build и оба benchmark режима.
-
-## Измерения: один воспроизводимый пример, не сравнение с прошлой версией
-
-На Ubuntu GitHub Actions, CI #43562510705, вызов:
+Добавил команды:
 
 ```bash
-cargo run --locked --release -p forgedb --example performance_bench -- 8192 32768
+forgedb export ./data ./backup.fdbk
+forgedb restore ./backup.fdbk ./restored-data
+forgedb doctor ./restored-data --deep
 ```
 
-Получено на **одном** CI runner:
+Архив `LOGICAL_ARCHIVE V1` содержит логические видимые пары ключ–значение **всех действующих Column Families**: обычной `default` и именованных. Поддерживаются произвольные бинарные ключи/значения, включая NUL, 0xFF и значения больше 128 KiB в пределах настроенных лимитов. Сохраняются имена families; их **числовые ID могут измениться** при восстановлении, потому после импорта используйте `cf list`.
 
-| Показатель | Результат |
-|---|---:|
-| 8192 ключей, value 256 B, 64 SST, block_cache_size=0 | конфигурация |
-| Resident SST handles | 8 из 8 |
-| Evictions / reopens | 65 589 / 65 533 |
-| Cold GET | 141 346 ops/sec; p50 6839 ns, p95 7423 ns, p99 9870 ns |
-| Warm GET | 142 421 ops/sec; p50 6820 ns, p95 7182 ns, p99 10309 ns |
-| Full SCAN | 8192 entries / 15,522 ms; 527 771 entries/sec |
+Архив имеет magic `FGDBBK01`, version 1, границы записей и итоговую CRC32C Castagnoli. Проверяются размеры до выделения памяти, порядок ключей, повторяющиеся имена, неизвестная версия, обрыв, checksum и лишние байты. Выходной архив создаётся во временном файле, синхронизируется и публикуется без перезаписи существующего. Restore **не изменяет действующую базу**: записывает во временный каталог, проверяет полный архив, закрывает WAL и публикует результат только в **новый** каталог. При обнаружении ошибок целевой каталог не создаётся.
 
-Здесь `block_cache_size=0` намеренно отключает decoded-block cache, чтобы путь действительно открывал SST через LRU. В полной нагрузке CI проверяет наличие evictions. Это **не** A/B с v0.8.2 на том же железе: процент ускорения из этих цифр не выводится, переносить их в SLA нельзя. Файловый кэш, планировщик, дисковая подсистема и параллельная нагрузка влияют на результат. Методика повторов и сравнения: `docs/PERFORMANCE_BENCHMARK.md`.
+**Границы:** каждая family экспортируется на **собственном MVCC snapshot**. Единой атомарной точки между независимыми families нет, как и глобальных mixed-family транзакций. Для согласованного multi-family экспорта остановите запись приложения. Это логический перенос, не поблочная резервная копия запущенного WAL/LSM. CRC32C обнаруживает случайные повреждения, но не является шифрованием или криптографической подписью.
 
-## Совместимость и границы
+Спецификация: [LOGICAL_ARCHIVE V1](docs/formats/LOGICAL_ARCHIVE_V1.md).
 
-Persisted IDENTITY V1, WAL V1, SSTable V1, MANIFEST reader V1–V2 / writer V2, CURRENT V1 и CF_REGISTRY V1 не меняются. Миграция базы не требуется. FQL/CLI commands `forgedb fql`, `forgedb shell`, `forgedb cf` и существующие API остаются совместимыми.
+### 2. Безопасная диагностика базы
 
-`table_cache_capacity` не гарантирует process-wide FD limit: initial validation Files, SST writers/outputs, WAL/MANIFEST/LOCK, deep verify, другие named child databases используют собственные handles. [Issue #31](https://github.com/Onmaynec/ForgeDB/issues/31) остаётся открытой. Глобальная mixed-family atomic WAL/MANIFEST архитектура [#35](https://github.com/Onmaynec/ForgeDB/issues/35) в этот выпуск не входит.
+```bash
+forgedb version
+forgedb doctor ./data
+forgedb doctor ./data --deep
+```
 
-## Готовые CLI архивы
+`doctor` выполняет проверку recovery plan и quick/deep verification в **read-only** режиме. При повреждениях и blockers возвращает код ошибки; он **не** удаляет файлы, не исправляет их автоматически и не запускает миграцию. Существующие CLI-команды `get` и `scan` тоже переведены на `read_only=true` и `create_if_missing=false`: опечатка в имени каталога больше не создаёт неожиданную новую базу.
 
-В GitHub Pre-release публикуются Windows x86-64 ZIP (`forgedb.exe`), Linux x86-64 TAR.GZ (`forgedb`) и отдельные SHA-256 файлы:
+### 3. Быстрее подготовка диапазонных запросов
 
-- `forgedb-v0.9.0-windows-x86_64.zip`;
-- `forgedb-v0.9.0-linux-x86_64.tar.gz`.
+При `SCAN` на уровнях L1+ с непересекающимися key ranges применяются `partition_point` и верхний cutoff, выбирающие кандидатов за **O(log N + K)** вместо полного просмотра всех SST на уровне. Для L0, где диапазоны могут пересекаться, прежний newest-first проход остаётся. Точные включённые/исключённые границы, MVCC snapshots, tombstones, проверка целостности и lifetime файлов сохранены.
 
-Документы: `docs/releases/V0.9.0.md`, `docs/adr/0019-performance-engine.md`, `docs/PERFORMANCE_BENCHMARK.md`, `docs/CACHE_AND_PERFORMANCE.md`, `docs/INVARIANTS.md`, `CHANGELOG.md`.
+Это улучшение сложности планирования, **не гарантия универсального роста throughput** без парного performance benchmark на одной среде.
+
+### 4. Реальный stable release pipeline
+
+Сборка v1.0.0 проходит Ubuntu/Windows stable и минимальную версию Rust **1.89**: rustfmt, строгий Clippy `-D warnings`, workspace/unit/integration/crash/recovery tests, doctests, `cargo doc`, release build и benchmark. Дополнительно release workflow строит CLI из **аннотированного immutable Git tag**, запускает на обеих ОС реальную последовательность `version → put → doctor --deep → export → restore → get`, проверяет содержимое и SHA-256 архивов.
+
+GitHub Release сначала создаётся как **Draft**; публикация в статусе **Stable** выполняется только после успешной сборки **обеих** платформ и проверки четырёх вложений:
+
+- `forgedb-v1.0.0-windows-x86_64.zip` и `.zip.sha256`;
+- `forgedb-v1.0.0-linux-x86_64.tar.gz` и `.tar.gz.sha256`.
+
+## Реально проверенное покрытие до релиза
+
+Функциональный [PR #49](https://github.com/Onmaynec/ForgeDB/pull/49) успешно прошёл [CI #43565530780](https://github.com/Onmaynec/ForgeDB/actions/runs/43565530780) на Ubuntu stable, Windows stable и Rust 1.89, точный исходный commit `3e49c667bf61f76cd2c483f962555d6cf91c972a`. Новые регрессии проверяют:
+
+- `stable_ga_cli`: deep doctor, отсутствие новых файлов при чтении несуществующей базы, binary key и 128-KiB value, три families, tombstones, restore после закрытия;
+- отказ от overwrite, повреждения CRC32C, усечения архива, неизвестной будущей версии и публикации частично восстановленного target;
+- `stable_range`: Included/Excluded/Unbounded bounds, snapshots, tombstones, compaction и reopen;
+- CRC32C known vector `123456789 → 0xE3069283`;
+- все предыдущие suites: WAL, SST, MANIFEST, crash recovery, transactions, FQL, compaction, Windows cleanup, Column Families и benchmark smoke.
+
+## Совместимость и установка
+
+Persisted `IDENTITY V1`, `CURRENT V1`, `WAL V1`, `SSTable V1`, `MANIFEST` reader V1–V2 / writer V2 и `CF_REGISTRY V1` **не изменены** относительно v0.9.0. Миграция дисковых файлов базы не требуется. Отдельный формат `LOGICAL_ARCHIVE V1` не используется движком для обычной записи.
+
+Готовые portable CLI для Windows/Linux не требуют установленного Rust. Для подключения **библиотеки** из исходников используется Git tag:
+
+```toml
+[dependencies]
+forgedb = { git = "https://github.com/Onmaynec/ForgeDB.git", tag = "v1.0.0" }
+```
+
+**Важно:** имя `forgedb` в crates.io уже занято **другим** проектом. Эта версия не заявляется опубликованной в crates.io. Руководство: [QUICKSTART](docs/QUICKSTART.md) и [переход с v0.9](docs/MIGRATION_TO_V1.md).
+
+## Известные ограничения стабильной версии
+
+- `WriteBatch`/transactions атомарны **внутри одной Column Family**; нет mixed-family WAL/atomic commit или общего snapshot — [Issue #35](https://github.com/Onmaynec/ForgeDB/issues/35).
+- `Options::table_cache_capacity` управляет resident SST handles **одной** базы, не всеми OS FD процесса — [Issue #31](https://github.com/Onmaynec/ForgeDB/issues/31).
+- Не решено название публикации в crates.io — [Issue #27](https://github.com/Onmaynec/ForgeDB/issues/27).
+- Нет сетевого SQL-сервера, HA, репликации, encryption-at-rest, authentication, tamper-proof archive, secure deletion или гарантированных SLA.
+- CRC32C предназначена для обнаружения повреждения, не для защиты от активного атакующего. Стабильный релиз не заменяет тесты восстановления и резервные копии приложения.
+
+Подробные гарантии: [GA_READINESS](docs/GA_READINESS.md), [спецификация архива](docs/formats/LOGICAL_ARCHIVE_V1.md), [совместимость](docs/COMPATIBILITY.md), [ADR 0020](docs/adr/0020-stable-ga-portable-archive.md), [политика релизов](docs/RELEASE_POLICY.md).
