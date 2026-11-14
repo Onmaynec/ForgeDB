@@ -124,11 +124,23 @@ fn export_restore_roundtrip_all_families_binary_and_large_values()
     )?;
     let names = reopened.list()?;
     assert_eq!(names.len(), 3);
-    let users = names.iter().find(|x| x.name == "users").ok_or("users missing")?;
-    let number = names.iter().find(|x| x.name == "123").ok_or("123 missing")?;
-    assert_eq!(reopened.get(ColumnFamilyId::DEFAULT, &binary_key)?, Some(large));
+    let users = names
+        .iter()
+        .find(|x| x.name == "users")
+        .ok_or("users missing")?;
+    let number = names
+        .iter()
+        .find(|x| x.name == "123")
+        .ok_or("123 missing")?;
+    assert_eq!(
+        reopened.get(ColumnFamilyId::DEFAULT, &binary_key)?,
+        Some(large)
+    );
     assert_eq!(reopened.get(users.id, b"shared")?, Some(b"alice".to_vec()));
-    assert_eq!(reopened.get(number.id, b"shared")?, Some(b"number".to_vec()));
+    assert_eq!(
+        reopened.get(number.id, b"shared")?,
+        Some(b"number".to_vec())
+    );
     assert_eq!(reopened.get(users.id, b"removed")?, None);
     reopened.close()?;
     drop(reopened);
@@ -151,7 +163,11 @@ fn restore_rejects_corruption_truncation_and_future_format_without_publishing()
     database.put(b"hello", b"world", WriteOptions::sync())?;
     database.close()?;
     drop(database);
-    assert!(cli(&["export", as_text(&source), as_text(&archive)])?.status.success());
+    assert!(
+        cli(&["export", as_text(&source), as_text(&archive)])?
+            .status
+            .success()
+    );
     let valid = fs::read(&archive)?;
 
     let corrupted = root.join("corrupted.fdbk");
@@ -167,7 +183,11 @@ fn restore_rejects_corruption_truncation_and_future_format_without_publishing()
     let truncated = root.join("truncated.fdbk");
     fs::write(&truncated, &valid[..valid.len() - 3])?;
     let target = root.join("truncated-restore");
-    assert!(!cli(&["restore", as_text(&truncated), as_text(&target)])?.status.success());
+    assert!(
+        !cli(&["restore", as_text(&truncated), as_text(&target)])?
+            .status
+            .success()
+    );
     assert!(!target.exists());
 
     let unknown_version = root.join("future.fdbk");
