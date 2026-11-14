@@ -4,11 +4,11 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## Статус версий
 
-- текущий выпуск: **v0.8.0 — FQL & Interactive Shell**, GitHub Pre-release;
-- предыдущая версия: **v0.7.0 — Column Families**;
+- версия исходников: **v0.8.1 — SST Handle Cache & Reliability** (feature branch, до CI/release);
+- последний опубликованный выпуск: **v0.8.0 — FQL & Interactive Shell**, GitHub Pre-release;
 - следующие задачи: **#31 — управление SST file handles, #35 — unified Column Families**.
 
-## Возможности v0.8.0
+## Возможности v0.8.1
 
 - WAL V1, atomic WriteBatch и durability modes;
 - SSTable V1 с checksums, blocks, index и Bloom filter;
@@ -119,6 +119,20 @@ fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+## SST Handle Cache v0.8.1
+
+Для point reads добавлен общий LRU кэш native дескрипторов SST. `Options::table_cache_capacity` теперь ограничивает количество открытых **точечных SST readers** в одном `Database` (по умолчанию 512). После eviction файл открывается снова с проверкой physical size, DB identity, file number, sequence range и header checksum; data block CRC32C сохранён.
+
+```rust
+let stats = database.table_handle_stats()?;
+println!("open {}/{}; evictions {}, reopens {}",
+    stats.open_handles, stats.capacity, stats.evictions, stats.reopens);
+```
+
+Отдельный `block_cache_size` продолжает ограничивать decoded-block residency. **Это не общий process FD budget:** streaming iterators, compaction, WAL/MANIFEST/LOCK и другие named Column Families используют отдельные handles. Issue #31 остаётся открытым для полной политики. При удалении retired SST pooled FD закрывается до физического удаления, включая Windows.
+
+Подробнее: [v0.8.1](docs/releases/V0.8.1.md), [ADR 0017](docs/adr/0017-bounded-sst-handle-cache.md), [Options](docs/OPTIONS.md).
 
 ## Cache and Performance
 
@@ -246,7 +260,7 @@ cargo build --locked --workspace --release
 
 Основная CI matrix: Ubuntu stable, Windows stable и Rust 1.89.
 
-## Ограничения v0.8.0
+## Ограничения v0.8.1
 
 - isolation — snapshot isolation, не serializable;
 - обязательна write-write conflict detection, но full read-write validation пока отсутствует;
@@ -265,6 +279,8 @@ cargo build --locked --workspace --release
 
 ## Документация
 
+- [`docs/releases/V0.8.1.md`](docs/releases/V0.8.1.md);
+- [`docs/adr/0017-bounded-sst-handle-cache.md`](docs/adr/0017-bounded-sst-handle-cache.md);
 - [`docs/FQL.md`](docs/FQL.md);
 - [`docs/adr/0016-fql-cli.md`](docs/adr/0016-fql-cli.md);
 - [`docs/releases/V0.8.0.md`](docs/releases/V0.8.0.md);
