@@ -311,7 +311,7 @@ fn execute_fql_repl(session: &mut fql::Session) -> Result<()> {
         }
         let mut line = String::new();
         let read = read_bounded_fql_line(&mut input, &mut line);
-        if matches!(read, Ok(0)) {
+        if matches!(&read, Ok(0)) {
             return Ok(());
         }
         let result = (|| {
