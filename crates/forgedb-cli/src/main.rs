@@ -26,6 +26,21 @@ fn run() -> Result<()> {
         .next()
         .ok_or_else(|| Error::invalid_argument("command", usage()))?;
     match command.as_str() {
+        "version" | "--version" | "-V" => {
+            ensure_no_extra(arguments)?;
+            println!("ForgeDB {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        "doctor" => {
+            let path = PathBuf::from(required(&mut arguments, "path")?);
+            let deep = match arguments.next().as_deref() {
+                None => false,
+                Some("--deep") => true,
+                Some(_) => return Err(Error::invalid_argument("doctor_option", usage())),
+            };
+            ensure_no_extra(arguments)?;
+            run_doctor(path, deep)
+        }
         "put" => {
             let path = required(&mut arguments, "path")?;
             let key = required(&mut arguments, "key")?;
@@ -40,7 +55,15 @@ fn run() -> Result<()> {
             let path = required(&mut arguments, "path")?;
             let key = required(&mut arguments, "key")?;
             ensure_no_extra(arguments)?;
-            let database = Database::open(PathBuf::from(path), Options::default())?;
+            // GET должен быть read-only: опечатка в пути не создаёт новую базу.
+            let database = Database::open(
+                PathBuf::from(path),
+                Options {
+                    read_only: true,
+                    create_if_missing: false,
+                    ..Options::default()
+                },
+            )?;
             if let Some(value) = database.get(key.as_bytes())? {
                 write_bytes_line(&value)?;
             }
@@ -64,7 +87,14 @@ fn run() -> Result<()> {
             let start = arguments.next().map(String::into_bytes);
             let end = arguments.next().map(String::into_bytes);
             ensure_no_extra(arguments)?;
-            let database = Database::open(PathBuf::from(path), Options::default())?;
+            let database = Database::open(
+                PathBuf::from(path),
+                Options {
+                    read_only: true,
+                    create_if_missing: false,
+                    ..Options::default()
+                },
+            )?;
             let iterator = match (start, end) {
                 (None, None) => database.scan(.., ReadOptions::default())?,
                 (Some(start), None) => database.scan(start.., ReadOptions::default())?,
@@ -158,6 +188,55 @@ fn run() -> Result<()> {
         }
         _ => Err(Error::invalid_argument("command", usage())),
     }
+}
+
+/// Read-only health check: отдельный RecoveryPlan lock освобождается до
+/// открытия Database в read-only режиме. Никаких cleanup/migration/flush.
+fn run_doctor(path: PathBuf, deep: bool) -> Result<()> {
+    let plan = RecoveryPlan::inspect(&path)?;
+    println!("ForgeDB {}", env!("CARGO_PKG_VERSION"));
+    println!("database: {}", path.display());
+    println!("manifest: {}", plan.selected_manifest);
+    println!("WAL replay files: {}", plan.replay_wals.len());
+    println!("live SST: {}", plan.live_sstables.len());
+    for warning in &plan.warnings {
+        eprintln!("warning: {warning}");
+    }
+    for blocker in &plan.blockers {
+        eprintln!("blocker: {blocker}");
+    }
+    if !plan.can_open_normally() {
+        return Err(Error::corruption(
+            "doctor recovery plan",
+            format!("обнаружено {} blockers; исправления и удаление не выполнялись", plan.blockers.len()),
+        ));
+    }
+    let database = Database::open(
+        &path,
+        Options {
+            read_only: true,
+            create_if_missing: false,
+            ..Options::default()
+        },
+    )?;
+    let report = database.verify(if deep {
+        VerifyOptions::deep()
+    } else {
+        VerifyOptions::quick()
+    });
+    // Закрываем reader даже при ошибке глубокого чтения.
+    let closing = database.close();
+    let report = report?;
+    closing?;
+    println!("verification: {}", if deep { "deep" } else { "quick" });
+    println!("levels: {}", report.level_count);
+    println!("live SSTables: {}", report.live_sstables);
+    println!("entries checked: {}", report.entries_checked);
+    for warning in &report.warnings {
+        eprintln!("warning: {warning}");
+    }
+    println!("status: OK");
+    Ok(())
 }
 
 fn run_fql_once(mut arguments: impl Iterator<Item = String>) -> Result<()> {
@@ -555,6 +634,8 @@ fn print_group(name: &str, values: &[String]) {
 fn usage() -> String {
     [
         "Использование:",
+        "  forgedb version",
+        "  forgedb doctor <каталог> [--deep]",
         "  forgedb put <каталог> <ключ> <значение> [--sync|--no-sync|--disable-wal]",
         "  forgedb get <каталог> <ключ>",
         "  forgedb fql <каталог> \"<одна FQL команда>\" [--read-only]",
@@ -574,7 +655,8 @@ fn usage() -> String {
         "  forgedb inspect recovery-plan <каталог>",
         "  forgedb verify <каталог> [--deep]",
         "",
-        "CLI v0.8.0: FQL поддерживает binary literals, транзакции и отдельные Column Families.",
+        "CLI v1.0.0: doctor проверяет состояние read-only, без очистки/исправлений.",
+        "FQL поддерживает binary literals, транзакции и отдельные Column Families.",
         "Transaction commit запрещает --disable-wal и использует optimistic snapshot isolation.",
     ]
     .join("\n")
