@@ -1,87 +1,72 @@
-# ForgeDB v0.8.0 — FQL & Interactive Shell
+# ForgeDB v0.8.1 — SST Handle Cache & Reliability
 
 Статус: GitHub Pre-release.
 
-Версия 0.8.0 добавляет строгий командный язык FQL V1 и интерактивный shell для локальных баз ForgeDB. Запросы выполняются через существующий ColumnFamilies API, без нового storage engine и изменения on-disk форматов. Доступны готовые CLI для Windows и Linux x86-64.
+Исправительный выпуск v0.8.1 сокращает число постоянно открытых SST-файлов при обычных точечных чтениях и исправляет порядок освобождения дескрипторов перед очисткой retired SSTable на Windows. Форматы хранения и совместимость баз v0.8.0 сохранены.
 
-## FQL V1
+## Новый SST handle cache
 
-- Чтение и запись: GET key, PUT key value, DELETE key.
-- Диапазон: SCAN [FROM start] [TO end] [LIMIT number]. FROM включительно, TO исключительно.
-- Именованные хранилища: SHOW FAMILIES, CREATE FAMILY name, DROP FAMILY name|id, USE name|id.
-- Транзакции выбранной family: BEGIN, COMMIT, ROLLBACK.
-- Справка и выход: HELP, EXIT и QUIT.
+Раньше `TableReader` удерживал отдельный физический файловый дескриптор до окончания жизни `VersionSet`. При большом количестве SSTable это могло исчерпать лимит открытых файлов, несмотря на lazy data block reads.
 
-FQL допускает один statement на строку, при желании с завершающей точкой с запятой. Он **не является SQL**: нет SELECT, JOIN, реляционных таблиц и сетевого сервера.
+Теперь `Options::table_cache_capacity` действительно задаёт максимальное число одновременно хранимых native **point-read** SST handles внутри одной базы (по умолчанию 512). Кэш использует LRU eviction. Дескриптор открывается при первом физическом чтении data block и закрывается при вытеснении. Все поколения `VersionSet`, включая старые snapshots, используют общий pool.
 
-Quoted текст поддерживает пробелы и escape-последовательности; hex-литералы X'00ff' позволяют работать с бинарными ключами/значениями. Результат GET/SCAN записывается в обратимом quoted-формате с \xHH для непечатных байтов.
+При повторном открытии файла проверяются его размер, database identity, номер SST, диапазон sequence numbers и checksum заголовка. Прочитанные data blocks проходят существующую проверку BlockHandle, CRC32C и decoder. Физический FD закрывается *перед* открытием следующего при заполненном pool. Один mutex обеспечивает строго ограниченную вместимость, но может уменьшить параллелизм точечных SST чтений.
 
-## Запуск
+## Метрики
 
-Одноразовая команда:
+Доступна диагностика через `Database::table_handle_stats()` или `ColumnFamilies::table_handle_stats(id)`:
 
-    forgedb fql ./data "PUT key 'Hello FQL'"
-    forgedb fql ./data "GET key" --read-only
+```rust
+let stats = database.table_handle_stats()?;
+println!(
+    "open={}/{} hits={} misses={} evictions={} reopens={}",
+    stats.open_handles, stats.capacity, stats.hits, stats.misses,
+    stats.evictions, stats.reopens
+);
+```
 
-Интерактивный shell:
+`Database::cache_stats()` по-прежнему относится к отдельному кэшу decoded data blocks в памяти. Значение `block_cache_size` никак не подменяется новым лимитом.
 
-    forgedb shell ./data
+## Windows-safe cleanup
 
-Файл сценария:
+После compaction удаляются только файлы, которые были выведены из подтверждённой MANIFEST topology и более не удерживаются `TableReader`. Очистка теперь сначала закрывает сохранённый в pool файловый дескриптор, а затем вызывает `remove_file`, устраняя sharing violation для такого read handle на Windows. При живом старом iterator/snapshot reader физическое удаление по-прежнему откладывается.
 
-    forgedb shell ./data --file commands.fql
-
-Пример commands.fql:
-
-    CREATE FAMILY users
-    USE users
-    BEGIN
-    PUT user42 'Alice'
-    GET user42
-    COMMIT
-    SCAN FROM user TO userz LIMIT 20
-    EXIT
-
-Shell поддерживает перенаправленный stdin; при работе с терминалом показывает название выбранной family.
-
-## Поведение при ошибках
-
-- Входной statement полностью разбирается до выполнения: лишние команды, ошибочный escape, некорректный LIMIT и неверные аргументы не инициируют частичную мутацию.
-- Максимум 64 KiB на строку; чтение stdin/file ограничено до разбора. При oversized строке REPL дочитывает её до newline и может корректно обработать следующую команду. Максимум 512 токенов.
-- SCAN отдаёт не более 100 строк по умолчанию и не более 10000 с LIMIT; реализован streaming iterator без материализации всего результата.
-- Файловые скрипты прекращают работу на первой ошибке с номером строки и ненулевым exit code. REPL после ошибочной команды остаётся активным.
-- Незавершённая транзакция при ошибке script, EOF или EXIT откатывается. GET внутри BEGIN видит собственные buffered writes; COMMIT использует существующий optimistic snapshot isolation и WAL Sync.
-- SCAN, USE, CREATE/DROP FAMILY запрещены внутри BEGIN до поддержки корректного transactional range merge и cross-family semantics.
-- --read-only не создаёт хранилище и запрещает изменения.
-
-**Важное ограничение:** скрипт целиком не атомарен. Записи из уже завершённых отдельных statements остаются durable, если позднее возникла ошибка. Для атомарной группы mutations используйте BEGIN–COMMIT **в одной** family.
-
-## Совместимость
-
-FQL реализован на уровне CLI. Форматы IDENTITY V1, Internal Key V1, WAL V1, SSTable V1, MANIFEST writer V2/reader V1+V2, CURRENT V1 и CF_REGISTRY V1 не изменяются. Миграции существующих баз v0.7.0 не требуется. Все прежние команды CLI сохраняются.
-
-Новых mixed-family atomic WAL batches, глобальных MVCC snapshots или serializable transactions нет (см. Issue #35). Управление количеством открытых SST handles остаётся задачей #31. SQL-синтаксис и серверные подключения не добавлены.
+Неизвестные orphan SST после restart не удаляются автоматически.
 
 ## Проверки
 
-Feature PR #37, head 0d86143159ed35b07eaa43e2a789a6d2acefd9db: CI #43555440756 завершён успешно на Ubuntu stable, Windows stable и Rust 1.89.
+Feature PR [#40](https://github.com/Onmaynec/ForgeDB/pull/40), head `d3a39c211efb1865fd8dd10b92bdfcb63e97d58e`, [CI #43558647759](https://github.com/Onmaynec/ForgeDB/actions/runs/43558647759): Ubuntu stable, Windows stable, Rust 1.89 — **success**.
 
-Проверены rustfmt, строгий Clippy с -D warnings, workspace tests, doctests, release build и benchmark smoke. Добавлены unit tests parser/lexer и integration CLI tests: quoted/binary data, one-shot query, stdin REPL, file scripts, fail-fast, rollback при EOF/error, read-only, Column Families scope, SCAN limits и oversized-line recovery.
+Добавлены тесты:
+- `point_read_budget_one_evicts_and_reopens_without_losing_values` — capacity=1, несколько SST, LRU eviction, restart;
+- `native_handle_cache_reopens_with_bounded_fd_and_rechecks_header` — повреждённый header после eviction отвергается, восстановленный файл снова читается;
+- `pinned_scan_survives_compaction_and_retirement_evicts_windows_handles` — reference-aware compaction/cleanup и порядок удаления;
+- `transaction_conflicts_and_snapshot_reads_survive_fd_eviction` — MVCC snapshots и optimistic transaction conflicts после reopen.
 
-Release workflow повторяет Linux validation gate перед созданием аннотированного Git tag v0.8.0 и GitHub Pre-release.
+Предварительные CI проверяют rustfmt, Clippy `-D warnings`, workspace tests, doctests, release build и benchmark smoke; release workflow повторяет Linux gate.
 
-## Windows / Linux CLI binaries
+## Честные ограничения
 
-При выпуске в Assets публикуются два архива x86-64 и отдельные SHA-256 checksums:
+**Это не общий лимит всех файловых дескрипторов процесса.** `table_cache_capacity` учитывает только point-read pool одного `Database`; streaming range cursors, compaction, temporary writes, WAL/MANIFEST/LOCK и другие named Column Families работают с отдельными дескрипторами. Поэтому общая [Issue #31](https://github.com/Onmaynec/ForgeDB/issues/31) остаётся открытой.
 
-- forgedb-v0.8.0-windows-x86_64.zip — forgedb.exe;
-- forgedb-v0.8.0-linux-x86_64.tar.gz — forgedb.
+Скорость запросов и RSS не объявляются улучшенными без воспроизводимого сравнения: shared mutex сериализует point-read physical I/O и имеет trade-off по throughput. Unified Column Families и mixed-CF atomic WAL из [Issue #35](https://github.com/Onmaynec/ForgeDB/issues/35) не входят в v0.8.1.
 
-Rust toolchain для запуска CLI не нужен. Подробности распаковки/проверки контрольных сумм — docs/QUICKSTART.md.
+Persisted IDENTITY V1, WAL V1, Internal Key V1, SSTable V1, MANIFEST writer V2/reader V1–V2, CURRENT V1 и CF_REGISTRY V1 не менялись. Миграция не требуется.
+
+## CLI для Windows и Linux
+
+GitHub Pre-release публикует два x86-64 архива и отдельные SHA-256 checksums:
+
+- `forgedb-v0.8.1-windows-x86_64.zip` — `forgedb.exe`;
+- `forgedb-v0.8.1-linux-x86_64.tar.gz` — `forgedb`.
+
+Существующие `forgedb fql`, `forgedb shell`, `forgedb cf` и остальные CLI команды не изменены. Инструкция по установке и проверке checksum: `docs/QUICKSTART.md`.
 
 ## Документация
 
-- docs/FQL.md — синтаксис и поведение выполнения;
-- docs/adr/0016-fql-cli.md — архитектурное решение;
-- docs/releases/V0.8.0.md — технические границы milestone;
-- docs/COMPATIBILITY.md, docs/VALIDATION.md, docs/INVARIANTS.md.
+- `docs/releases/V0.8.1.md`;
+- `docs/adr/0017-bounded-sst-handle-cache.md`;
+- `docs/CACHE_AND_PERFORMANCE.md`;
+- `docs/OPTIONS.md`;
+- `docs/INVARIANTS.md`;
+- `CHANGELOG.md`.
