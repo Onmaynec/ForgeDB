@@ -224,11 +224,7 @@ impl ColumnFamilies {
     }
 
     /// Возвращает последнее значение ключа выбранной family.
-    pub fn get(
-        &self,
-        id: ColumnFamilyId,
-        key: impl AsRef<[u8]>,
-    ) -> Result<Option<Vec<u8>>> {
+    pub fn get(&self, id: ColumnFamilyId, key: impl AsRef<[u8]>) -> Result<Option<Vec<u8>>> {
         self.resolve(id)?.get(key)
     }
 
@@ -303,11 +299,13 @@ impl ColumnFamilies {
             return Ok(Arc::clone(database));
         }
         let path = family_path(&self.root, id.get());
-        if !path.is_dir() || !path.join("CURRENT").is_file() || !path.join("IDENTITY").is_file()
-        {
+        if !path.is_dir() || !path.join("CURRENT").is_file() || !path.join("IDENTITY").is_file() {
             return Err(Error::corruption(
                 "column family",
-                format!("зарегистрированная family {} отсутствует или не инициализирована", id.get()),
+                format!(
+                    "зарегистрированная family {} отсутствует или не инициализирована",
+                    id.get()
+                ),
             ));
         }
         let mut options = self.options.clone();
@@ -351,7 +349,9 @@ fn unknown_family(id: ColumnFamilyId) -> Error {
 fn validate_name(name: &str) -> Result<()> {
     if name.is_empty()
         || name.len() > MAX_NAME_BYTES
-        || !name.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
         return Err(Error::invalid_argument(
             "column_family_name",
@@ -450,7 +450,8 @@ fn decode_registry(bytes: &[u8]) -> Result<RegistryData> {
     }
     let payload_end = bytes.len() - 4;
     let stored = u32::from_le_bytes(
-        bytes[payload_end..].try_into()
+        bytes[payload_end..]
+            .try_into()
             .map_err(|_| Error::corruption("CF registry", "усечён checksum"))?,
     );
     if crc32c(&bytes[..payload_end]) != stored {
@@ -476,38 +477,52 @@ fn decode_registry(bytes: &[u8]) -> Result<RegistryData> {
     let mut seen_names = BTreeSet::new();
     for _ in 0..count {
         let id = read_u32(bytes, offset)?;
-        offset = offset.checked_add(4)
+        offset = offset
+            .checked_add(4)
             .ok_or_else(|| Error::corruption("CF registry", "offset overflow"))?;
-        let len = usize::from(*bytes.get(offset)
-            .ok_or_else(|| Error::corruption("CF registry", "усечён name length"))?);
+        let len = usize::from(
+            *bytes
+                .get(offset)
+                .ok_or_else(|| Error::corruption("CF registry", "усечён name length"))?,
+        );
         offset += 1;
-        let end = offset.checked_add(len)
+        let end = offset
+            .checked_add(len)
             .ok_or_else(|| Error::corruption("CF registry", "name offset overflow"))?;
         if end > payload_end {
             return Err(Error::corruption("CF registry", "усечено имя"));
         }
         let name = std::str::from_utf8(&bytes[offset..end])
             .map_err(|_| Error::corruption("CF registry", "имя не ASCII/UTF-8"))?;
-        validate_name(name)
-            .map_err(|_| Error::corruption("CF registry", "недопустимое имя"))?;
-        if id == 0 || id >= next_id || name == "default"
+        validate_name(name).map_err(|_| Error::corruption("CF registry", "недопустимое имя"))?;
+        if id == 0
+            || id >= next_id
+            || name == "default"
             || names.insert(id, name.to_owned()).is_some()
             || !seen_names.insert(name.to_owned())
         {
-            return Err(Error::corruption("CF registry", "повтор/неверный family ID или name"));
+            return Err(Error::corruption(
+                "CF registry",
+                "повтор/неверный family ID или name",
+            ));
         }
         offset = end;
     }
     if offset != payload_end {
-        return Err(Error::corruption("CF registry", "лишние bytes после records"));
+        return Err(Error::corruption(
+            "CF registry",
+            "лишние bytes после records",
+        ));
     }
     Ok(RegistryData { next_id, names })
 }
 
 fn read_u32(bytes: &[u8], start: usize) -> Result<u32> {
-    let end = start.checked_add(4)
+    let end = start
+        .checked_add(4)
         .ok_or_else(|| Error::corruption("CF registry", "offset overflow"))?;
-    let raw: [u8; 4] = bytes.get(start..end)
+    let raw: [u8; 4] = bytes
+        .get(start..end)
         .ok_or_else(|| Error::corruption("CF registry", "усечено u32"))?
         .try_into()
         .map_err(|_| Error::corruption("CF registry", "неверный u32"))?;
@@ -547,7 +562,10 @@ mod tests {
         assert_eq!(restored.names, data.names);
         let mut damaged = bytes.clone();
         damaged[20] ^= 0x80;
-        assert!(matches!(decode_registry(&damaged), Err(Error::Corruption { .. })));
+        assert!(matches!(
+            decode_registry(&damaged),
+            Err(Error::Corruption { .. })
+        ));
         assert!(validate_name("../escape").is_err());
         assert!(validate_name("тест").is_err());
         Ok(())
