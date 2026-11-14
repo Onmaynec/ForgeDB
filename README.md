@@ -63,6 +63,8 @@ fn main() -> Result<()> {
 
 Подробнее: [v0.7.0](docs/releases/V0.7.0.md), [CF_REGISTRY V1](docs/formats/CF_REGISTRY_V1.md) и [ADR 0015](docs/adr/0015-column-family-isolation.md).
 
+В CLI v0.7.0 доступны `forgedb cf create ./data users`, `forgedb cf list ./data`, `forgedb cf put ./data 1 key value`, `forgedb cf get ./data 1 key` и `cf scan/delete/drop`. Для named CF `cf list` возвращает числовые ID.
+
 ## CLI без компиляции
 
 Для Windows x86-64 и Linux x86-64 опубликованы архивы с готовым CLI и SHA-256 checksum в [GitHub Releases](https://github.com/Onmaynec/ForgeDB/releases). Скачать и распаковать `forgedb-v0.6.2-windows-x86_64.zip` или `forgedb-v0.6.2-linux-x86_64.tar.gz`.
