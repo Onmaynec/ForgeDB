@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "forgedb"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "forgedb-core",
  "forgedb-fs",
@@ -15,25 +15,25 @@ dependencies = [
 
 [[package]]
 name = "forgedb-cli"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "forgedb",
 ]
 
 [[package]]
 name = "forgedb-core"
-version = "0.6.1"
+version = "0.6.2"
 
 [[package]]
 name = "forgedb-fs"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "forgedb-core",
 ]
 
 [[package]]
 name = "forgedb-manifest"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "forgedb-core",
  "forgedb-fs",
@@ -43,7 +43,7 @@ dependencies = [
 
 [[package]]
 name = "forgedb-sstable"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "forgedb-core",
  "forgedb-fs",
@@ -51,7 +51,7 @@ dependencies = [
 
 [[package]]
 name = "forgedb-wal"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "forgedb-core",
  "forgedb-fs",

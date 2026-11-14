@@ -58,7 +58,12 @@ fn main() -> Result<()> {
     let after_warm = database.cache_stats()?;
 
     println!("keys={keys} reads_per_pass={reads}");
-    println!("setup={setup:?} cold={cold:?} warm={warm:?}");
+    println!(
+        "setup={setup:?} cold={:?} warm={:?}",
+        cold.elapsed, warm.elapsed
+    );
+    print_latency("cold", reads, &cold);
+    print_latency("warm", reads, &warm);
     println!(
         "cache: hits={} misses={} evictions={} bypasses={} resident_blocks={} resident_bytes={} capacity_bytes={}",
         after_warm.hits,
@@ -98,17 +103,49 @@ fn parse_positive(raw: Option<String>, default: usize, field: &'static str) -> R
     Ok(number)
 }
 
-fn run_reads(database: &Database, keys: usize, reads: usize) -> Result<std::time::Duration> {
+/// Latency percentiles are empirical observations of this run, not SLA numbers.
+struct ReadMetrics {
+    elapsed: std::time::Duration,
+    p50_ns: u128,
+    p95_ns: u128,
+    p99_ns: u128,
+}
+
+fn print_latency(pass: &str, reads: usize, metrics: &ReadMetrics) {
+    let throughput = (reads as f64) / metrics.elapsed.as_secs_f64().max(f64::EPSILON);
+    println!(
+        "{pass}: throughput_ops_sec={throughput:.2} p50_ns={} p95_ns={} p99_ns={}",
+        metrics.p50_ns, metrics.p95_ns, metrics.p99_ns
+    );
+}
+
+fn percentile(sorted: &[u128], percent: usize) -> u128 {
+    let index = sorted.len().saturating_sub(1).saturating_mul(percent) / 100;
+    sorted.get(index).copied().unwrap_or(0)
+}
+
+fn run_reads(database: &Database, keys: usize, reads: usize) -> Result<ReadMetrics> {
     let start = Instant::now();
+    let mut latencies = Vec::with_capacity(reads);
     for number in 0..reads {
         let index = number.wrapping_mul(7919) % keys;
         let key = format!("key-{index:08}");
-        if database.get(key.as_bytes())?.is_none() {
+        let began = Instant::now();
+        let value = database.get(key.as_bytes())?;
+        latencies.push(began.elapsed().as_nanos());
+        if value.is_none() {
             return Err(Error::InternalInvariant {
                 invariant: "I-BENCHMARK-READBACK",
                 reason: format!("ключ {key} отсутствует после flush"),
             });
         }
     }
-    Ok(start.elapsed())
+    let elapsed = start.elapsed();
+    latencies.sort_unstable();
+    Ok(ReadMetrics {
+        elapsed,
+        p50_ns: percentile(&latencies, 50),
+        p95_ns: percentile(&latencies, 95),
+        p99_ns: percentile(&latencies, 99),
+    })
 }

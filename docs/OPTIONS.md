@@ -1,4 +1,4 @@
-# Состояние параметров Options в ForgeDB v0.6.1
+# Состояние параметров Options в ForgeDB v0.6.2
 
 Значение по умолчанию — не доказательство того, что параметр управляет указанным ресурсом. Ниже приведена текущая граница реализации.
 
@@ -6,7 +6,7 @@
 |---|---|---|
 | `memtable_size` | используется | Ограничивает projected mutable memtable; публичные записи при его достижении делают один synchronous flush/retry |
 | `block_cache_size` | используется | Лимит decoded-block LRU point-read cache, `0` отключает хранение |
-| `table_cache_capacity` | зарезервирован | Проводится проверка значения, но нет lazy table-reader eviction; исходные SST bytes открываются eagerly |
+| `table_cache_capacity` | зарезервирован | SST data читаются lazy, но file handles удерживаются на время жизни VersionSet; политика eviction открытых readers ещё не реализована |
 | `max_background_flushes` | зарезервирован | Фоновые flush workers отсутствуют |
 | `max_background_compactions` | зарезервирован | Фоновые compaction workers отсутствуют |
 | `wal_file_size` | зарезервирован | Не является активным триггером automatic WAL rotation по размеру |

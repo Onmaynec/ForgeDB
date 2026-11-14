@@ -8,8 +8,9 @@ mod checksum;
 pub use cache::{BlockCache, CacheStats};
 
 use std::cmp::Ordering;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bloom::BloomFilter;
@@ -18,7 +19,7 @@ use forgedb_core::{
     ColumnFamilyId, DatabaseId, Error, InternalKey, InternalKeyCodec, Limits, Result,
     SequenceNumber, ValueType,
 };
-use forgedb_fs::{FileSystem, WritableFile};
+use forgedb_fs::{FileSystem, RandomAccessReader, WritableFile};
 
 pub const SST_HEADER_SIZE: usize = 64;
 pub const SST_FOOTER_SIZE: usize = 64;
@@ -320,15 +321,28 @@ struct TableProperties {
     creation_unix_ms: u64,
 }
 
-/// Полностью проверенный SSTable reader. В v0.2.0 файл bounded-загружается в память при open.
-#[derive(Clone, Debug)]
+/// Индексный SSTable reader: держит handle открытым, но не загружает весь SST в RAM.
+#[derive(Clone)]
 pub struct TableReader {
     path: PathBuf,
-    bytes: Vec<u8>,
+    reader: Arc<Mutex<Box<dyn RandomAccessReader>>>,
+    file_size: u64,
     meta: TableMeta,
     index: Vec<IndexEntry>,
     filter: BloomFilter,
     limits: Limits,
+}
+
+impl std::fmt::Debug for TableReader {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TableReader")
+            .field("path", &self.path)
+            .field("file_size", &self.file_size)
+            .field("index_entries", &self.index.len())
+            .field("meta", &self.meta)
+            .finish_non_exhaustive()
+    }
 }
 
 impl TableReader {
@@ -360,24 +374,22 @@ impl TableReader {
                 observed: physical_size,
             });
         }
-        let capacity = usize::try_from(physical_size).map_err(|_| Error::ResourceLimit {
-            resource: "sstable_file_size",
-            limit: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
-            observed: physical_size,
-        })?;
-        let mut bytes = Vec::with_capacity(capacity);
-        let mut reader = filesystem.open_sequential(&path)?;
-        reader
-            .read_to_end(&mut bytes)
-            .map_err(|source| Error::io("read_sstable", Some(path.clone()), source))?;
-        if bytes.len() != capacity {
-            return Err(Error::corruption(
-                "SSTable",
-                "число прочитанных байтов не совпадает с file_size",
-            ));
-        }
-
-        let header = decode_header(&bytes, expected_database_id, expected_meta.file_number)?;
+        // Bounded random-access reads: validate the fixed header/footer and metadata
+        // blocks without materializing the physical SSTable.
+        let mut reader = filesystem.open_random_access(&path)?;
+        let mut header_bytes = [0_u8; SST_HEADER_SIZE];
+        read_exact_at(
+            &mut reader,
+            &path,
+            0,
+            &mut header_bytes,
+            "read_sstable_header",
+        )?;
+        let header = decode_header(
+            &header_bytes,
+            expected_database_id,
+            expected_meta.file_number,
+        )?;
         if header.smallest_sequence != expected_meta.smallest_sequence
             || header.largest_sequence != expected_meta.largest_sequence
         {
@@ -389,21 +401,45 @@ impl TableReader {
         let footer_offset = physical_size
             .checked_sub(u64::try_from(SST_FOOTER_SIZE).unwrap_or(u64::MAX))
             .ok_or_else(|| Error::corruption("SSTable footer", "файл слишком мал"))?;
-        let footer_start = usize::try_from(footer_offset).map_err(|_| Error::ResourceLimit {
-            resource: "sstable_footer_offset",
-            limit: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
-            observed: footer_offset,
-        })?;
-        let footer = bytes
-            .get(footer_start..)
-            .ok_or_else(|| Error::corruption("SSTable footer", "footer отсутствует"))?;
+        let mut footer_bytes = [0_u8; SST_FOOTER_SIZE];
+        read_exact_at(
+            &mut reader,
+            &path,
+            footer_offset,
+            &mut footer_bytes,
+            "read_sstable_footer",
+        )?;
         let (filter_handle, index_handle, properties_handle) =
-            decode_footer(footer, physical_size, footer_offset)?;
+            decode_footer(&footer_bytes, physical_size, footer_offset)?;
         ensure_non_overlapping(&[filter_handle, index_handle, properties_handle])?;
 
-        let filter_payload = read_block(&bytes, filter_handle, "SSTable filter block")?;
-        let index_payload = read_block(&bytes, index_handle, "SSTable index block")?;
-        let properties_payload = read_block(&bytes, properties_handle, "SSTable properties block")?;
+        let filter_bytes = read_checked_block_at(
+            &mut reader,
+            &path,
+            filter_handle,
+            physical_size,
+            footer_offset,
+            "SSTable filter block",
+        )?;
+        let index_bytes = read_checked_block_at(
+            &mut reader,
+            &path,
+            index_handle,
+            physical_size,
+            footer_offset,
+            "SSTable index block",
+        )?;
+        let properties_bytes = read_checked_block_at(
+            &mut reader,
+            &path,
+            properties_handle,
+            physical_size,
+            footer_offset,
+            "SSTable properties block",
+        )?;
+        let filter_payload = filter_bytes.as_slice();
+        let index_payload = index_bytes.as_slice();
+        let properties_payload = properties_bytes.as_slice();
         let filter = BloomFilter::decode(filter_payload, limits.max_batch_size)?;
         let index = decode_index(index_payload, limits, physical_size, footer_offset)?;
         if index.is_empty() {
@@ -423,7 +459,8 @@ impl TableReader {
 
         Ok(Self {
             path,
-            bytes,
+            reader: Arc::new(Mutex::new(Box::new(reader))),
+            file_size: physical_size,
             meta: expected_meta.clone(),
             index,
             filter,
@@ -445,8 +482,8 @@ impl TableReader {
         let Some(candidate) = candidate else {
             return Ok(TableLookup::Missing);
         };
-        let payload = read_block(&self.bytes, candidate.handle, "SSTable data block")?;
-        for entry in decode_data_block(payload, &self.limits)? {
+        let payload = self.read_checked_block(candidate.handle, "SSTable data block")?;
+        for entry in decode_data_block(&payload, &self.limits)? {
             match entry.internal_key.user_key().cmp(user_key) {
                 Ordering::Less => continue,
                 Ordering::Greater => return Ok(TableLookup::Missing),
@@ -550,9 +587,30 @@ impl TableReader {
             })?
             .handle;
         cache.get_or_decode(self.meta.file_number, index, || {
-            let payload = read_block(&self.bytes, handle, "SSTable data block")?;
-            decode_data_block(payload, &self.limits)
+            let payload = self.read_checked_block(handle, "SSTable data block")?;
+            decode_data_block(&payload, &self.limits)
         })
+    }
+
+    /// Возвращает только валидированный физический блок по указанному offset.
+    /// FD удерживается для Windows-safe retirement, а mutex сериализует seek/read.
+    fn read_checked_block(&self, handle: BlockHandle, component: &'static str) -> Result<Vec<u8>> {
+        let mut reader = self.reader.lock().map_err(|_| Error::InternalInvariant {
+            invariant: "I-SST-READER-MUTEX",
+            reason: "mutex random-access SST reader poisoned".to_owned(),
+        })?;
+        let footer_offset = self
+            .file_size
+            .checked_sub(u64::try_from(SST_FOOTER_SIZE).unwrap_or(u64::MAX))
+            .ok_or_else(|| Error::corruption(component, "файл слишком мал"))?;
+        read_checked_block_at(
+            reader.as_mut(),
+            &self.path,
+            handle,
+            self.file_size,
+            footer_offset,
+            component,
+        )
     }
 
     #[must_use]
@@ -945,6 +1003,55 @@ fn write_block<W: WritableFile>(
         observed: u64::MAX,
     })?;
     Ok(handle)
+}
+
+/// Полное чтение проверенного диапазона. Не допускает короткий read и silently
+/// truncated files. Работает с FileSystem reader, не выполняя native I/O в обход
+/// предоставленной реализации.
+fn read_exact_at<R: Read + Seek + ?Sized>(
+    reader: &mut R,
+    path: &Path,
+    offset: u64,
+    output: &mut [u8],
+    operation: &'static str,
+) -> Result<()> {
+    reader
+        .seek(SeekFrom::Start(offset))
+        .map_err(|source| Error::io(operation, Some(path.to_path_buf()), source))?;
+    reader
+        .read_exact(output)
+        .map_err(|source| Error::io(operation, Some(path.to_path_buf()), source))
+}
+
+/// Сначала проверяет физические границы блока, затем CRC32C/trailer. В памяти
+/// одновременно удерживается только один выбранный блок, а не весь SSTable.
+fn read_checked_block_at<R: Read + Seek + ?Sized>(
+    reader: &mut R,
+    path: &Path,
+    handle: BlockHandle,
+    file_size: u64,
+    footer_offset: u64,
+    component: &'static str,
+) -> Result<Vec<u8>> {
+    handle.validate(file_size, footer_offset, component)?;
+    let length = usize::try_from(handle.length).map_err(|_| Error::ResourceLimit {
+        resource: "sstable_block_length",
+        limit: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
+        observed: handle.length,
+    })?;
+    let mut buffer = vec![0_u8; length];
+    read_exact_at(
+        reader,
+        path,
+        handle.offset,
+        &mut buffer,
+        "read_sstable_block",
+    )?;
+    let relative_handle = BlockHandle {
+        offset: 0,
+        length: handle.length,
+    };
+    read_block(&buffer, relative_handle, component).map(<[u8]>::to_vec)
 }
 
 fn read_block<'a>(
@@ -1931,6 +2038,200 @@ mod tests {
         Ok(path)
     }
 
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
+
+    struct CountingReader {
+        file: fs::File,
+        bytes_read: Arc<AtomicUsize>,
+        corrupt_reads: Arc<AtomicBool>,
+    }
+
+    impl Read for CountingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let size = self.file.read(buffer)?;
+            self.bytes_read.fetch_add(size, AtomicOrdering::Relaxed);
+            if size > 0 && self.corrupt_reads.load(AtomicOrdering::Relaxed) {
+                buffer[0] ^= 0xff;
+            }
+            Ok(size)
+        }
+    }
+
+    impl Seek for CountingReader {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.file.seek(pos)
+        }
+    }
+
+    #[derive(Clone)]
+    struct CountingFileSystem {
+        bytes_read: Arc<AtomicUsize>,
+        corrupt_reads: Arc<AtomicBool>,
+    }
+
+    impl FileSystem for CountingFileSystem {
+        type SequentialReader = fs::File;
+        type RandomAccessReader = CountingReader;
+        type WritableFile = fs::File;
+        type LockGuard = forgedb_fs::NativeLockGuard;
+
+        fn create_dir_all(&self, path: &Path) -> Result<()> {
+            NativeFileSystem.create_dir_all(path)
+        }
+
+        fn open_sequential(&self, path: &Path) -> Result<Self::SequentialReader> {
+            NativeFileSystem.open_sequential(path)
+        }
+
+        fn open_random_access(&self, path: &Path) -> Result<Self::RandomAccessReader> {
+            Ok(CountingReader {
+                file: NativeFileSystem.open_random_access(path)?,
+                bytes_read: Arc::clone(&self.bytes_read),
+                corrupt_reads: Arc::clone(&self.corrupt_reads),
+            })
+        }
+
+        fn create_writable(&self, path: &Path) -> Result<Self::WritableFile> {
+            NativeFileSystem.create_writable(path)
+        }
+
+        fn create_new_writable(&self, path: &Path) -> Result<Self::WritableFile> {
+            NativeFileSystem.create_new_writable(path)
+        }
+
+        fn open_appendable(&self, path: &Path) -> Result<Self::WritableFile> {
+            NativeFileSystem.open_appendable(path)
+        }
+
+        fn rename_atomic(&self, from: &Path, to: &Path) -> Result<()> {
+            NativeFileSystem.rename_atomic(from, to)
+        }
+
+        fn remove_file(&self, path: &Path) -> Result<()> {
+            NativeFileSystem.remove_file(path)
+        }
+
+        fn list_dir(&self, path: &Path) -> Result<Vec<PathBuf>> {
+            NativeFileSystem.list_dir(path)
+        }
+
+        fn file_size(&self, path: &Path) -> Result<u64> {
+            NativeFileSystem.file_size(path)
+        }
+
+        fn truncate_file(&self, path: &Path, length: u64) -> Result<()> {
+            NativeFileSystem.truncate_file(path, length)
+        }
+
+        fn sync_directory(&self, path: &Path) -> Result<()> {
+            NativeFileSystem.sync_directory(path)
+        }
+
+        fn lock_exclusive(&self, path: &Path) -> Result<Self::LockGuard> {
+            NativeFileSystem.lock_exclusive(path)
+        }
+    }
+
+    #[test]
+    fn lazy_open_does_not_read_entire_sstable_and_cache_hits_avoid_io() -> Result<()> {
+        let directory = temporary_directory("bounded-open")?;
+        let fs = CountingFileSystem {
+            bytes_read: Arc::new(AtomicUsize::new(0)),
+            corrupt_reads: Arc::new(AtomicBool::new(false)),
+        };
+        let limits = Limits::default();
+        let id = DatabaseId::random();
+        let mut records = Vec::new();
+        for n in 0..96_u64 {
+            records.push(TableEntry::value(
+                format!("key-{n:04}").into_bytes(),
+                SequenceNumber::new(n + 1)?,
+                vec![u8::try_from(n).unwrap_or_default(); 700],
+                &limits,
+            )?);
+        }
+        let meta = build_table(
+            &NativeFileSystem,
+            TableBuildRequest::new(
+                &directory,
+                &directory.join("TEMP"),
+                id,
+                31,
+                &records,
+                &limits,
+                TableBuildOptions {
+                    data_block_size: 1024,
+                    restart_interval: 4,
+                    bloom_bits_per_key: 10,
+                },
+            ),
+        )?;
+        let reader = TableReader::open(&fs, &directory, id, &meta, &limits, 16 * 1024 * 1024)?;
+        let opened = fs.bytes_read.load(AtomicOrdering::Relaxed);
+        assert!(u64::try_from(opened).unwrap_or(u64::MAX) < meta.file_size / 2);
+        let cache = BlockCache::new(64 * 1024);
+        let seq = Some(SequenceNumber::new(51)?);
+        assert_eq!(
+            reader.get_at_cached(b"key-0050", seq, &cache)?,
+            TableLookup::Value(vec![50; 700])
+        );
+        let after_first = fs.bytes_read.load(AtomicOrdering::Relaxed);
+        assert!(after_first > opened);
+        assert_eq!(
+            reader.get_at_cached(b"key-0050", seq, &cache)?,
+            TableLookup::Value(vec![50; 700])
+        );
+        assert_eq!(fs.bytes_read.load(AtomicOrdering::Relaxed), after_first);
+        drop(reader);
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_data_block_checksum_is_verified_when_read_after_open() -> Result<()> {
+        let directory = temporary_directory("read-time-checksum")?;
+        let fs = CountingFileSystem {
+            bytes_read: Arc::new(AtomicUsize::new(0)),
+            corrupt_reads: Arc::new(AtomicBool::new(false)),
+        };
+        let limits = Limits::default();
+        let id = DatabaseId::random();
+        let meta = build_table(
+            &NativeFileSystem,
+            TableBuildRequest::new(
+                &directory,
+                &directory.join("TEMP"),
+                id,
+                32,
+                &entries(&limits)?,
+                &limits,
+                TableBuildOptions {
+                    data_block_size: 1024,
+                    restart_interval: 2,
+                    bloom_bits_per_key: 10,
+                },
+            ),
+        )?;
+        let reader = TableReader::open(&fs, &directory, id, &meta, &limits, 16 * 1024 * 1024)?;
+        let cache = BlockCache::new(64 * 1024);
+        fs.corrupt_reads.store(true, AtomicOrdering::Relaxed);
+        assert!(matches!(
+            reader.get_at_cached(b"alpha", Some(SequenceNumber::new(3)?), &cache),
+            Err(Error::Corruption { .. })
+        ));
+        assert_eq!(cache.stats()?.resident_blocks, 0);
+        fs.corrupt_reads.store(false, AtomicOrdering::Relaxed);
+        assert_eq!(
+            reader.get_at_cached(b"alpha", Some(SequenceNumber::new(3)?), &cache)?,
+            TableLookup::Value(b"one".to_vec())
+        );
+        drop(reader);
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
     fn entries(limits: &Limits) -> Result<Vec<TableEntry>> {
         let mut entries = vec![
             TableEntry::value(
@@ -1984,6 +2285,7 @@ mod tests {
         assert_eq!(reader.get(b"alpha")?, TableLookup::Value(b"one".to_vec()));
         assert_eq!(reader.get(b"beta")?, TableLookup::Tombstone);
         assert_eq!(reader.get(b"missing")?, TableLookup::Missing);
+        drop(reader);
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
         Ok(())
@@ -2081,6 +2383,7 @@ mod tests {
             None
         );
         assert!(cache.stats()?.hits > 0);
+        drop(reader);
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
         Ok(())

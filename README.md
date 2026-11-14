@@ -4,11 +4,11 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## Статус версий
 
-- текущий выпуск: **v0.6.1 — Stability and Recovery**, GitHub Pre-release;
-- предыдущая версия: **v0.6.0 — Cache and Performance**;
+- версия исходников в feature branch: **v0.6.2 — Memory & Reliability** (проверяется, пока не опубликована);
+- последний опубликованный выпуск: **v0.6.1 — Stability and Recovery**, GitHub Pre-release;
 - следующий milestone: **v0.7.0 — Column Families**.
 
-## Возможности v0.6.1
+## Возможности v0.6.2
 
 - WAL V1, atomic WriteBatch и durability modes;
 - SSTable V1 с checksums, blocks, index и Bloom filter;
@@ -39,6 +39,8 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 - повторяемый `close()`: writer handles и LOCK удерживаются до успешного sync WAL/MANIFEST;
 - однократный synchronous flush/retry для `put/delete/write` при переполнении mutable memtable;
 - best-effort reference-aware SST cleanup после успешной compaction (в рамках текущего open handle).
+- lazy random-access SST reader: header/footer и служебные blocks проверяются при открытии, data blocks читаются при запросе с CRC32C;
+- measurement throughput и read latency p50/p95/p99 в `point_lookup_bench`.
 
 ## CLI без компиляции
 
@@ -86,7 +88,7 @@ fn main() -> Result<()> {
 
 `Database::cleanup_obsolete_sstables()` консервативно удаляет только файлы, исключённые из MANIFEST успешной compaction в текущем открытом процессе, и ждёт освобождения их reader handles. В v0.6.1 вызывается также best-effort очистка после успешной compaction. Ошибка удаления не превращает уже завершённую compaction в неуспешную запись; для диагностики и повторной очистки остаётся явный метод. После restart непроверенные orphan-файлы не удаляются.
 
-**Граница:** `TableReader::open` по-прежнему заранее читает исходный SST в память; `block_cache_size` ограничивает только кэш декодированных блоков, не весь RSS. Полноценный lazy table reader и использование `table_cache_capacity` остаются отдельной работой. Range iterator продолжает свой streaming scan path.
+**Граница v0.6.2:** `TableReader::open` больше не загружает весь физический SST; reader сохраняет открытый random-access file handle и индекс/фильтр/свойства, а data blocks читает только при необходимости. `block_cache_size` ограничивает лишь учтённые декодированные blocks, а не общий RSS (временные blocks, index/filter, memtables и scan cursors остаются вне бюджета). `table_cache_capacity` пока не ограничивает количество открытых файловых handles. Range iterator использует независимый streaming scan.
 
 Измерение без внешних зависимостей:
 
@@ -206,7 +208,7 @@ cargo build --locked --workspace --release
 
 Основная CI matrix: Ubuntu stable, Windows stable и Rust 1.89.
 
-## Ограничения v0.6.1
+## Ограничения v0.6.2
 
 - isolation — snapshot isolation, не serializable;
 - обязательна write-write conflict detection, но full read-write validation пока отсутствует;
@@ -217,7 +219,8 @@ cargo build --locked --workspace --release
 - retired SST очищаются автоматически после compaction и вручную по вызову при освобождении reader handles; кросс-рестартная GC отсутствует;
 - auto-flush при заполнении memtable синхронен, однократен и применяется только к публичным `put/delete/write`; транзакционный commit пока использует прежний путь;
 - `table_cache_capacity` и `max_background_flushes/max_background_compactions` пока зарезервированы и не управляют рабочими worker pools/reader eviction;
-- `TableReader` пока eager загружает физический SST в память независимо от decoded-block cache budget;
+- `TableReader` хранит открытый file handle каждого live SST; `table_cache_capacity` пока не ограничивает число FD, общий RSS и временную память запросов не ограничивает `block_cache_size`;
+- data blocks проверяются при обращении; индекс, фильтр, свойства и footer — при открытии; deep verify независимо проверяет полное содержимое;
 - benchmark не задаёт фиксированных performance thresholds: результаты зависят от среды;
 - reverse iterator и range tombstones отсутствуют;
 - normal recovery не удаляет произвольные orphan/unknown files.
