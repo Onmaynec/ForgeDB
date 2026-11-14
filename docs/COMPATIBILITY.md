@@ -2,13 +2,13 @@
 
 ## Версия библиотеки
 
-`v0.8.0` добавляет FQL V1 и интерактивный shell поверх существующих Column Families без миграции persisted-файлов. Публичный API может изменяться до `v1.0.0`, но persisted-форматы меняются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
+`v0.8.1` добавляет bounded native SST point-read handle cache поверх v0.8.0 без миграции persisted-файлов. Публичный API может изменяться до `v1.0.0`, но persisted-форматы меняются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
 ## Поддерживаемый Rust
 
 Минимальная поддерживаемая версия: Rust 1.89. CI также проверяет текущий stable на Ubuntu и Windows.
 
-## Persisted-форматы v0.8.0
+## Persisted-форматы v0.8.1
 
 | Компонент | Writer | Reader | Неизвестная будущая версия |
 |---|---|---|---|
@@ -20,6 +20,8 @@
 | `CURRENT V1` | V1 | V1 | Отклоняется |
 
 Reader не пытается интерпретировать future version как текущий layout.
+
+SST handle-cache v0.8.1 меняет только lifetime OS read handles, не SSTable V1 и не его codec. При каждом reopen проверяется header/size/identity/sequence, а для data blocks сохраняется CRC32C. Старые файлы остаются совместимы. Точный охват и ограничения — [ADR 0017](adr/0017-bounded-sst-handle-cache.md).
 
 FQL V1 добавлен **только в CLI**: это не новая версия on-disk WAL/SST/MANIFEST/CF_REGISTRY и не сетевой протокол. Старые базы v0.7.0 и более ранние default databases открываются прежними storage readers, без миграции. Дополнительная синтаксическая грамматика и scope транзакций описаны в [FQL.md](FQL.md).
 
