@@ -16,7 +16,11 @@ fn temporary_directory(name: &str) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
-fn invoke(path: &PathBuf, subcommand: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
+fn invoke(
+    path: &PathBuf,
+    subcommand: &str,
+    args: &[&str],
+) -> std::io::Result<std::process::Output> {
     Command::new(env!("CARGO_BIN_EXE_forgedb"))
         .args(["cf", subcommand])
         .arg(path)
