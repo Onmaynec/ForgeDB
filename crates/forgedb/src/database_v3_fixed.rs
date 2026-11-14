@@ -14,7 +14,8 @@ use forgedb_manifest::{
     CURRENT_FILE_NAME, ManifestState, ManifestWriter, VersionEdit, create_manifest, open_manifest,
 };
 use forgedb_sstable::{
-    CacheStats, TableBuildOptions, TableBuildRequest, TableReader, build_table, sst_file_name,
+    CacheStats, TableBuildOptions, TableBuildRequest, TableHandleStats, TableReader, build_table,
+    sst_file_name,
 };
 use forgedb_wal::{
     WalBatch, WalWriter, create_wal, open_wal_numbered, replay_wal_numbered, wal_file_name,
@@ -210,6 +211,7 @@ impl Database {
             options.level_count,
             options.max_compaction_bytes,
             options.block_cache_size,
+            options.table_cache_capacity,
         )?);
         let inventory = inventory_for(version.as_ref(), &manifest)?;
         if !inventory.blockers.is_empty() {
@@ -495,6 +497,14 @@ impl Database {
         version.cache_stats()
     }
 
+    /// Метрики resident point-read SST descriptors; cursor/compaction/WAL
+    /// handles в budget не входят.
+    pub fn table_handle_stats(&self) -> Result<TableHandleStats> {
+        self.ensure_open()?;
+        let version = Arc::clone(&self.lock_state()?.version);
+        version.table_handle_stats()
+    }
+
     /// Удаляет только SSTable inputs, выведенные из live MANIFEST в этом open handle.
     ///
     /// Старое VersionSet поколение и его streaming cursors должны полностью освободиться.
@@ -530,18 +540,19 @@ impl Database {
                 continue;
             }
 
+            // В отличие от block cache, pooled File удерживает OS handle.
+            // Сначала закрываем его, только потом вызываем Windows remove_file.
+            if let Err(error) = current.evict_cached_table(number) {
+                report.failed.push(format!("{name}: cache eviction: {error}"));
+                pending.push(retired);
+                continue;
+            }
             let path = self.directory.join(&name);
             match std::fs::remove_file(&path) {
                 Ok(()) => {
-                    if let Err(error) = current.evict_cached_table(number) {
-                        report.failed.push(format!("{name}: cache eviction: {error}"));
-                    }
                     report.removed.push(name);
                 }
                 Err(source) if source.kind() == ErrorKind::NotFound => {
-                    if let Err(error) = current.evict_cached_table(number) {
-                        report.failed.push(format!("{name}: cache eviction: {error}"));
-                    }
                     report.absent.push(name);
                 }
                 Err(source) => {
