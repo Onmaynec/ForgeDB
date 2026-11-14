@@ -1,5 +1,11 @@
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
+
+use forgedb_sstable::TableHandlePool;
+
+use crate::entry_cursor::EntryCursor;
+use crate::sst_entry_cursor::SstEntryCursor;
 
 use forgedb_core::{DatabaseId, Error, InternalKey, InternalKeyCodec, Limits, Result, ValueType};
 use forgedb_sstable::{
@@ -24,6 +30,40 @@ pub(crate) enum TableSnapshotLookup {
 struct BlockHandle {
     offset: u64,
     length: u64,
+}
+
+/// Compaction input: тот же bounded SST FD pool, что и GET/scan.
+/// Текущий merge всё ещё материализует entries в RAM в рамках
+/// max_compaction_bytes; это не streaming compaction output.
+pub(crate) fn read_entries_pooled(
+    path: &Path,
+    expected_database_id: DatabaseId,
+    metadata: &TableMeta,
+    limits: &Limits,
+    max_file_size: u64,
+    verify_checksums: bool,
+    pool: Arc<TableHandlePool>,
+) -> Result<Vec<TableEntry>> {
+    let mut cursor = SstEntryCursor::open_pooled(
+        path,
+        expected_database_id,
+        metadata,
+        limits,
+        max_file_size,
+        verify_checksums,
+        pool,
+    )?;
+    let capacity = usize::try_from(metadata.entry_count).map_err(|_| Error::ResourceLimit {
+        resource: "sstable_entry_count",
+        limit: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
+        observed: metadata.entry_count,
+    })?;
+    let mut result = Vec::with_capacity(capacity);
+    while let Some(entry) = cursor.current() {
+        result.push(entry.clone());
+        cursor.advance()?;
+    }
+    Ok(result)
 }
 
 pub(crate) fn read_entries(
