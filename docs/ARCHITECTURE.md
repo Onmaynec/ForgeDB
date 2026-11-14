@@ -1,4 +1,4 @@
-# Архитектура ForgeDB v0.8.1
+# Архитектура ForgeDB v0.8.2
 
 ## Назначение
 
@@ -29,6 +29,16 @@ Default API `Database::open` по-прежнему читает/пишет то�
 Reference-aware deletion использует `Weak<TableReader>` для старых поколений, а не OS handles. Когда reader больше не жив, перед `remove_file` cached FD закрывается; это необходимая последовательность для Windows. Неизвестные orphan SST после restart не удаляются.
 
 **Граница:** streaming cursors, compaction files, WAL/MANIFEST/LOCK и другие Column Families не входят в указанный per-DB point pool. См. [ADR 0017](adr/0017-bounded-sst-handle-cache.md) и Issue #31.
+
+## Streaming cursor и compaction input FD pooling (v0.8.2)
+
+Публичный `Database::scan` создаёт `SstEntryCursor::open_pooled`. При инициализации файл всё ещё полностью проходит проверку SST V1 header/footer/index/filter/properties и первого блока, но сразу после этого исходный FD закрывается. Cursor сохраняет index и один текущий data block, а следующие блоки читает через shared `TableHandlePool::with_file`.
+
+Пул уже используется всеми поколениями `VersionSet`. Старые iterators удерживают `Arc<VersionSet>` (и `Arc<TableReader>`), а LRU eviction не освобождает право владения SST. Поэтому reference-aware cleanup по-прежнему защищает Windows-путь удаления retired SST.
+
+Compaction inputs теперь выполняют `read_entries_pooled` на основе cursor, а не `fs::read` всего SST: физические handles читают блоки через общий pool. Однако compaction merge по-прежнему материализует записи; `max_compaction_bytes` контролирует объём. Read-only deep verify и output SST builder живут отдельно.
+
+**Ресурсный контракт:** `table_cache_capacity` ограничивает resident File внутри одного SST read pool, но не кратковременные validation opens, SST writers, WAL/MANIFEST/LOCK или отдельные named child bases. См. [ADR 0018](adr/0018-streaming-sst-handle-leases.md). Issue #31 остаётся открытой.
 
 ## Состав workspace
 
