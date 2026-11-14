@@ -2038,7 +2038,6 @@ mod tests {
         Ok(path)
     }
 
-
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
     struct CountingReader {
@@ -2147,7 +2146,12 @@ mod tests {
         let meta = build_table(
             &NativeFileSystem,
             TableBuildRequest::new(
-                &directory, &directory.join("TEMP"), id, 31, &records, &limits,
+                &directory,
+                &directory.join("TEMP"),
+                id,
+                31,
+                &records,
+                &limits,
                 TableBuildOptions {
                     data_block_size: 1024,
                     restart_interval: 4,
@@ -2155,9 +2159,7 @@ mod tests {
                 },
             ),
         )?;
-        let reader = TableReader::open(
-            &fs, &directory, id, &meta, &limits, 16 * 1024 * 1024,
-        )?;
+        let reader = TableReader::open(&fs, &directory, id, &meta, &limits, 16 * 1024 * 1024)?;
         let opened = fs.bytes_read.load(AtomicOrdering::Relaxed);
         assert!(u64::try_from(opened).unwrap_or(u64::MAX) < meta.file_size / 2);
         let cache = BlockCache::new(64 * 1024);
