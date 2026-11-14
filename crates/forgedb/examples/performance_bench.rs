@@ -71,6 +71,14 @@ fn main() -> Result<()> {
         });
     }
     let handles = database.table_handle_stats()?;
+    // Full workload обязателен к проверке реальных evictions, иначе
+    // benchmark случайно обходил бы оптимизированный LRU путь.
+    if keys.div_ceil(128) > handles.capacity && handles.evictions == 0 {
+        return Err(Error::InternalInvariant {
+            invariant: "I-PERF-BENCH-LRU",
+            reason: "full workload не выполнил ни одного SST handle eviction".to_owned(),
+        });
+    }
     println!(
         "configuration: keys={keys} reads_pass={reads} value_bytes=256 block_cache_bytes=0 table_cache_capacity=8"
     );
