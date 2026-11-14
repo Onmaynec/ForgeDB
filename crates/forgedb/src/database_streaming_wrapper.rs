@@ -178,7 +178,7 @@ impl StreamingDatabase {
     }
 
     /// Resident SST FD metrics для GET/scan/compaction inputs этого Database.
-    /// WAL/MANIFEST/LOCK, writes и другие Column Families не учитываются.
+    /// WAL/MANIFEST/LOCK, temporary validation/outputs и другие CF вне pool.
     pub fn table_handle_stats(&self) -> Result<forgedb_sstable::TableHandleStats> {
         self.inner.table_handle_stats()
     }
