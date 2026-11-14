@@ -148,7 +148,6 @@ fn transaction_conflicts_and_snapshot_reads_survive_fd_eviction() -> Result<()> 
     database.close()?;
     drop(snapshot);
     drop(database);
-    fs::remove_dir_all(&path)
-        .map_err(|source| Error::io("remove_test_dir", Some(path), source))?;
+    fs::remove_dir_all(&path).map_err(|source| Error::io("remove_test_dir", Some(path), source))?;
     Ok(())
 }
