@@ -74,7 +74,8 @@ fn ordered_handle_lru_keeps_most_recent_file_and_maintains_exact_metrics() -> Re
 
     database.close()?;
     drop(database);
-    fs::remove_dir_all(&dir).map_err(|source| Error::io("remove_perf_test_dir", Some(dir), source))?;
+    fs::remove_dir_all(&dir)
+        .map_err(|source| Error::io("remove_perf_test_dir", Some(dir), source))?;
     Ok(())
 }
 
