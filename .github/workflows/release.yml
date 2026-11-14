@@ -1,4 +1,4 @@
-name: ForgeDB v0.7.0 Pre-release
+name: ForgeDB v0.8.0 Pre-release
 
 on:
   push:
@@ -12,15 +12,15 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-v0.7.0
+  group: release-v0.8.0
   cancel-in-progress: false
 
 jobs:
   release:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && contains(github.event.head_commit.message, 'release: v0.7.0')) ||
-      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.title == 'release: v0.7.0')
+      (github.event_name == 'push' && contains(github.event.head_commit.message, 'release: v0.8.0')) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.title == 'release: v0.8.0')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -32,9 +32,9 @@ jobs:
       - name: Проверить метаданные выпуска
         shell: bash
         run: |
-          grep -Fqx 'version = "0.7.0"' Cargo.toml
+          grep -Fqx 'version = "0.8.0"' Cargo.toml
           test -s RELEASE_NOTES.md
-          test -s docs/releases/V0.7.0.md
+          test -s docs/releases/V0.8.0.md
       - name: Проверить форматирование
         run: cargo fmt --all --check
       - name: Выполнить Clippy
@@ -50,25 +50,25 @@ jobs:
       - name: Создать аннотированный tag
         shell: bash
         run: |
-          if git rev-parse "v0.7.0" >/dev/null 2>&1; then
-            echo "Tag v0.7.0 уже существует"
+          if git rev-parse "v0.8.0" >/dev/null 2>&1; then
+            echo "Tag v0.8.0 уже существует"
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a v0.7.0 -m "ForgeDB v0.7.0 — Column Families"
-            git push origin v0.7.0
+            git tag -a v0.8.0 -m "ForgeDB v0.8.0 — FQL and Interactive Shell"
+            git push origin v0.8.0
           fi
       - name: Создать GitHub Pre-release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          if gh release view v0.7.0 >/dev/null 2>&1; then
-            echo "Release v0.7.0 уже существует"
+          if gh release view v0.8.0 >/dev/null 2>&1; then
+            echo "Release v0.8.0 уже существует"
           else
-            gh release create v0.7.0 \
+            gh release create v0.8.0 \
               --prerelease \
-              --title "ForgeDB v0.7.0 — Column Families" \
+              --title "ForgeDB v0.8.0 — FQL and Interactive Shell" \
               --notes-file RELEASE_NOTES.md
           fi
 
@@ -83,7 +83,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: v0.7.0
+          ref: v0.8.0
       - uses: dtolnay/rust-toolchain@stable
       - name: Собрать CLI
         run: cargo build --locked --release -p forgedb-cli
@@ -91,14 +91,14 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          archive=forgedb-v0.7.0-linux-x86_64.tar.gz
+          archive=forgedb-v0.8.0-linux-x86_64.tar.gz
           tar -czf "$archive" -C target/release forgedb
           sha256sum "$archive" > "$archive.sha256"
       - name: Упаковать Windows CLI и SHA256
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $archive = "forgedb-v0.7.0-windows-x86_64.zip"
+          $archive = "forgedb-v0.8.0-windows-x86_64.zip"
           Compress-Archive -Path "target/release/forgedb.exe" -DestinationPath $archive
           $hash = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $archive" | Set-Content -Path "$archive.sha256" -Encoding ascii
@@ -108,14 +108,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            archive=forgedb-v0.7.0-windows-x86_64.zip
+            archive=forgedb-v0.8.0-windows-x86_64.zip
           else
-            archive=forgedb-v0.7.0-linux-x86_64.tar.gz
+            archive=forgedb-v0.8.0-linux-x86_64.tar.gz
           fi
           for asset in "$archive" "$archive.sha256"; do
-            if gh release view v0.7.0 --json assets --jq '.assets[].name' | grep -Fxq "$asset"; then
+            if gh release view v0.8.0 --json assets --jq '.assets[].name' | grep -Fxq "$asset"; then
               echo "Asset $asset уже опубликован"
             else
-              gh release upload v0.7.0 "$asset"
+              gh release upload v0.8.0 "$asset"
             fi
           done
