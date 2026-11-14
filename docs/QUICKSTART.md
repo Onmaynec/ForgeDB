@@ -47,6 +47,29 @@ tar -xzf forgedb-v0.7.0-linux-x86_64.tar.gz
 
 `cf create` выводит ID, например `1`; используйте ID из `cf list` для `get/put/delete/scan/drop`. Удаление family командой `cf drop` исключает её из реестра, но не удаляет физические данные; повторное создание такого же имени получает новый ID. Для multi-operation atomic batch внутри family и транзакций используйте библиотечный `ColumnFamilies` API.
 
+## FQL V1 — запросы и интерактивный shell (v0.8.0)
+
+```powershell
+.\forgedb.exe fql .\data "PUT key 'Hello FQL'"
+.\forgedb.exe fql .\data "GET key" --read-only
+.\forgedb.exe shell .\data
+.\forgedb.exe shell .\data --file .\commands.fql
+```
+
+Файл `commands.fql`:
+
+```text
+CREATE FAMILY users
+USE users
+BEGIN
+PUT account 'Alice'
+COMMIT
+SCAN FROM a TO z LIMIT 20
+EXIT
+```
+
+В FQL одна команда на строку; `BEGIN/COMMIT` обеспечивает атомарную запись **только внутри одной family**. Скрипт целиком не является транзакцией. Ошибка файла останавливает исполнение, незавершённый BEGIN откатывается. Полное описание синтаксиса, бинарных литералов и ограничений: [docs/FQL.md](FQL.md).
+
 ## Дополнительные команды
 
 ```text
