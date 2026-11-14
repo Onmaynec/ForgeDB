@@ -210,8 +210,7 @@ impl Database {
             &limits,
             options.level_count,
             options.max_compaction_bytes,
-            options.block_cache_size,
-            options.table_cache_capacity,
+            (options.block_cache_size, options.table_cache_capacity),
         )?);
         let inventory = inventory_for(version.as_ref(), &manifest)?;
         if !inventory.blockers.is_empty() {
