@@ -4,11 +4,11 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## Статус версий
 
-- текущий выпуск: **v0.8.1 — SST Handle Cache & Reliability**, GitHub Pre-release;
-- предыдущая версия: **v0.8.0 — FQL & Interactive Shell**;
+- версия исходников: **v0.8.2 — Streaming SST Handle Pool** (функциональная ветка, до публикации);
+- последний опубликованный выпуск: **v0.8.1 — SST Handle Cache & Reliability**, GitHub Pre-release;
 - следующие задачи: **#31 — управление SST file handles, #35 — unified Column Families**.
 
-## Возможности v0.8.1
+## Возможности v0.8.2
 
 - WAL V1, atomic WriteBatch и durability modes;
 - SSTable V1 с checksums, blocks, index и Bloom filter;
@@ -133,6 +133,16 @@ println!("open {}/{}; evictions {}, reopens {}",
 Отдельный `block_cache_size` продолжает ограничивать decoded-block residency. **Это не общий process FD budget:** streaming iterators, compaction, WAL/MANIFEST/LOCK и другие named Column Families используют отдельные handles. Issue #31 остаётся открытым для полной политики. При удалении retired SST pooled FD закрывается до физического удаления, включая Windows.
 
 Подробнее: [v0.8.1](docs/releases/V0.8.1.md), [ADR 0017](docs/adr/0017-bounded-sst-handle-cache.md), [Options](docs/OPTIONS.md).
+
+## Потоковое чтение через общий SST FD pool (v0.8.2)
+
+Потоковый `Database::scan` и входные SST compaction теперь используют тот же `TableHandlePool`, что и точечный `GET`. После проверки header/footer/index/filter/properties и первого data block cursor закрывает исходный `File`: при последующих блоках FD берётся из общего LRU, а не удерживается на срок жизни итератора.
+
+`Options::table_cache_capacity` ограничивает **resident handles общего SST read pool одного Database**. Проверки размера/ID/sequence/header при reopen и CRC32C data blocks сохраняются. Старые iterators удерживают `VersionSet` и защищают SST от premature cleanup.
+
+Это не общий FD limit процесса: при начальной проверке cursor кратковременно открывает вне pool дополнительный FD; SST output, WAL/MANIFEST/LOCK, deep verify и named child databases — отдельные источники дескрипторов. Полное решение Issue #31 остаётся открытым. Обязательные CI тесты: 48 SST × 10 keys, concurrent GET+scan и compaction cleanup; дополнительный стресс с 1024 SST помечен `#[ignore]`.
+
+Документы: [v0.8.2](docs/releases/V0.8.2.md), [ADR 0018](docs/adr/0018-streaming-sst-handle-leases.md).
 
 ## Cache and Performance
 
@@ -260,7 +270,7 @@ cargo build --locked --workspace --release
 
 Основная CI matrix: Ubuntu stable, Windows stable и Rust 1.89.
 
-## Ограничения v0.8.1
+## Ограничения v0.8.2
 
 - isolation — snapshot isolation, не serializable;
 - обязательна write-write conflict detection, но full read-write validation пока отсутствует;
@@ -279,6 +289,8 @@ cargo build --locked --workspace --release
 
 ## Документация
 
+- [`docs/releases/V0.8.2.md`](docs/releases/V0.8.2.md);
+- [`docs/adr/0018-streaming-sst-handle-leases.md`](docs/adr/0018-streaming-sst-handle-leases.md);
 - [`docs/releases/V0.8.1.md`](docs/releases/V0.8.1.md);
 - [`docs/adr/0017-bounded-sst-handle-cache.md`](docs/adr/0017-bounded-sst-handle-cache.md);
 - [`docs/FQL.md`](docs/FQL.md);
