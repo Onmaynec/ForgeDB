@@ -1,4 +1,4 @@
-//! Публичный API ForgeDB v0.9.0.
+//! Публичный API ForgeDB v1.0.0.
 //!
 //! WAL/LSM storage core с snapshot isolation, индексными SST reads, bounded
 //! decoded-block cache, lazy SST readers, безопасной очисткой retired SST и повторяемым close.
