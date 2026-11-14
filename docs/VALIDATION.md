@@ -31,6 +31,9 @@ cargo +1.89 test --locked --workspace --all-features
 - `drop_family` не переиспользует ID и не удаляет физический каталог без подтверждения.
 - Read-only не создаёт реестр, подкаталоги или WAL и запрещает create/drop/write.
 - Partial create orphan directory не может стать active family и не уничтожается автоматически.
+- CLI выполняет create/list/get/put/delete/drop в отдельных процессах, с reopen и проверкой числовых ID.
+- `create/drop/open` сериализованы с `close()` одним registry mutex; операции после закрытия возвращают `Closed`.
+- Symlink в reserved registry/CF path отклоняется; dangling orphan ID не переиспользуется.
 
 ## Обязательные направления тестирования
 
