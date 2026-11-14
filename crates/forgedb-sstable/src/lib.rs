@@ -2269,6 +2269,84 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn native_handle_cache_reopens_with_bounded_fd_and_rechecks_header() -> Result<()> {
+        let directory = temporary_directory("handle-cache-corruption")?;
+        let limits = Limits::default();
+        let identity = DatabaseId::random();
+        let pool = Arc::new(TableHandlePool::new(1));
+        let mut metadata = Vec::new();
+        for number in [101_u64, 102_u64] {
+            metadata.push(build_table(
+                &NativeFileSystem,
+                TableBuildRequest::new(
+                    &directory,
+                    &directory.join("TEMP"),
+                    identity,
+                    number,
+                    &entries(&limits)?,
+                    &limits,
+                    TableBuildOptions {
+                        data_block_size: 1024,
+                        restart_interval: 2,
+                        bloom_bits_per_key: 10,
+                    },
+                ),
+            )?);
+        }
+        let first = TableReader::open(
+            &NativeFileSystem,
+            &directory,
+            identity,
+            &metadata[0],
+            &limits,
+            16 * 1024 * 1024,
+        )?
+        .with_native_pool(Arc::clone(&pool))?;
+        let second = TableReader::open(
+            &NativeFileSystem,
+            &directory,
+            identity,
+            &metadata[1],
+            &limits,
+            16 * 1024 * 1024,
+        )?
+        .with_native_pool(Arc::clone(&pool))?;
+
+        assert_eq!(pool.stats()?.open_handles, 0);
+        assert_eq!(first.get(b"alpha")?, TableLookup::Value(b"one".to_vec()));
+        assert_eq!(second.get(b"alpha")?, TableLookup::Value(b"one".to_vec()));
+        assert_eq!(first.get(b"alpha")?, TableLookup::Value(b"one".to_vec()));
+        let stats = pool.stats()?;
+        assert_eq!(stats.capacity, 1);
+        assert_eq!(stats.open_handles, 1);
+        assert!(stats.evictions >= 2);
+        assert!(stats.reopens >= 1);
+
+        // После eviction файл физически заменён тем же размером.
+        // Header checksum/file identity должна обнаружить подмену при reopen.
+        let file = directory.join(sst_file_name(metadata[0].file_number));
+        let original = fs::read(&file)
+            .map_err(|source| Error::io("read_test_sst", Some(file.clone()), source))?;
+        assert_eq!(second.get(b"alpha")?, TableLookup::Value(b"one".to_vec()));
+        let mut broken = original.clone();
+        broken[0] ^= 0xff;
+        fs::write(&file, &broken)
+            .map_err(|source| Error::io("corrupt_test_sst", Some(file.clone()), source))?;
+        assert!(matches!(first.get(b"alpha"), Err(Error::Corruption { .. })));
+        assert!(pool.stats()?.open_handles <= 1);
+
+        fs::write(&file, original)
+            .map_err(|source| Error::io("restore_test_sst", Some(file), source))?;
+        assert_eq!(first.get(b"alpha")?, TableLookup::Value(b"one".to_vec()));
+        drop(first);
+        drop(second);
+        drop(pool);
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
     fn entries(limits: &Limits) -> Result<Vec<TableEntry>> {
         let mut entries = vec![
             TableEntry::value(
