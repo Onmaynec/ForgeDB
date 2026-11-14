@@ -4,8 +4,8 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## Статус версий
 
-- версия исходников в feature branch: **v0.6.2 — Memory & Reliability** (проверяется, пока не опубликована);
-- последний опубликованный выпуск: **v0.6.1 — Stability and Recovery**, GitHub Pre-release;
+- текущий выпуск: **v0.6.2 — Memory & Reliability**, GitHub Pre-release;
+- предыдущая версия: **v0.6.1 — Stability and Recovery**;
 - следующий milestone: **v0.7.0 — Column Families**.
 
 ## Возможности v0.6.2
@@ -44,7 +44,7 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## CLI без компиляции
 
-Для Windows x86-64 и Linux x86-64 опубликованы архивы с готовым CLI и SHA-256 checksum в [GitHub Releases](https://github.com/Onmaynec/ForgeDB/releases). Скачать и распаковать `forgedb-v0.6.1-windows-x86_64.zip` или `forgedb-v0.6.1-linux-x86_64.tar.gz`.
+Для Windows x86-64 и Linux x86-64 опубликованы архивы с готовым CLI и SHA-256 checksum в [GitHub Releases](https://github.com/Onmaynec/ForgeDB/releases). Скачать и распаковать `forgedb-v0.6.2-windows-x86_64.zip` или `forgedb-v0.6.2-linux-x86_64.tar.gz`.
 
 Пример первого запуска после распаковки (Linux; в PowerShell используйте `./forgedb.exe`):
 
@@ -229,6 +229,8 @@ cargo build --locked --workspace --release
 
 - [`docs/CACHE_AND_PERFORMANCE.md`](docs/CACHE_AND_PERFORMANCE.md);
 - [`docs/OPTIONS.md`](docs/OPTIONS.md);
+- [`docs/releases/V0.6.2.md`](docs/releases/V0.6.2.md);
+- [`docs/adr/0014-lazy-sst-readers.md`](docs/adr/0014-lazy-sst-readers.md);
 - [`docs/releases/V0.6.1.md`](docs/releases/V0.6.1.md);
 - [`docs/TRANSACTIONS.md`](docs/TRANSACTIONS.md);
 - [`docs/COMPACTION.md`](docs/COMPACTION.md);
