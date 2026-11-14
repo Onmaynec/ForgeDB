@@ -1,13 +1,13 @@
-# Первый запуск ForgeDB CLI v0.8.1
+# Первый запуск ForgeDB CLI v0.8.2
 
-CLI нужен для работы с локальной key-value базой через консоль. Установка Rust и сборка проекта не обязательны: для x86-64 Windows и Linux выпускаются готовые архивы в [GitHub Releases](https://github.com/Onmaynec/ForgeDB/releases/tag/v0.8.1). Архивы содержат одну программу `forgedb` / `forgedb.exe` и отдельный SHA-256 checksum.
+CLI нужен для работы с локальной key-value базой через консоль. Установка Rust и сборка проекта не обязательны: для x86-64 Windows и Linux выпускаются готовые архивы в [GitHub Releases](https://github.com/Onmaynec/ForgeDB/releases/tag/v0.8.2). Архивы содержат одну программу `forgedb` / `forgedb.exe` и отдельный SHA-256 checksum.
 
 ## Windows (PowerShell)
 
-Скачайте `forgedb-v0.8.1-windows-x86_64.zip` и одноимённый `.zip.sha256` из Assets релиза. Откройте PowerShell в каталоге загрузок.
+Скачайте `forgedb-v0.8.2-windows-x86_64.zip` и одноимённый `.zip.sha256` из Assets релиза. Откройте PowerShell в каталоге загрузок.
 
 ```powershell
-$archive = "forgedb-v0.8.1-windows-x86_64.zip"
+$archive = "forgedb-v0.8.2-windows-x86_64.zip"
 $expected = (Get-Content "$archive.sha256").Split(" ")[0]
 $actual = (Get-FileHash $archive -Algorithm SHA256).Hash
 if ($actual -ne $expected) { throw "SHA256 checksum mismatch" }
@@ -24,11 +24,11 @@ CLI создаёт каталог `data`, сохраняет ключ `hello` с
 
 ## Linux (x86-64)
 
-Скачайте `forgedb-v0.8.1-linux-x86_64.tar.gz` и `.tar.gz.sha256` из Assets релиза.
+Скачайте `forgedb-v0.8.2-linux-x86_64.tar.gz` и `.tar.gz.sha256` из Assets релиза.
 
 ```bash
-sha256sum -c forgedb-v0.8.1-linux-x86_64.tar.gz.sha256
-tar -xzf forgedb-v0.8.1-linux-x86_64.tar.gz
+sha256sum -c forgedb-v0.8.2-linux-x86_64.tar.gz.sha256
+tar -xzf forgedb-v0.8.2-linux-x86_64.tar.gz
 ./forgedb put ./data hello world
 ./forgedb get ./data hello
 ./forgedb scan ./data
