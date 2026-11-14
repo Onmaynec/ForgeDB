@@ -13,6 +13,8 @@
 - Новый `CF_REGISTRY V1` сохраняет ID↔name с CRC32C и проверками длины/версии; snapshot registry публикуется через sync/atomic rename и directory sync.
 - Ошибка registry/missing registered family приводит к явной ошибке. Directory от незавершённого создания и drop сохраняются как orphan; ID никогда не переиспользуется.
 - Добавлены интеграционные тесты на изоляцию данных, reopen/recovery, transactions, read-only, corruption и drop/re-create.
+- CLI поддерживает `cf list/create/drop/put/get/delete/scan` с изолированными database roots; добавлены многопроцессные CLI integration tests.
+- Проверка зарезервированных CF-путей отклоняет symlink и защищает от повторного использования dangling orphan path; create/drop не допускаются после close.
 
 ### Границы
 
