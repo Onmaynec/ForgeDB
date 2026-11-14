@@ -50,9 +50,9 @@ impl VersionSet {
         limits: &Limits,
         level_count: usize,
         max_file_size: u64,
-        block_cache_size: usize,
-        table_cache_capacity: usize,
+        cache_capacities: (usize, usize),
     ) -> Result<Self> {
+        let (block_cache_size, table_cache_capacity) = cache_capacities;
         if level_count < 2 {
             return Err(Error::invalid_argument(
                 "level_count",
