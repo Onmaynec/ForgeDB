@@ -169,3 +169,42 @@ fn mvcc_merge_discards_large_invisible_values_without_losing_snapshot_semantics(
         .map_err(|source| Error::io("remove_perf_test_dir", Some(dir), source))?;
     Ok(())
 }
+
+/// Ранний range filter не должен нарушаться из-за borrowed VersionSet обхода:
+/// двигаются только cursor для SST, диапазоны которых перекрывают запрос.
+#[test]
+fn narrow_range_scan_preserves_order_across_many_sst_without_handle_vector() -> Result<()> {
+    let dir = directory("narrow-range")?;
+    let database = Database::open(&dir, options())?;
+    for table in 0..48 {
+        let mut batch = WriteBatch::new();
+        for index in 0..8 {
+            batch.put(
+                format!("key-{table:04}-{index:02}").into_bytes(),
+                vec![u8::try_from(table).unwrap_or_default(); 32],
+            )?;
+        }
+        database.write(batch, WriteOptions::no_sync())?;
+        database.flush()?;
+    }
+
+    let entries = database
+        .scan(
+            b"key-0032-03".to_vec()..b"key-0033-04".to_vec(),
+            ReadOptions::default(),
+        )?
+        .collect::<Result<Vec<_>>>()?;
+    let keys = entries.into_iter().map(|(key, _)| key).collect::<Vec<_>>();
+    let expected = (3..8)
+        .map(|index| format!("key-0032-{index:02}").into_bytes())
+        .chain((0..4).map(|index| format!("key-0033-{index:02}").into_bytes()))
+        .collect::<Vec<_>>();
+    assert_eq!(keys, expected);
+    assert!(database.table_handle_stats()?.open_handles <= 2);
+
+    database.close()?;
+    drop(database);
+    fs::remove_dir_all(&dir)
+        .map_err(|source| Error::io("remove_perf_test_dir", Some(dir), source))?;
+    Ok(())
+}
