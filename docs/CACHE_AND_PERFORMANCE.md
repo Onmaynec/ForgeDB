@@ -1,4 +1,4 @@
-# Cache and Performance — ForgeDB v0.8.1
+# Cache and Performance — ForgeDB v0.8.2
 
 ## Назначение
 
@@ -56,6 +56,14 @@ println!("open={}/{} hits={} misses={} evictions={} reopens={}",
 ```
 
 **Не process-wide FD limit:** streaming SstEntryCursor, compaction readers/writers, WAL/MANIFEST, temporary files и другие named families — вне одного point-read pool. File-references retired SST продолжают защищаться `Weak<TableReader>`; при cleanup его pooled FD закрывается перед Windows remove_file. Полная общая политика — Issue #31.
+
+## Streaming scan и compaction inputs: общий LRU (v0.8.2)
+
+Ранее `SstEntryCursor` удерживал свой `File` на весь срок `DbIterator`. Начиная с v0.8.2 constructor `open_pooled` закрывает initial File после проверки header/footer/index/filter/properties и первого data block. Последующие блоки читаются под общим mutex через native `TableHandlePool`; проверка CRC32C и повторная проверка identity/header/size при reopen остаются.
+
+Compaction input reader тоже использует этот pool, поэтому обычные GET, streaming scan и compaction input не держат отдельные долгоживущие SST handles. Однако compaction output builder и merge entries остаются прежними: нет обещания fully streaming merge или меньшего RSS.
+
+`table_cache_capacity` — resident limit **только одного SST read pool**; начальный cursor metadata validation кратковременно открывает File вне pool. Поэтому `open_handles <= capacity` не означает, что число всех OS FD не может превышать capacity. Отдельные handles: WAL/MANIFEST, SST outputs, deep verify и именованные child databases. Метрика `Database::table_handle_stats()` измеряет именно pool. Benchmark latency/throughput нужно сравнивать отдельно, поскольку shared mutex может усиливать contention.
 
 ## Range scan
 
