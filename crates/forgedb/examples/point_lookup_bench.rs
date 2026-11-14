@@ -58,7 +58,10 @@ fn main() -> Result<()> {
     let after_warm = database.cache_stats()?;
 
     println!("keys={keys} reads_per_pass={reads}");
-    println!("setup={setup:?} cold={:?} warm={:?}", cold.elapsed, warm.elapsed);
+    println!(
+        "setup={setup:?} cold={:?} warm={:?}",
+        cold.elapsed, warm.elapsed
+    );
     print_latency("cold", reads, &cold);
     print_latency("warm", reads, &warm);
     println!(
