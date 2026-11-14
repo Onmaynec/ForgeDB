@@ -16,7 +16,10 @@ fn main() -> Result<()> {
     let keys = positive(args.next(), 4096, "keys")?;
     let reads = positive(args.next(), 16_384, "reads")?;
     if args.next().is_some() {
-        return Err(Error::invalid_argument("arguments", "ожидаются [keys] [reads]"));
+        return Err(Error::invalid_argument(
+            "arguments",
+            "ожидаются [keys] [reads]",
+        ));
     }
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -40,7 +43,10 @@ fn main() -> Result<()> {
     for start in (0..keys).step_by(128) {
         let mut batch = WriteBatch::new();
         for i in start..(start + 128).min(keys) {
-            batch.put(format!("key-{i:08}").into_bytes(), vec![u8::try_from(i % 251).unwrap_or(0); 256])?;
+            batch.put(
+                format!("key-{i:08}").into_bytes(),
+                vec![u8::try_from(i % 251).unwrap_or(0); 256],
+            )?;
         }
         database.write(batch, WriteOptions::no_sync())?;
         database.flush()?;
@@ -65,16 +71,32 @@ fn main() -> Result<()> {
         });
     }
     let handles = database.table_handle_stats()?;
-    println!("configuration: keys={keys} reads_pass={reads} value_bytes=256 block_cache_bytes=0 table_cache_capacity=64");
-    println!("setup: elapsed_ms={:.3}", setup_elapsed.as_secs_f64() * 1000.0);
+    println!(
+        "configuration: keys={keys} reads_pass={reads} value_bytes=256 block_cache_bytes=0 table_cache_capacity=64"
+    );
+    println!(
+        "setup: elapsed_ms={:.3}",
+        setup_elapsed.as_secs_f64() * 1000.0
+    );
     print_get("get_cold", reads, &cold);
     print_get("get_warm", reads, &warm);
-    println!("scan: entries={count} bytes={bytes} elapsed_ms={:.3} entries_per_sec={:.2}",
-        scan_elapsed.as_secs_f64() * 1000.0, throughput(count, scan_elapsed));
-    println!("handle_pool: open={} capacity={} hits={} misses={} evictions={} reopens={}",
-        handles.open_handles, handles.capacity, handles.hits, handles.misses,
-        handles.evictions, handles.reopens);
-    println!("Используйте одинаковую машину/нагрузку/Rust для сравнения; это локальные измерения, не гарантия ускорения.");
+    println!(
+        "scan: entries={count} bytes={bytes} elapsed_ms={:.3} entries_per_sec={:.2}",
+        scan_elapsed.as_secs_f64() * 1000.0,
+        throughput(count, scan_elapsed)
+    );
+    println!(
+        "handle_pool: open={} capacity={} hits={} misses={} evictions={} reopens={}",
+        handles.open_handles,
+        handles.capacity,
+        handles.hits,
+        handles.misses,
+        handles.evictions,
+        handles.reopens
+    );
+    println!(
+        "Используйте одинаковую машину/нагрузку/Rust для сравнения; это локальные измерения, не гарантия ускорения."
+    );
 
     database.close()?;
     drop(database);
@@ -91,7 +113,10 @@ fn positive(arg: Option<String>, default: usize, name: &'static str) -> Result<u
             .map_err(|_| Error::invalid_argument(name, "нужно положительное число"))?,
     };
     if n == 0 {
-        return Err(Error::invalid_argument(name, "число должно быть больше нуля"));
+        return Err(Error::invalid_argument(
+            name,
+            "число должно быть больше нуля",
+        ));
     }
     Ok(n)
 }
@@ -138,7 +163,12 @@ fn measure_gets(db: &Database, keys: usize, reads: usize) -> Result<Metrics> {
 }
 
 fn print_get(name: &str, reads: usize, m: &Metrics) {
-    println!("{name}: elapsed_ms={:.3} ops_sec={:.2} p50_ns={} p95_ns={} p99_ns={}",
-        m.time.as_secs_f64() * 1000.0, throughput(reads, m.time),
-        m.p50_ns, m.p95_ns, m.p99_ns);
+    println!(
+        "{name}: elapsed_ms={:.3} ops_sec={:.2} p50_ns={} p95_ns={} p99_ns={}",
+        m.time.as_secs_f64() * 1000.0,
+        throughput(reads, m.time),
+        m.p50_ns,
+        m.p95_ns,
+        m.p99_ns
+    );
 }
