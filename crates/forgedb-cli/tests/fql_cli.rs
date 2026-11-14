@@ -45,7 +45,9 @@ fn piped_shell(path: &Path, script: &str) -> std::io::Result<Output> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let mut stdin = child.stdin.take().expect("stdin was piped");
+    let Some(mut stdin) = child.stdin.take() else {
+        return Err(std::io::Error::other("stdin subprocess pipe unavailable"));
+    };
     stdin.write_all(script.as_bytes())?;
     drop(stdin);
     child.wait_with_output()
