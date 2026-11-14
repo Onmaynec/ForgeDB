@@ -1,13 +1,14 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use forgedb_core::{
     DatabaseId, Error, InternalKey, InternalKeyCodec, Limits, Result, SequenceNumber, ValueType,
 };
 use forgedb_sstable::{
     BLOCK_TRAILER_SIZE, CHECKSUM_TYPE_CRC32C, COMPRESSION_NONE, SST_FOOTER_SIZE, SST_HEADER_SIZE,
-    SSTABLE_FORMAT_VERSION, TableEntry, TableMeta,
+    SSTABLE_FORMAT_VERSION, TableEntry, TableHandlePool, TableMeta,
 };
 
 use crate::entry_cursor::EntryCursor;
@@ -45,7 +46,9 @@ impl CursorLimits {
 #[derive(Debug)]
 pub(crate) struct SstEntryCursor {
     path: PathBuf,
-    file: File,
+    file: Option<File>,
+    pool: Option<Arc<TableHandlePool>>,
+    database_id: DatabaseId,
     metadata: TableMeta,
     limits: CursorLimits,
     verify_checksums: bool,
@@ -174,7 +177,9 @@ impl SstEntryCursor {
 
         let mut cursor = Self {
             path: path.to_path_buf(),
-            file,
+            file: Some(file),
+            pool: None,
+            database_id: expected_database_id,
             metadata: metadata.clone(),
             limits: cursor_limits,
             verify_checksums,
@@ -198,6 +203,33 @@ impl SstEntryCursor {
         Ok(cursor)
     }
 
+    /// Для опубликованных VersionSet файлов cursor не оставляет выделенный
+    /// File на весь срок жизни iterator. Init по-прежнему валидирует SST
+    /// header/index/footer/properties и первый data block, затем закрывает FD.
+    /// Следующие data blocks читаются через тот же пул, что и point reads.
+    pub(crate) fn open_pooled(
+        path: &Path,
+        expected_database_id: DatabaseId,
+        metadata: &TableMeta,
+        limits: &Limits,
+        max_file_size: u64,
+        verify_checksums: bool,
+        pool: Arc<TableHandlePool>,
+    ) -> Result<Self> {
+        let mut cursor = Self::open(
+            path,
+            expected_database_id,
+            metadata,
+            limits,
+            max_file_size,
+            verify_checksums,
+        )?;
+        // Init File закрывается, прежде чем cursor становится доступен caller.
+        cursor.file = None;
+        cursor.pool = Some(pool);
+        Ok(cursor)
+    }
+
     fn load_next_block(&mut self) -> Result<()> {
         if self.next_block < self.data_handles.len() {
             let handle =
@@ -213,13 +245,29 @@ impl SstEntryCursor {
                 limit: u64::MAX,
                 observed: u64::MAX,
             })?;
-            let payload = read_block_from_file(
-                &mut self.file,
-                &self.path,
-                handle,
-                "SSTable data block",
-                self.verify_checksums,
-            )?;
+            let payload = if let Some(pool) = &self.pool {
+                pool.with_file(&self.path, self.database_id, &self.metadata, |file| {
+                    read_block_from_file(
+                        file,
+                        &self.path,
+                        handle,
+                        "SSTable data block",
+                        self.verify_checksums,
+                    )
+                })?
+            } else {
+                let file = self.file.as_mut().ok_or(Error::InternalInvariant {
+                    invariant: "I-SST-CURSOR-FILE",
+                    reason: "cursor не имеет ни pooled handle, ни собственного файла".to_owned(),
+                })?;
+                read_block_from_file(
+                    file,
+                    &self.path,
+                    handle,
+                    "SSTable data block",
+                    self.verify_checksums,
+                )?
+            };
             let entries = decode_data_block(&self.path, &payload, self.limits)?;
             if entries.is_empty() {
                 return Err(corruption(
