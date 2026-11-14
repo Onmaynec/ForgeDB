@@ -314,9 +314,7 @@ pub(crate) fn export(database_path: &Path, archive_path: &Path) -> Result<()> {
         Ok(())
     })();
     let cleanup = fs::remove_file(&temp);
-    if let Err(error) = result {
-        return Err(error);
-    }
+    result?;
     cleanup.map_err(|source| Error::io("cleanup_archive_temp", Some(temp), source))?;
     println!("logical archive: {}", archive_path.display());
     println!("families: {count}");
