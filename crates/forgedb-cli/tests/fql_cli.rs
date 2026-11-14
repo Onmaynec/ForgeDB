@@ -69,7 +69,7 @@ fn fql_one_shot_checks_syntax_before_creating_database() -> Result<(), Box<dyn s
     let raw = fql(&path, "PUT X'00ff' X'ff00'", false)?;
     assert!(raw.status.success());
     let bytes = fql(&path, "GET X'00ff'", true)?;
-    assert_eq!(bytes.stdout, br"'\xff\x00'" .iter().copied().chain([b'\n']).collect::<Vec<u8>>());
+    assert_eq!(bytes.stdout, b"'\\xff\\x00'\n");
 
     fs::remove_dir_all(path)?;
     Ok(())
