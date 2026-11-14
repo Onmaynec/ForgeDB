@@ -395,6 +395,7 @@ pub(crate) fn restore(archive_path: &Path, target: &Path) -> Result<()> {
                     }
                     families.create(&name)?
                 };
+                let mut previous_key: Option<Vec<u8>> = None;
                 loop {
                     match archive.u8()? {
                         ENTRY => {
@@ -406,6 +407,16 @@ pub(crate) fn restore(archive_path: &Path, target: &Path) -> Result<()> {
                             })?;
                             let key = archive.vector(key_size, opts.max_key_size)?;
                             let value = archive.vector(value_size, opts.max_value_size)?;
+                            if previous_key
+                                .as_ref()
+                                .is_some_and(|previous| previous.as_slice() >= key.as_slice())
+                            {
+                                return Err(Error::corruption(
+                                    "logical archive",
+                                    "ключи внутри family должны строго возрастать",
+                                ));
+                            }
+                            previous_key = Some(key.clone());
                             families.put(id, key, value, WriteOptions::no_sync())?;
                         }
                         FAMILY_END => break,
