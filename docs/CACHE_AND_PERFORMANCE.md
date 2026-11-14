@@ -1,4 +1,4 @@
-# Cache and Performance — ForgeDB v0.6.0
+# Cache and Performance — ForgeDB v0.8.1
 
 ## Назначение
 
@@ -37,6 +37,25 @@ println!("hits={}, misses={}, evictions={}", stats.hits, stats.misses, stats.evi
 `CacheStats` также содержит `bypasses`, `resident_blocks`, `resident_bytes`, `capacity_bytes`. Счётчики относятся только к данному открытому экземпляру. Они не являются метриками disk reads, throughput или общего RSS.
 
 **Граница v0.6.2:** `TableReader::open` НЕ загружает физические bytes SSTable целиком. При открытии выполняются bounded random-access чтения header, footer, index, Bloom filter и properties; data blocks читаются по требованию и снова проверяются CRC32C. Память index/filter, временные блоки, concurrent reads, memtables и range iterators не входят в `CacheStats::resident_bytes`. `block_cache_size` по-прежнему ограничивает только декодированный кэш — **не общий RSS**. Каждый живой `TableReader` удерживает file handle; `table_cache_capacity` пока зарезервирован и не ограничивает число открытых SST handles. Этот релиз не предоставляет полноценный total-RSS/FD budget.
+
+## Bounded native SST file handle cache (v0.8.1)
+
+`Options::table_cache_capacity` ограничивает resident OS handles для **point-read SST LRU pool** данного `Database`. Значение по умолчанию 512; ноль запрещён. Это независимый бюджет: `block_cache_size` учитывает decoded data blocks в RAM, `table_cache_capacity` — именно File handles. Потребление памяти индексов, Bloom filters, memtables и временных буферов не ограничено этой опцией.
+
+При открытии базы каждый SST проверяется (header/footer/index/filter/properties), но начальный FD не удерживается. Когда требуется физически прочитать data block, pool выбирает resident handle либо выселяет старейший FD и заново открывает immutable файл по canonical SST path. Reopen проверяет file size, DB identity, SST number, sequence range и header checksum, затем обычный CRC32C блока. Shared `Arc<TableHandlePool>` используется всеми `VersionSet` поколениями.
+
+Чтения и LRU eviction сериализованы одним mutex — strict point-read pool capacity соблюдается, но параллельный I/O может быть медленнее при contention. До сравнительных benchmark нельзя утверждать универсальное ускорение.
+
+Метрики можно получить через `Database::table_handle_stats()` или `ColumnFamilies::table_handle_stats(id)`:
+
+```rust
+let handles = database.table_handle_stats()?;
+println!("open={}/{} hits={} misses={} evictions={} reopens={}",
+    handles.open_handles, handles.capacity, handles.hits, handles.misses,
+    handles.evictions, handles.reopens);
+```
+
+**Не process-wide FD limit:** streaming SstEntryCursor, compaction readers/writers, WAL/MANIFEST, temporary files и другие named families — вне одного point-read pool. File-references retired SST продолжают защищаться `Weak<TableReader>`; при cleanup его pooled FD закрывается перед Windows remove_file. Полная общая политика — Issue #31.
 
 ## Range scan
 
