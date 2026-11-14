@@ -246,7 +246,9 @@ impl<'a> Cursor<'a> {
         if self.index == self.tokens.len() {
             Ok(())
         } else {
-            Err(syntax("лишние аргументы или несколько statements в одной строке"))
+            Err(syntax(
+                "лишние аргументы или несколько statements в одной строке",
+            ))
         }
     }
 }
@@ -397,7 +399,11 @@ impl Session {
         }
         families
             .iter()
-            .find(|info| info.name == selector || (selector.eq_ignore_ascii_case("default") && info.id == ColumnFamilyId::DEFAULT))
+            .find(|info| {
+                info.name == selector
+                    || (selector.eq_ignore_ascii_case("default")
+                        && info.id == ColumnFamilyId::DEFAULT)
+            })
             .map(|info| info.id)
             .ok_or_else(|| syntax(format!("Column Family '{selector}' не существует")))
     }
@@ -419,7 +425,11 @@ impl Session {
     }
 
     /// Исполняет полностью разобранный statement, после проверки всех аргументов.
-    pub(crate) fn execute(&mut self, statement: Statement, output: &mut impl Write) -> Result<Flow> {
+    pub(crate) fn execute(
+        &mut self,
+        statement: Statement,
+        output: &mut impl Write,
+    ) -> Result<Flow> {
         match statement {
             Statement::ShowFamilies => {
                 for family in self.database.list()? {
@@ -459,7 +469,8 @@ impl Session {
                     writeln!(output, "QUEUED")
                         .map_err(|source| Error::io("write_fql_output", None, source))?;
                 } else {
-                    self.database.put(self.active, key, value, WriteOptions::sync())?;
+                    self.database
+                        .put(self.active, key, value, WriteOptions::sync())?;
                     writeln!(output, "OK")
                         .map_err(|source| Error::io("write_fql_output", None, source))?;
                 }
@@ -483,7 +494,8 @@ impl Session {
                     writeln!(output, "QUEUED")
                         .map_err(|source| Error::io("write_fql_output", None, source))?;
                 } else {
-                    self.database.delete(self.active, key, WriteOptions::sync())?;
+                    self.database
+                        .delete(self.active, key, WriteOptions::sync())?;
                     writeln!(output, "OK")
                         .map_err(|source| Error::io("write_fql_output", None, source))?;
                 }
@@ -513,14 +525,18 @@ impl Session {
                     .map_err(|source| Error::io("write_fql_output", None, source))?;
             }
             Statement::Commit => {
-                let mut transaction = self.transaction.take()
+                let mut transaction = self
+                    .transaction
+                    .take()
                     .ok_or_else(|| syntax("COMMIT без активной транзакции"))?;
                 transaction.commit(WriteOptions::sync())?;
                 writeln!(output, "COMMIT")
                     .map_err(|source| Error::io("write_fql_output", None, source))?;
             }
             Statement::Rollback => {
-                let mut transaction = self.transaction.take()
+                let mut transaction = self
+                    .transaction
+                    .take()
                     .ok_or_else(|| syntax("ROLLBACK без активной транзакции"))?;
                 transaction.rollback()?;
                 writeln!(output, "ROLLBACK")
@@ -562,9 +578,16 @@ mod tests {
             parsed("PUT 'spaces and \\'quotes\\'' 'line\\nnext'")?,
             Statement::Put(b"spaces and 'quotes'".to_vec(), b"line\nnext".to_vec())
         );
-        for value in [b"abc".as_slice(), b"a\x00\xffb".as_slice(), b"'\n\\\t".as_slice()] {
+        for value in [
+            b"abc".as_slice(),
+            b"a\x00\xffb".as_slice(),
+            b"'\n\\\t".as_slice(),
+        ] {
             let literal = display_bytes(value);
-            assert_eq!(parsed(&format!("GET {literal}"))?, Statement::Get(value.to_vec()));
+            assert_eq!(
+                parsed(&format!("GET {literal}"))?,
+                Statement::Get(value.to_vec())
+            );
         }
         Ok(())
     }
@@ -602,8 +625,14 @@ mod tests {
         assert_eq!(parse("  # comment")?, None);
         assert_eq!(parse("-- comment")?, None);
         assert_eq!(parse("    ")?, None);
-        assert_eq!(parsed("sCaN FrOm a tO z LiMit 2;")?,
-            Statement::Scan { from: Some(b"a".to_vec()), to: Some(b"z".to_vec()), limit: 2 });
+        assert_eq!(
+            parsed("sCaN FrOm a tO z LiMit 2;")?,
+            Statement::Scan {
+                from: Some(b"a".to_vec()),
+                to: Some(b"z".to_vec()),
+                limit: 2
+            }
+        );
         assert_eq!(parsed("USE 5")?, Statement::Use("5".to_owned()));
         Ok(())
     }
@@ -611,8 +640,20 @@ mod tests {
     #[test]
     fn statements_and_token_limits_are_bounded() {
         let long = "x".repeat(MAX_STATEMENT_BYTES + 1);
-        assert!(matches!(parse(&long), Err(Error::ResourceLimit { resource: "fql_statement_bytes", .. })));
+        assert!(matches!(
+            parse(&long),
+            Err(Error::ResourceLimit {
+                resource: "fql_statement_bytes",
+                ..
+            })
+        ));
         let many = format!("GET {}", "a ".repeat(MAX_TOKENS + 1));
-        assert!(matches!(parse(&many), Err(Error::ResourceLimit { resource: "fql_tokens", .. })));
+        assert!(matches!(
+            parse(&many),
+            Err(Error::ResourceLimit {
+                resource: "fql_tokens",
+                ..
+            })
+        ));
     }
 }
