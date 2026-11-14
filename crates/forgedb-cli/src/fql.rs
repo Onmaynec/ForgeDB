@@ -328,6 +328,14 @@ fn parse_tokens(tokens: &[Token]) -> Result<Statement> {
 /// FQL V1: ровно одно statement на строку; точка с запятой допускается в конце.
 /// Пустые строки и полноcтрочные комментарии не меняют состояние.
 pub(crate) fn parse(input: &str) -> Result<Option<Statement>> {
+    // Даже полноcтрочные комментарии не могут обходить bounded input contract.
+    if input.len() > MAX_STATEMENT_BYTES {
+        return Err(Error::ResourceLimit {
+            resource: "fql_statement_bytes",
+            limit: MAX_STATEMENT_BYTES as u64,
+            observed: u64::try_from(input.len()).unwrap_or(u64::MAX),
+        });
+    }
     if input.trim().is_empty() {
         return Ok(None);
     }
