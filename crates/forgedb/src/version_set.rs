@@ -329,11 +329,9 @@ impl VersionSet {
                 let first = lower.map_or(0, |key| {
                     level.partition_point(|table| table.metadata.largest_user_key.as_slice() < key)
                 });
-                level[first..]
-                    .iter()
-                    .take_while(move |table| upper.is_none_or(|end| {
-                        table.metadata.smallest_user_key.as_slice() <= end
-                    }))
+                level[first..].iter().take_while(move |table| {
+                    upper.is_none_or(|end| table.metadata.smallest_user_key.as_slice() <= end)
+                })
             }))
     }
 
