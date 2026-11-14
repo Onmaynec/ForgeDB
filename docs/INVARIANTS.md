@@ -83,6 +83,7 @@
 | I-072 | Native SST handle LRU index и resident File map согласованы на hit/miss/evict; выбор LRU не нарушает вместимость и правильный victim. | draft v0.9.0 | `ordered_handle_lru_keeps_most_recent_file_and_maintains_exact_metrics` |
 | I-073 | MVCC merge не меняет snapshot visibility, приоритет tombstone или обнаружение corrupt source при пропуске value clone. | draft v0.9.0 | `mvcc_merge_discards_large_invisible_values_without_losing_snapshot_semantics`, iterator unit tests |
 | I-074 | Conflict validation ищет максимальную committed sequence при перекрывающихся L0 и непересекающихся L1+ и не допускает stale transaction commit. | draft v0.9.0 | `conflict_validation_binary_search_finds_versions_in_leveled_sst`, transaction regression suite |
+| I-075 | Streaming scan сохраняет L0-newest-first и L1+ порядок, границы диапазона и lifetime VersionSet без полного clone списка SST TableHandle. | draft v0.9.0 | `narrow_range_scan_preserves_order_across_many_sst_without_handle_vector`, streaming cursor regression suite |
 
 ## Правило изменения
 
