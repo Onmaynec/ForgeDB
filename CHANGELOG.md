@@ -4,6 +4,23 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
+## [1.0.0] — 2026-11-14
+
+### Stable General Availability
+
+- Первый публичный stable (не Pre-release) контракт локального LSM key-value Rust API и CLI для Windows/Linux x86-64; MSRV Rust 1.89. Persisted WAL V1, SSTable V1, MANIFEST V1+V2, CURRENT/IDENTITY V1, CF_REGISTRY V1 остаются прежними.
+- Добавлен переносимый LOGICAL_ARCHIVE V1 с CRC32C Castagnoli, строгими длинами, кодированием binary key/value, отдельными snapshots default/named Column Families. Команды `forgedb export` и `forgedb restore`; staging и восстановление только в новый каталог, no overwrite, checksum/future-version/truncation/corruption rejection. Numeric family IDs могут измениться; общий cross-family snapshot не гарантируется.
+- CLI `version` и `doctor [--deep]`: read-only recovery plan и quick/deep verify, ненулевые exit codes при ошибках, без cleanup. CLI `get` и `scan` на отсутствующем пути больше не создают пустую базу.
+- L1+ streaming SCAN использует binary `partition_point` по disjoint SST ranges и upper-bound cutoff, сохраняя L0 newest-first, Included/Excluded bounds, snapshots и tombstones. Candidate planning O(log N + K) на непересекающемся уровне.
+- CI дополнен `cargo doc --locked --workspace --no-deps` на Linux/Windows; release workflow собирает оба CLI, выполняет e2e put/doctor/export/restore/get, сверяет SHA-256, публикует GitHub Release как **Stable** только после готовности обоих архивов.
+- Новые регрессии `stable_ga_cli`, `stable_range` и CRC32C known vector; предыдущие suites recovery/crash/transactions/FQL/Windows обязательны.
+
+### Поддерживаемый scope и ограничения
+
+- Архив **не** шифруется, не подписывается и не является cross-family atomic physical backup. CRC32C защищает от случайного повреждения, не злонамеренного вмешательства.
+- Глобальная FD quota процесса отсутствует (#31); mixed-family atomic WriteBatch/transactions отсутствуют (#35); имя `forgedb` в crates.io занято, данный crate не объявлен опубликованным в registry (#27).
+- Нет SQL/server, HA/replication, encryption-at-rest, authorization, SLA или защиты от hostile local filesystem. Поддержка Windows/Linux x86-64 и Rust 1.89 подтверждается CI.
+
 ## [0.9.0] — 2026-11-14
 
 ### Performance Engine
