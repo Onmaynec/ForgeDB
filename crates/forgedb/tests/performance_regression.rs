@@ -122,7 +122,8 @@ fn conflict_validation_binary_search_finds_versions_in_leveled_sst() -> Result<(
     assert_eq!(database.get(b"key-0239")?, Some(b"fresh".to_vec()));
     database.close()?;
     drop(database);
-    fs::remove_dir_all(&dir).map_err(|source| Error::io("remove_perf_test_dir", Some(dir), source))?;
+    fs::remove_dir_all(&dir)
+        .map_err(|source| Error::io("remove_perf_test_dir", Some(dir), source))?;
     Ok(())
 }
 
@@ -136,11 +137,7 @@ fn mvcc_merge_discards_large_invisible_values_without_losing_snapshot_semantics(
     database.flush()?;
     let snapshot = database.snapshot()?;
     for marker in 0..16_u8 {
-        database.put(
-            b"big",
-            vec![marker; 128 * 1024],
-            WriteOptions::no_sync(),
-        )?;
+        database.put(b"big", vec![marker; 128 * 1024], WriteOptions::no_sync())?;
         database.flush()?;
     }
     database.put(b"big", &latest, WriteOptions::sync())?;
@@ -151,11 +148,15 @@ fn mvcc_merge_discards_large_invisible_values_without_losing_snapshot_semantics(
     database.flush()?;
 
     assert_eq!(
-        database.scan(.., ReadOptions::from_snapshot(&snapshot))?.collect::<Result<Vec<_>>>()?,
+        database
+            .scan(.., ReadOptions::from_snapshot(&snapshot))?
+            .collect::<Result<Vec<_>>>()?,
         vec![(b"big".to_vec(), original.clone())]
     );
     assert_eq!(
-        database.scan(.., ReadOptions::default())?.collect::<Result<Vec<_>>>()?,
+        database
+            .scan(.., ReadOptions::default())?
+            .collect::<Result<Vec<_>>>()?,
         vec![(b"big".to_vec(), latest)]
     );
     assert_eq!(database.get(b"removed")?, None);
@@ -163,6 +164,7 @@ fn mvcc_merge_discards_large_invisible_values_without_losing_snapshot_semantics(
     database.close()?;
     drop(snapshot);
     drop(database);
-    fs::remove_dir_all(&dir).map_err(|source| Error::io("remove_perf_test_dir", Some(dir), source))?;
+    fs::remove_dir_all(&dir)
+        .map_err(|source| Error::io("remove_perf_test_dir", Some(dir), source))?;
     Ok(())
 }
