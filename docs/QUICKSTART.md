@@ -51,7 +51,7 @@ forgedb cf list ./restored-data
 
 Архив `.fdbk` хранит бинарные ключи и значения из **всех действующих** Column Families, каждую на собственном MVCC snapshot. Он содержит CRC32C, но не шифрование и не криптографическую подпись. `restore` принимает **только новый** каталог и не перезаписывает работающую базу. Числовые family ID могут измениться; после восстановления определите их по имени через `cf list`. Данные разных families не имеют общей атомарной точки (Issue #35), поэтому при необходимости согласованного multi-family checkpoint остановите запись приложения до экспорта.
 
-Формат архива и риски: [LOGICAL_ARCHIVE_V1.md](formats/LOGICAL_ARCHIVE_V1.md), [GA_READINESS.md](GA_READINESS.md).
+Формат архива и риски: [LOGICAL_ARCHIVE_V1.md](formats/LOGICAL_ARCHIVE_V1.md), [GA_READINESS.md](GA_READINESS.md). При обновлении с v0.9 прочитайте [MIGRATION_TO_V1.md](MIGRATION_TO_V1.md).
 
 ## Подключение в Rust-проекте
 
