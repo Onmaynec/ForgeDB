@@ -4,6 +4,22 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
+## [0.8.2] — 2026-11-14
+
+### Streaming SST Handle Pool
+
+- Потоковый `SstEntryCursor` после проверки SST header/footer/index/filter/properties и первого блока закрывает свой File; следующие data blocks читает через shared `TableHandlePool`.
+- `Database::scan` и compaction inputs используют один per-Database SST read pool с обычными GET. Reader pool проверяет размер, database identity/file number/sequence/header при reopen, CRC32C блоков не меняется.
+- Compaction input больше не выполняет full-file `fs::read` каждого SST: доступен bounded `read_entries_pooled` через iterator. Алгоритм материализации entries для merge и `max_compaction_bytes` сохранены.
+- После удаления retired SST его file number удаляется из bookkeeping `seen`, не накапливая IDs после compaction.
+- Тесты: 48 SST/480 ключей при capacity=1, concurrent GET и streaming scan, compaction с pinned old iterator и Windows cleanup; отдельный `#[ignore]` stress на 1024 SST.
+
+### Ограничения
+
+- `table_cache_capacity` — только resident FD в одном SST read pool. При initial cursor metadata validation дополнительно и кратковременно открывается File вне pool; SST output writers, WAL/MANIFEST/LOCK, deep verify и другие named CF не покрыты.
+- Никакого process-wide FD cap, latency speedup/RSS claims или новых persisted-форматов. Issue #31 остаётся открытой.
+- Compaction по-прежнему материализует bounded entries перед merge. Не менялись MVCC, FQL, WAL V1, SST V1, MANIFEST V2 и CF_REGISTRY V1.
+
 ## [0.8.1] — 2026-11-14
 
 ### SST Handle Cache & Reliability
