@@ -29,6 +29,12 @@
 
 Безопасность: непересекающиеся L1+ ranges проверяются `VersionSet::validate`. У L0 нельзя делать такое сокращение; MVCC sequencing и tombstone/ABA guarantees сохраняются, результат `latest_sequence_after` по-прежнему возвращает максимальную подтверждённую sequence после snapshot.
 
+### 4. Без временного cloned SST handle vector при SCAN
+
+Раньше `StreamingDatabase::scan` сначала вызывал `VersionSet::files_in_read_order()`, выделял `Vec<TableHandle>` вместимостью во все live SST и клонировал `Arc<TableReader>` каждого файла, хотя большинство SST могли не перекрываться запрошенным диапазоном. Теперь метод `VersionSet::files_for_scan()` возвращает ленивый заимствованный iterator: L0 newest-first, затем L1+ в порядке сортировки. `scan` проверяет overlap и открывает cursor только для подходящих SST, не материализуя весь список и не клонируя Arc для остальных файлов.
+
+Это **устранение одного O(N) выделения массива и N клонирований Arc за создание scan**, но проверка диапазонов SST остаётся O(N): бинарного index seek для scan-start эта версия не обещает. `DbIterator` удерживает `Arc<VersionSet>`, поэтому borrowed handles используются только пока локальный `VersionSet` ещё жив, а возвращаемый iterator пиннит immutable поколение. Порядок чтения, oldest-snapshot semantics и source priority не меняются.
+
 ## Проверка и измерения
 
 Автоматические регрессии:
