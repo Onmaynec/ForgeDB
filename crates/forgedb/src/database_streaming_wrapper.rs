@@ -175,6 +175,11 @@ impl StreamingDatabase {
         self.inner.cache_stats()
     }
 
+    /// Отдельные point-read SST FD metrics: не учитывать WAL/scan/compaction.
+    pub fn table_handle_stats(&self) -> Result<forgedb_sstable::TableHandleStats> {
+        self.inner.table_handle_stats()
+    }
+
     /// Безопасно убирает выведенные из MANIFEST SST после освобождения readers.
     pub fn cleanup_obsolete_sstables(&self) -> Result<crate::CleanupReport> {
         self.inner.cleanup_obsolete_sstables()
