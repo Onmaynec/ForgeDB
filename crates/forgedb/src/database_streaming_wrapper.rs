@@ -117,7 +117,8 @@ impl StreamingDatabase {
         }
 
         let mut priority = sources.len();
-        for table in version.files_for_scan() {
+        let (lower, upper) = owned_range.pruning_bounds();
+        for table in version.files_for_scan(lower, upper) {
             if !owned_range.overlaps(table.metadata()) {
                 continue;
             }
