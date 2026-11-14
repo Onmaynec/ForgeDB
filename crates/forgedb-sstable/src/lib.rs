@@ -2036,6 +2036,147 @@ mod tests {
         Ok(path)
     }
 
+
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    struct CountingReader {
+        file: fs::File,
+        bytes_read: Arc<AtomicUsize>,
+    }
+
+    impl Read for CountingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let size = self.file.read(buffer)?;
+            self.bytes_read.fetch_add(size, AtomicOrdering::Relaxed);
+            Ok(size)
+        }
+    }
+
+    impl Seek for CountingReader {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.file.seek(pos)
+        }
+    }
+
+    #[derive(Clone)]
+    struct CountingFileSystem {
+        bytes_read: Arc<AtomicUsize>,
+    }
+
+    impl FileSystem for CountingFileSystem {
+        type SequentialReader = fs::File;
+        type RandomAccessReader = CountingReader;
+        type WritableFile = fs::File;
+        type LockGuard = forgedb_fs::NativeLockGuard;
+
+        fn create_dir_all(&self, path: &Path) -> Result<()> {
+            NativeFileSystem.create_dir_all(path)
+        }
+
+        fn open_sequential(&self, path: &Path) -> Result<Self::SequentialReader> {
+            NativeFileSystem.open_sequential(path)
+        }
+
+        fn open_random_access(&self, path: &Path) -> Result<Self::RandomAccessReader> {
+            Ok(CountingReader {
+                file: NativeFileSystem.open_random_access(path)?,
+                bytes_read: Arc::clone(&self.bytes_read),
+            })
+        }
+
+        fn create_writable(&self, path: &Path) -> Result<Self::WritableFile> {
+            NativeFileSystem.create_writable(path)
+        }
+
+        fn create_new_writable(&self, path: &Path) -> Result<Self::WritableFile> {
+            NativeFileSystem.create_new_writable(path)
+        }
+
+        fn open_appendable(&self, path: &Path) -> Result<Self::WritableFile> {
+            NativeFileSystem.open_appendable(path)
+        }
+
+        fn rename_atomic(&self, from: &Path, to: &Path) -> Result<()> {
+            NativeFileSystem.rename_atomic(from, to)
+        }
+
+        fn remove_file(&self, path: &Path) -> Result<()> {
+            NativeFileSystem.remove_file(path)
+        }
+
+        fn list_dir(&self, path: &Path) -> Result<Vec<PathBuf>> {
+            NativeFileSystem.list_dir(path)
+        }
+
+        fn file_size(&self, path: &Path) -> Result<u64> {
+            NativeFileSystem.file_size(path)
+        }
+
+        fn truncate_file(&self, path: &Path, length: u64) -> Result<()> {
+            NativeFileSystem.truncate_file(path, length)
+        }
+
+        fn sync_directory(&self, path: &Path) -> Result<()> {
+            NativeFileSystem.sync_directory(path)
+        }
+
+        fn lock_exclusive(&self, path: &Path) -> Result<Self::LockGuard> {
+            NativeFileSystem.lock_exclusive(path)
+        }
+    }
+
+    #[test]
+    fn lazy_open_does_not_read_entire_sstable_and_cache_hits_avoid_io() -> Result<()> {
+        let directory = temporary_directory("bounded-open")?;
+        let fs = CountingFileSystem {
+            bytes_read: Arc::new(AtomicUsize::new(0)),
+        };
+        let limits = Limits::default();
+        let id = DatabaseId::random();
+        let mut records = Vec::new();
+        for n in 0..96_u64 {
+            records.push(TableEntry::value(
+                format!("key-{n:04}").into_bytes(),
+                SequenceNumber::new(n + 1)?,
+                vec![u8::try_from(n).unwrap_or_default(); 700],
+                &limits,
+            )?);
+        }
+        let meta = build_table(
+            &NativeFileSystem,
+            TableBuildRequest::new(
+                &directory, &directory.join("TEMP"), id, 31, &records, &limits,
+                TableBuildOptions {
+                    data_block_size: 1024,
+                    restart_interval: 4,
+                    bloom_bits_per_key: 10,
+                },
+            ),
+        )?;
+        let reader = TableReader::open(
+            &fs, &directory, id, &meta, &limits, 16 * 1024 * 1024,
+        )?;
+        let opened = fs.bytes_read.load(AtomicOrdering::Relaxed);
+        assert!(u64::try_from(opened).unwrap_or(u64::MAX) < meta.file_size / 2);
+        let cache = BlockCache::new(64 * 1024);
+        let seq = Some(SequenceNumber::new(51)?);
+        assert_eq!(
+            reader.get_at_cached(b"key-0050", seq, &cache)?,
+            TableLookup::Value(vec![50; 700])
+        );
+        let after_first = fs.bytes_read.load(AtomicOrdering::Relaxed);
+        assert!(after_first > opened);
+        assert_eq!(
+            reader.get_at_cached(b"key-0050", seq, &cache)?,
+            TableLookup::Value(vec![50; 700])
+        );
+        assert_eq!(fs.bytes_read.load(AtomicOrdering::Relaxed), after_first);
+        drop(reader);
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
     fn entries(limits: &Limits) -> Result<Vec<TableEntry>> {
         let mut entries = vec![
             TableEntry::value(
@@ -2089,6 +2230,7 @@ mod tests {
         assert_eq!(reader.get(b"alpha")?, TableLookup::Value(b"one".to_vec()));
         assert_eq!(reader.get(b"beta")?, TableLookup::Tombstone);
         assert_eq!(reader.get(b"missing")?, TableLookup::Missing);
+        drop(reader);
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
         Ok(())
@@ -2186,6 +2328,7 @@ mod tests {
             None
         );
         assert!(cache.stats()?.hits > 0);
+        drop(reader);
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
         Ok(())
