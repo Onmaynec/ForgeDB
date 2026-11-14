@@ -10,10 +10,8 @@ fn temp() -> Result<PathBuf> {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let directory = std::env::temp_dir().join(format!(
-        "forgedb-ga-range-{}-{stamp}",
-        std::process::id()
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("forgedb-ga-range-{}-{stamp}", std::process::id()));
     fs::create_dir_all(&directory)
         .map_err(|source| Error::io("create_stable_test_dir", Some(directory.clone()), source))?;
     Ok(directory)
@@ -35,8 +33,7 @@ fn keys(
 }
 
 #[test]
-fn leveled_binary_range_seek_respects_included_excluded_unbounded_and_snapshot()
--> Result<()> {
+fn leveled_binary_range_seek_respects_included_excluded_unbounded_and_snapshot() -> Result<()> {
     let path = temp()?;
     let opts = Options {
         target_sst_size: 8 * 1024,
@@ -50,7 +47,10 @@ fn leveled_binary_range_seek_respects_included_excluded_unbounded_and_snapshot()
     for start in (0..640).step_by(32) {
         let mut batch = WriteBatch::new();
         for index in start..start + 32 {
-            batch.put(key(index), vec![u8::try_from(index % 251).unwrap_or(0); 256])?;
+            batch.put(
+                key(index),
+                vec![u8::try_from(index % 251).unwrap_or(0); 256],
+            )?;
         }
         db.write(batch, WriteOptions::no_sync())?;
         db.flush()?;
@@ -63,31 +63,72 @@ fn leveled_binary_range_seek_respects_included_excluded_unbounded_and_snapshot()
     db.flush()?;
 
     assert_eq!(
-        keys(&db, Bound::Included(key(200)), Bound::Excluded(key(210)), ReadOptions::default())?,
-        (200..210).filter(|i| *i != 205).map(key).collect::<Vec<_>>()
+        keys(
+            &db,
+            Bound::Included(key(200)),
+            Bound::Excluded(key(210)),
+            ReadOptions::default()
+        )?,
+        (200..210)
+            .filter(|i| *i != 205)
+            .map(key)
+            .collect::<Vec<_>>()
     );
     assert_eq!(
-        keys(&db, Bound::Included(key(200)), Bound::Excluded(key(210)), ReadOptions::from_snapshot(&old))?,
+        keys(
+            &db,
+            Bound::Included(key(200)),
+            Bound::Excluded(key(210)),
+            ReadOptions::from_snapshot(&old)
+        )?,
         (200..210).map(key).collect::<Vec<_>>()
     );
     assert_eq!(
-        keys(&db, Bound::Excluded(key(200)), Bound::Included(key(210)), ReadOptions::default())?,
-        (201..=210).filter(|i| *i != 205).map(key).collect::<Vec<_>>()
+        keys(
+            &db,
+            Bound::Excluded(key(200)),
+            Bound::Included(key(210)),
+            ReadOptions::default()
+        )?,
+        (201..=210)
+            .filter(|i| *i != 205)
+            .map(key)
+            .collect::<Vec<_>>()
     );
     assert_eq!(
-        keys(&db, Bound::Excluded(key(200)), Bound::Excluded(key(200)), ReadOptions::default())?,
+        keys(
+            &db,
+            Bound::Excluded(key(200)),
+            Bound::Excluded(key(200)),
+            ReadOptions::default()
+        )?,
         Vec::<Vec<u8>>::new()
     );
     assert_eq!(
-        keys(&db, Bound::Unbounded, Bound::Excluded(key(3)), ReadOptions::default())?,
+        keys(
+            &db,
+            Bound::Unbounded,
+            Bound::Excluded(key(3)),
+            ReadOptions::default()
+        )?,
         (0..3).map(key).collect::<Vec<_>>()
     );
     assert_eq!(
-        keys(&db, Bound::Included(key(638)), Bound::Unbounded, ReadOptions::default())?,
+        keys(
+            &db,
+            Bound::Included(key(638)),
+            Bound::Unbounded,
+            ReadOptions::default()
+        )?,
         vec![key(638), key(639)]
     );
     assert_eq!(
-        keys(&db, Bound::Included(key(1000)), Bound::Unbounded, ReadOptions::default())?,
+        keys(
+            &db,
+            Bound::Included(key(1000)),
+            Bound::Unbounded,
+            ReadOptions::default()
+        )?,
         Vec::<Vec<u8>>::new()
     );
 
@@ -96,7 +137,12 @@ fn leveled_binary_range_seek_respects_included_excluded_unbounded_and_snapshot()
     drop(db);
     let reopened = Database::open(&path, opts)?;
     assert_eq!(
-        keys(&reopened, Bound::Included(key(638)), Bound::Unbounded, ReadOptions::default())?,
+        keys(
+            &reopened,
+            Bound::Included(key(638)),
+            Bound::Unbounded,
+            ReadOptions::default()
+        )?,
         vec![key(638), key(639)]
     );
     reopened.close()?;
