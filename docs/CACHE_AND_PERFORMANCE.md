@@ -1,4 +1,4 @@
-# Cache and Performance — ForgeDB v0.8.2
+# Cache and Performance — ForgeDB v0.9.0
 
 ## Назначение
 
@@ -64,6 +64,16 @@ println!("open={}/{} hits={} misses={} evictions={} reopens={}",
 Compaction input reader тоже использует этот pool, поэтому обычные GET, streaming scan и compaction input не держат отдельные долгоживущие SST handles. Однако compaction output builder и merge entries остаются прежними: нет обещания fully streaming merge или меньшего RSS.
 
 `table_cache_capacity` — resident limit **только одного SST read pool**; начальный cursor metadata validation кратковременно открывает File вне pool. Поэтому `open_handles <= capacity` не означает, что число всех OS FD не может превышать capacity. Отдельные handles: WAL/MANIFEST, SST outputs, deep verify и именованные child databases. Метрика `Database::table_handle_stats()` измеряет именно pool. Benchmark latency/throughput нужно сравнивать отдельно, поскольку shared mutex может усиливать contention.
+
+## Hot-path оптимизации v0.9.0
+
+**Native FD LRU:** `TableHandlePool` хранит `BTreeMap<file_number, File>` с metadata и отдельный упорядоченный `BTreeSet<(access_clock, file_number)>`. Выбор oldest handle при miss больше не сканирует N открытых файлов, а занимает O(log N); обновление индекса на hit/miss тоже O(log N) и добавляет O(N) служебной памяти. Пул как раньше синхронизован mutex, из него не следует автоматического улучшения latency при маленьком budget.
+
+**Snapshot merge:** `DbIterator` на каждой позиции не копирует полный value для проверки порядка. Ветви невидимых MVCC версий и уже подавленных older versions не клонируют values. Это особенно важно для больших записей и истории перезаписей; data block decode и проверки checksum остаются обязательными.
+
+**Optimistic conflicts:** L0 сохраняет перебор с sequence cutoff, L1+ использует бинарный range lookup по строго непересекающимся SST. Максимальная committed sequence для ключа не пропускается по одним лишь global statistics: таблица пропускается только при `largest_sequence <= max(threshold, newest_found)`.
+
+Для отдельных измерений есть `performance_bench`; вводимые параметры, вывод (p50/p95/p99/ops/sec) и сравнение описаны в [PERFORMANCE_BENCHMARK.md](PERFORMANCE_BENCHMARK.md). CI smoke подтверждает работоспособность, но не является latency SLA и не доказывает ускорения при всех workloads.
 
 ## Range scan
 
