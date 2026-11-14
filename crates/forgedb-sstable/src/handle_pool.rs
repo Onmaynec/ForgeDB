@@ -44,6 +44,8 @@ struct CachedHandle {
 struct PoolState {
     opened: BTreeMap<u64, CachedHandle>,
     seen: BTreeSet<u64>,
+    // Sorted LRU: (access counter, SST number). O(log N) insert/eviction.
+    lru: BTreeSet<(u64, u64)>,
     clock: u64,
     hits: u64,
     misses: u64,
@@ -53,7 +55,7 @@ struct PoolState {
 
 impl PoolState {
     fn tick(&mut self) -> u64 {
-        self.clock = self.clock.wrapping_add(1);
+        self.clock = self.clock.saturating_add(1);
         self.clock
     }
 }
@@ -124,18 +126,21 @@ impl TableHandlePool {
                     "table cache capacity должен быть больше нуля",
                 ));
             }
+            // Ordered (last-access, number) LRU: O(log N) вместо
+            // линейного обхода всех resident handles при каждом eviction.
             // Сначала закрываем старый FD, чтобы не превышать budget на reopen.
             if state.opened.len() >= self.capacity {
-                let oldest = state
-                    .opened
-                    .iter()
-                    .min_by_key(|(number, handle)| (handle.access, **number))
-                    .map(|(number, _)| *number)
-                    .ok_or(Error::InternalInvariant {
+                let (access, oldest) = state.lru.iter().next().copied().ok_or(
+                    Error::InternalInvariant {
                         invariant: "I-SST-HANDLE-LRU",
                         reason: "open_handles > 0, но LRU пуст".to_owned(),
-                    })?;
-                state.opened.remove(&oldest);
+                    },
+                )?;
+                state.lru.remove(&(access, oldest));
+                state.opened.remove(&oldest).ok_or(Error::InternalInvariant {
+                    invariant: "I-SST-HANDLE-LRU",
+                    reason: "LRU ссылается на отсутствующий File".to_owned(),
+                })?;
                 state.evictions = state.evictions.saturating_add(1);
             }
             let actual_size = NativeFileSystem.file_size(path)?;
@@ -172,6 +177,7 @@ impl TableHandlePool {
                     access,
                 },
             );
+            state.lru.insert((access, number));
         }
 
         // Счётчик hit учитывает только повторное использование уже открытого FD.
@@ -179,14 +185,24 @@ impl TableHandlePool {
         if was_open {
             state.hits = state.hits.saturating_add(1);
         }
-        let access = state.tick();
-        let entry = state
-            .opened
-            .get_mut(&number)
-            .ok_or(Error::InternalInvariant {
+        // Всегда держим LRU и opened в одинаковом состоянии.
+        // Даже при повторном чтении File владеет handle до конца callback.
+        let previous = state.opened.get(&number).ok_or(Error::InternalInvariant {
+            invariant: "I-SST-HANDLE-LRU",
+            reason: "открытый reader отсутствует в pool".to_owned(),
+        })?.access;
+        if !state.lru.remove(&(previous, number)) {
+            return Err(Error::InternalInvariant {
                 invariant: "I-SST-HANDLE-LRU",
-                reason: "открытый reader отсутствует в pool".to_owned(),
-            })?;
+                reason: "resident handle отсутствует в LRU индексе".to_owned(),
+            });
+        }
+        let access = state.tick();
+        state.lru.insert((access, number));
+        let entry = state.opened.get_mut(&number).ok_or(Error::InternalInvariant {
+            invariant: "I-SST-HANDLE-LRU",
+            reason: "открытый reader отсутствует в pool".to_owned(),
+        })?;
         entry.access = access;
         read(&mut entry.file)
     }
@@ -195,7 +211,13 @@ impl TableHandlePool {
     /// Вызывающий код проверил, что TableReader больше не удерживается snapshot.
     pub fn evict_table(&self, file_number: u64) -> Result<()> {
         let mut state = self.lock()?;
-        if state.opened.remove(&file_number).is_some() {
+        if let Some(removed) = state.opened.remove(&file_number) {
+            if !state.lru.remove(&(removed.access, file_number)) {
+                return Err(Error::InternalInvariant {
+                    invariant: "I-SST-HANDLE-LRU",
+                    reason: "evicted handle отсутствует в LRU индексе".to_owned(),
+                });
+            }
             state.evictions = state.evictions.saturating_add(1);
         }
         // ID retired и больше никогда не будет повторно использоваться:
