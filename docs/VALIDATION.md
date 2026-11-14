@@ -1,4 +1,4 @@
-# Контракт проверки ForgeDB v0.6.1
+# Контракт проверки ForgeDB v0.6.2
 
 Каждое изменение core, persisted-форматов или recovery обязано проходить GitHub Actions на Linux, Windows и минимально поддерживаемой версии Rust 1.89. Успешный compile не заменяет unit, model, integration и crash tests.
 
@@ -44,6 +44,14 @@ cargo +1.89 test --locked --workspace --all-features
 - oversized batch не имеет частично опубликованных mutations;
 - автоматическая безопасная очистка retired SST после compaction, защита активных scan cursors и snapshots;
 - сохранение неизвестных и orphan SST после restart.
+
+## Проверки v0.6.2 — lazy SST readers
+
+- Instrumented random-access FileSystem: число прочитанных байтов при `TableReader::open` существенно меньше физического SSTable.
+- Повторный snapshot-aware point read в cached block не выполняет новое физическое чтение.
+- Existing split-key MVCC, tombstone, corruption, transaction newest-sequence validation и deep verify tests.
+- Компакция, удержание TableReader/VersionSet итераторами и reference-aware удаление на Windows.
+- Benchmark cold/warm с throughput и p50/p95/p99, без фиксированного speed threshold.
 
 ## Cache and performance checks
 
