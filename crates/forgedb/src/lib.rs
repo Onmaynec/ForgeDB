@@ -1,9 +1,10 @@
-//! Публичный API ForgeDB v0.7.0.
+//! Публичный API ForgeDB v0.8.0.
 //!
 //! WAL/LSM storage core с snapshot isolation, индексными SST reads, bounded
 //! decoded-block cache, lazy SST readers, безопасной очисткой retired SST и повторяемым close.
 //! Default persisted WAL/SSTable/MANIFEST форматы не меняются. Каждая именованная
 //! Column Family имеет собственный локальный WAL/LSM и registry V1.
+//! FQL V1 реализован в `forgedb-cli` поверх публичных API; persisted format не меняется.
 
 mod database_v3_fixed {
     include!("database_v3_fixed.rs");
