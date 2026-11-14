@@ -141,7 +141,7 @@ impl ColumnFamilies {
                 limit: u64::from(u32::MAX - 1),
                 observed: u64::from(candidate),
             })?;
-            if !family_path(&self.root, candidate).exists() {
+            if !entry_exists(&family_path(&self.root, candidate))? {
                 let mut proposed = state.data.clone();
                 proposed.next_id = next;
                 proposed.names.insert(candidate, name.to_owned());
@@ -304,6 +304,7 @@ impl ColumnFamilies {
             return Ok(Arc::clone(database));
         }
         let path = family_path(&self.root, id.get());
+        reject_symlink(&path)?;
         if !path.is_dir() || !path.join("CURRENT").is_file() || !path.join("IDENTITY").is_file() {
             return Err(Error::corruption(
                 "column family",
@@ -378,8 +379,32 @@ fn family_path(root: &Path, id: u32) -> PathBuf {
     registry_dir(root).join(format!("CF-{id:010}"))
 }
 
+fn entry_exists(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(Error::io("stat_cf_path", Some(path.to_path_buf()), source)),
+    }
+}
+
+/// Подмена зарезервированных путей symlink не должна переносить storage I/O
+/// за пределы каталога базы. Даже dangling symlink считается занятым путём.
+fn reject_symlink(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::corruption(
+            "column family path",
+            format!("символьная ссылка недопустима: {}", path.display()),
+        )),
+        Ok(_) => Ok(()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(Error::io("stat_cf_path", Some(path.to_path_buf()), source)),
+    }
+}
+
 fn load_registry(root: &Path) -> Result<RegistryData> {
+    reject_symlink(&registry_dir(root))?;
     let path = registry_dir(root).join(REGISTRY_NAME);
+    reject_symlink(&path)?;
     let metadata = match fs::metadata(&path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -404,9 +429,12 @@ fn load_registry(root: &Path) -> Result<RegistryData> {
 
 fn persist_registry(root: &Path, data: &RegistryData) -> Result<()> {
     let directory = registry_dir(root);
+    reject_symlink(&directory)?;
     fs::create_dir_all(&directory)
         .map_err(|source| Error::io("create_cf_directory", Some(directory.clone()), source))?;
     let path = directory.join(REGISTRY_TEMP);
+    reject_symlink(&path)?;
+    reject_symlink(&directory.join(REGISTRY_NAME))?;
     let bytes = encode_registry(data)?;
     let mut file = File::create(&path)
         .map_err(|source| Error::io("create_cf_registry", Some(path.clone()), source))?;
