@@ -73,8 +73,14 @@ fn scan_many_sst_with_capacity_one_and_reopen_preserves_order_and_bytes() -> Res
         "later data blocks must use pooled handles"
     );
     assert!(stats.evictions > 0);
-    assert!(stats.reopens > 0);
-    assert_eq!(stats.open_handles, 1);
+    // Последовательный проход по всем таблицам не обязан открывать один SST повторно.
+    // Явно возвращаемся к первой, уже вытесненной SST, чтобы проверить reopen.
+    assert_eq!(
+        database.get(b"key-0000-000")?,
+        Some(vec![0_u8; 256])
+    );
+    assert!(database.table_handle_stats()?.reopens > 0);
+    assert_eq!(database.table_handle_stats()?.open_handles, 1);
     drop(iterator);
 
     database.close()?;
