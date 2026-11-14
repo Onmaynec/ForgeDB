@@ -35,6 +35,18 @@ tar -xzf forgedb-v0.6.2-linux-x86_64.tar.gz
 ./forgedb verify ./data --deep
 ```
 
+## Именованные Column Families (v0.7.0)
+
+```bash
+./forgedb cf create ./data users
+./forgedb cf list ./data
+./forgedb cf put ./data 1 user42 Alice --sync
+./forgedb cf get ./data 1 user42
+./forgedb cf scan ./data 1
+```
+
+`cf create` выводит ID, например `1`; используйте ID из `cf list` для `get/put/delete/scan/drop`. Удаление family командой `cf drop` исключает её из реестра, но не удаляет физические данные; повторное создание такого же имени получает новый ID. Для multi-operation atomic batch внутри family и транзакций используйте библиотечный `ColumnFamilies` API.
+
 ## Дополнительные команды
 
 ```text
