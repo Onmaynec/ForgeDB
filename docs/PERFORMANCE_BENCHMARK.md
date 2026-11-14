@@ -25,13 +25,17 @@ cargo run --locked --release -p forgedb --example performance_bench -- 8192 3276
 
 Benchmark выполняет: setup, cold GET, warm GET, полный `SCAN` и проверку количества/суммы байт. Печатает `elapsed_ms`, GET `ops_sec`, `p50_ns/p95_ns/p99_ns`, SCAN `entries_per_sec` и `TableHandleStats` (capacity/open_handles/hits/misses/evictions/reopens). Данные удаляются после закрытия базы. В тесте используется `black_box` результатов, чтобы компилятор не устранял необходимые вычисления.
 
-CI выполняет более короткий smoke:
+CI выполняет два режима:
 
 ```bash
+# Ubuntu и Windows — быстрая проверка корректности:
 cargo run --locked --release -p forgedb --example performance_bench -- 256 1024
+
+# Дополнительно Ubuntu — полный workload с реальным eviction:
+cargo run --locked --release -p forgedb --example performance_bench -- 8192 32768
 ```
 
-Он подтверждает работоспособность benchmark и данных, **не** даёт статистически значимого сравнения производительности.
+При полном workload проверяется, что `table_handle_stats().evictions > 0` при числе созданных SST больше восьми. Это подтверждает, что benchmark реально проходит через индексированный LRU, но само по себе **не** даёт статистически значимого сравнения производительности или SLA.
 
 ## Сравнение версий
 
