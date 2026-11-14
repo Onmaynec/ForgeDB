@@ -4,6 +4,23 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
+## [0.7.0] — 2026-11-14
+
+### Column Families
+
+- Добавлен `ColumnFamilies` facade с API create/list/drop и `ColumnFamilyId`-scoped get/put/delete/write/scan/snapshot/flush/compaction/optimistic transactions.
+- Каждая именованная family хранится в отдельном подкаталоге и использует существующие WAL, SSTable, MANIFEST и MVCC state. Default database в корне остаётся совместимым со старым API.
+- Новый `CF_REGISTRY V1` сохраняет ID↔name с CRC32C и проверками длины/версии; snapshot registry публикуется через sync/atomic rename и directory sync.
+- Ошибка registry/missing registered family приводит к явной ошибке. Directory от незавершённого создания и drop сохраняются как orphan; ID никогда не переиспользуется.
+- Добавлены интеграционные тесты на изоляцию данных, reopen/recovery, transactions, read-only, corruption и drop/re-create.
+
+### Границы
+
+- `WriteBatch` и `Transaction` атомарны только внутри одной family. Общего multi-family WAL, mixed-family atomic batch, глобального snapshot и unified MANIFEST нет.
+- `WriteBatch::put_cf` с ненулевым ID остаётся отклонённым для legacy engine; named family получает обычный batch через `ColumnFamilies::write(id, batch)`.
+- Drop не удаляет физические данные. Resource budgets для child DB не суммируются в одну общую квоту.
+- Persisted-форматы прежних default баз не меняются; добавлен отдельный `CF_REGISTRY V1`.
+
 ## [0.6.2] — 2026-11-14
 
 ### Изменено
