@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::path::PathBuf;
 
+mod archive;
 mod fql;
 
 use forgedb::{
@@ -30,6 +31,18 @@ fn run() -> Result<()> {
             ensure_no_extra(arguments)?;
             println!("ForgeDB {}", env!("CARGO_PKG_VERSION"));
             Ok(())
+        }
+        "export" => {
+            let database = PathBuf::from(required(&mut arguments, "database")?);
+            let output = PathBuf::from(required(&mut arguments, "archive")?);
+            ensure_no_extra(arguments)?;
+            archive::export(&database, &output)
+        }
+        "restore" => {
+            let input = PathBuf::from(required(&mut arguments, "archive")?);
+            let target = PathBuf::from(required(&mut arguments, "new_database")?);
+            ensure_no_extra(arguments)?;
+            archive::restore(&input, &target)
         }
         "doctor" => {
             let path = PathBuf::from(required(&mut arguments, "path")?);
@@ -636,6 +649,8 @@ fn usage() -> String {
         "Использование:",
         "  forgedb version",
         "  forgedb doctor <каталог> [--deep]",
+        "  forgedb export <каталог> <new-archive.fdbk>",
+        "  forgedb restore <archive.fdbk> <new-каталог>",
         "  forgedb put <каталог> <ключ> <значение> [--sync|--no-sync|--disable-wal]",
         "  forgedb get <каталог> <ключ>",
         "  forgedb fql <каталог> \"<одна FQL команда>\" [--read-only]",
