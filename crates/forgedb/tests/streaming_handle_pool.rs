@@ -59,7 +59,7 @@ fn scan_many_sst_with_capacity_one_and_reopen_preserves_order_and_bytes() -> Res
     let mut iterator = database.scan(.., ReadOptions::default())?;
     assert_eq!(database.table_handle_stats()?.open_handles, 0);
     let mut observed = Vec::new();
-    while let Some(result) = iterator.next() {
+    for result in iterator.by_ref() {
         let (key, value) = result?;
         assert_eq!(value.len(), 256);
         observed.push(key);
@@ -118,7 +118,7 @@ fn concurrent_get_and_streaming_scans_share_one_fd_budget() -> Result<()> {
     }
     let mut iterator = database.scan(.., ReadOptions::default())?;
     let mut seen = 0_usize;
-    while let Some(result) = iterator.next() {
+    for result in iterator.by_ref() {
         let (key, _) = result?;
         assert!(key.starts_with(b"key-"));
         seen += 1;
