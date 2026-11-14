@@ -237,20 +237,46 @@ impl VersionSet {
     ) -> Result<Option<SequenceNumber>> {
         let mut newest: Option<SequenceNumber> = None;
         let threshold = after.map(SequenceNumber::get).unwrap_or(0);
-        for level in &self.levels {
-            for table in level {
-                if !table.metadata.may_contain_user_key(user_key)
-                    || table.metadata.largest_sequence.get() <= threshold
-                {
-                    continue;
-                }
-                if let Some(sequence) =
-                    table
-                        .reader
-                        .latest_sequence_after_cached(user_key, after, &self.block_cache)?
-                {
-                    newest = Some(newest.map_or(sequence, |current| current.max(sequence)));
-                }
+        let level_zero = self.levels.first().ok_or(Error::InternalInvariant {
+            invariant: "I-VERSIONSET-L0-PRESENT",
+            reason: "VersionSet не содержит L0".to_owned(),
+        })?;
+        // L0 ranges могут перекрываться: все релевантные таблицы проверяются.
+        // Больше не читаем SST, чей largest_sequence заведомо старше уже
+        // найденной версии ключа либо исходного threshold.
+        for table in level_zero.iter().rev() {
+            let cutoff = newest.map_or(threshold, |sequence| threshold.max(sequence.get()));
+            if !table.metadata.may_contain_user_key(user_key)
+                || table.metadata.largest_sequence.get() <= cutoff
+            {
+                continue;
+            }
+            if let Some(sequence) = table
+                .reader
+                .latest_sequence_after_cached(user_key, after, &self.block_cache)?
+            {
+                newest = Some(newest.map_or(sequence, |current| current.max(sequence)));
+            }
+        }
+        // L1+ имеют непересекающиеся диапазоны (VersionSet::validate).
+        // partition_point вместо полного прохода по каждому SST файла уровня.
+        for level in self.levels.iter().skip(1) {
+            let index = level
+                .partition_point(|table| table.metadata.largest_user_key.as_slice() < user_key);
+            let Some(table) = level.get(index) else {
+                continue;
+            };
+            let cutoff = newest.map_or(threshold, |sequence| threshold.max(sequence.get()));
+            if !table.metadata.may_contain_user_key(user_key)
+                || table.metadata.largest_sequence.get() <= cutoff
+            {
+                continue;
+            }
+            if let Some(sequence) = table
+                .reader
+                .latest_sequence_after_cached(user_key, after, &self.block_cache)?
+            {
+                newest = Some(newest.map_or(sequence, |current| current.max(sequence)));
             }
         }
         Ok(newest)
