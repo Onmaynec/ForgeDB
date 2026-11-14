@@ -4,6 +4,23 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
+## [0.8.1] — 2026-11-14
+
+### SST Handle Cache & Reliability
+
+- Реализован native SST file handle LRU с отдельным `Options::table_cache_capacity` (по умолчанию 512) для point-read пути одного Database.
+- `TableReader::open` по-прежнему полностью проверяет header/footer/index/filter/properties, затем закрывает initial file handle при подключении shared pool. Data blocks открываются lazy; после eviction reopen валидирует размер/DB identity/SST number/sequence/header, а block CRC32C остаётся обязательным.
+- Pool разделяется поколениями `VersionSet` и SST outputs flush/compaction. Единый mutex сериализует LRU eviction и seek/read для strict capacity без переполнения внутри pool.
+- Удаление retired SST на Windows теперь сначала выселяет cached file handle, затем вызывает remove_file; не нарушены weak-reader lifetime и запрет speculative orphan deletion.
+- Добавлены `Database::table_handle_stats()` и `ColumnFamilies::table_handle_stats(id)`: capacity/open_handles/hits/misses/evictions/reopens.
+- Регрессионные тесты: budget 1, reopen и checksum/header corruption, compaction + pinned scan + cleanup, snapshot transaction conflicts, restart.
+
+### Ограничения
+
+- `table_cache_capacity` НЕ является process-wide FD budget: streaming cursors, compaction, WAL/MANIFEST/LOCK и другие named families вне scope. Общая задача #31 остаётся открытой.
+- Общий point-read mutex может ограничить параллелизм. Ускорение или уменьшение RSS не заявляется без baseline.
+- Persisted WAL/SSTable/MANIFEST/CURRENT/CF_REGISTRY форматы не менялись.
+
 ## [0.8.0] — 2026-11-14
 
 ### FQL V1 / CLI shell
