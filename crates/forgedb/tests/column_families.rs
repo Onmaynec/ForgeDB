@@ -159,9 +159,11 @@ fn readonly_rejects_mutations_and_missing_registered_family_is_corruption() -> R
     families.close()?;
     drop(families);
 
-    let mut options = Options::default();
-    options.create_if_missing = false;
-    options.read_only = true;
+    let options = Options {
+        create_if_missing: false,
+        read_only: true,
+        ..Options::default()
+    };
     let readonly = ColumnFamilies::open(&root, options.clone())?;
     assert_eq!(readonly.get(id, b"key")?, Some(b"value".to_vec()));
     assert!(matches!(readonly.create("other"), Err(Error::ReadOnly)));
