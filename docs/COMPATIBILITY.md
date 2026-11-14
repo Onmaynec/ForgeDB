@@ -2,13 +2,13 @@
 
 ## Версия библиотеки
 
-`v0.7.0` добавляет отдельные именованные Column Families без миграции старых persisted-файлов. Публичный API может изменяться до `v1.0.0`, но persisted-форматы меняются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
+`v0.8.0` добавляет FQL V1 и интерактивный shell поверх существующих Column Families без миграции persisted-файлов. Публичный API может изменяться до `v1.0.0`, но persisted-форматы меняются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
 ## Поддерживаемый Rust
 
 Минимальная поддерживаемая версия: Rust 1.89. CI также проверяет текущий stable на Ubuntu и Windows.
 
-## Persisted-форматы v0.7.0
+## Persisted-форматы v0.8.0
 
 | Компонент | Writer | Reader | Неизвестная будущая версия |
 |---|---|---|---|
@@ -20,6 +20,8 @@
 | `CURRENT V1` | V1 | V1 | Отклоняется |
 
 Reader не пытается интерпретировать future version как текущий layout.
+
+FQL V1 добавлен **только в CLI**: это не новая версия on-disk WAL/SST/MANIFEST/CF_REGISTRY и не сетевой протокол. Старые базы v0.7.0 и более ранние default databases открываются прежними storage readers, без миграции. Дополнительная синтаксическая грамматика и scope транзакций описаны в [FQL.md](FQL.md).
 
 С v0.7.0 появился отдельный `CF_REGISTRY V1` для ID↔name под `.forgedb-column-families`. Он имеет CRC32C, strict version/length validation и атомарную публикацию. Старые single-family базы без файла registry остаются valid default-only. Каждая named CF хранит собственные legacy WAL V1/SST V1/MANIFEST V2/CURRENT V1. `ColumnFamilies` не имеет общей WAL atomicity или общего snapshot для нескольких families. Подробности: [CF_REGISTRY_V1.md](formats/CF_REGISTRY_V1.md).
 
