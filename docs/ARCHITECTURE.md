@@ -1,4 +1,4 @@
-# Архитектура ForgeDB v0.7.0
+# Архитектура ForgeDB v0.8.0
 
 ## Назначение
 
@@ -11,6 +11,14 @@ ForgeDB — встраиваемый key-value storage engine с LSM-струк�
 Слой `column_families.rs` хранит реестр `CF_REGISTRY V1` (`FGCFREG1`, CRC32C, next_id, ID↔name) в `.forgedb-column-families/REGISTRY`. Создание: инициализация child DB → close/sync → полная запись временного registry → sync → atomic rename → sync directories → publication in-memory. Drop удаляет запись из registry только после close child, каталог оставляет orphan. Snapshot и transaction относятся к одному child DB; cross-family atomic batch не поддерживается.
 
 Default API `Database::open` по-прежнему читает/пишет только прежние файлы корневой базы. Миграции WAL V1/SSTable V1/MANIFEST V2 нет. Новый интерфейс и CF registry документированы в [ADR 0015](adr/0015-column-family-isolation.md) и [CF_REGISTRY V1](formats/CF_REGISTRY_V1.md).
+
+## FQL V1 / CLI query layer (v0.8.0)
+
+Модуль `crates/forgedb-cli/src/fql.rs` содержит отдельный bounded lexer/parser и FQL session. Любая операция сначала полностью преобразуется в AST, затем исполняется через `ColumnFamilies`. One-shot `fql`, shell из stdin и file script используют один executor. FQL не знает внутреннего layout SSTable/MANIFEST и не вводит новые persisted-файлы.
+
+`BEGIN/COMMIT` переиспользует optimistic `Transaction` текущей named family; `USE/CREATE/DROP` и `SCAN` до COMMIT запрещены. В интерактивной сессии неправильный statement не прерывает работу; в скрипте fail-fast с номером строки. Незавершённый BEGIN откатывается при выходе; уже committed прежние строки скрипта не откатываются.
+
+Парсер ограничивает statement 64 KiB, число токенов 512, `SCAN` — 100 строк по умолчанию, максимум 10 000. Binary literal поддерживает quoted escapes и `X'HEX'`, вывод GET/SCAN обратимо экранируется. Формат FQL описан в [FQL.md](FQL.md), проектные решения — в [ADR 0016](adr/0016-fql-cli.md).
 
 ## Состав workspace
 
