@@ -6,6 +6,8 @@
 - native SST file-handle LRU: eviction O(log N) вместо O(N) по количеству открытых File;
 - `DbIterator`: меньше копирований больших values при пропуске MVCC версий;
 - `VersionSet::latest_sequence_after`: бинарный поиск кандидата для L1+ вместо перебора непересекающихся SST.
+- `StreamingDatabase::scan`: нет временного `Vec<TableHandle>` и clone `Arc<TableReader>` всех SST перед фильтрацией диапазона, остаётся O(N) проверка overlap.
+
 
 Улучшенная Big-O оценка не гарантирует меньшую задержку: lock contention, cache locality, filesystem cache и стоимость дополнительного BTreeSet могут менять результат. Достоверный вывод требует одинаковой среды и множественных прогонов.
 
