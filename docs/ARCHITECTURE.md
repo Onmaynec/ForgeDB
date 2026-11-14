@@ -1,4 +1,4 @@
-# Архитектура ForgeDB v0.8.0
+# Архитектура ForgeDB v0.8.1
 
 ## Назначение
 
@@ -19,6 +19,16 @@ Default API `Database::open` по-прежнему читает/пишет то�
 `BEGIN/COMMIT` переиспользует optimistic `Transaction` текущей named family; `USE/CREATE/DROP` и `SCAN` до COMMIT запрещены. В интерактивной сессии неправильный statement не прерывает работу; в скрипте fail-fast с номером строки. Незавершённый BEGIN откатывается при выходе; уже committed прежние строки скрипта не откатываются.
 
 Парсер ограничивает statement 64 KiB, число токенов 512, `SCAN` — 100 строк по умолчанию, максимум 10 000. Binary literal поддерживает quoted escapes и `X'HEX'`, вывод GET/SCAN обратимо экранируется. Формат FQL описан в [FQL.md](FQL.md), проектные решения — в [ADR 0016](adr/0016-fql-cli.md).
+
+## Native SST handle pool (v0.8.1)
+
+`TableHandlePool` находится в `forgedb-sstable`. В `VersionSet::open` каждый SST metadata/header/index/filter/properties проверяется синхронно, после чего initial FD закрывается, а `TableReader` получает общий `Arc<TableHandlePool>`. Shared pool переживает публикацию новых поколений `VersionSet` и используется добавленными через flush/compaction readers.
+
+После cache miss на data block общий pool mutex обеспечивает atomic LRU decision и exclusive seek/read. При reopen проверяются физический размер файла, DatabaseId/SST number, header checksum и sequence range; data block CRC32C не изменяется. Дескриптор выселяется до открытия следующего, поэтому pool residency не превышает `table_cache_capacity`. Mutex сериализует point SST I/O и может влиять на throughput.
+
+Reference-aware deletion использует `Weak<TableReader>` для старых поколений, а не OS handles. Когда reader больше не жив, перед `remove_file` cached FD закрывается; это необходимая последовательность для Windows. Неизвестные orphan SST после restart не удаляются.
+
+**Граница:** streaming cursors, compaction files, WAL/MANIFEST/LOCK и другие Column Families не входят в указанный per-DB point pool. См. [ADR 0017](adr/0017-bounded-sst-handle-cache.md) и Issue #31.
 
 ## Состав workspace
 
