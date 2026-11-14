@@ -180,10 +180,13 @@ impl TableHandlePool {
             state.hits = state.hits.saturating_add(1);
         }
         let access = state.tick();
-        let entry = state.opened.get_mut(&number).ok_or(Error::InternalInvariant {
-            invariant: "I-SST-HANDLE-LRU",
-            reason: "открытый reader отсутствует в pool".to_owned(),
-        })?;
+        let entry = state
+            .opened
+            .get_mut(&number)
+            .ok_or(Error::InternalInvariant {
+                invariant: "I-SST-HANDLE-LRU",
+                reason: "открытый reader отсутствует в pool".to_owned(),
+            })?;
         entry.access = access;
         read(&mut entry.file)
     }
