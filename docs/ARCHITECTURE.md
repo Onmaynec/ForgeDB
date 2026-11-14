@@ -1,8 +1,16 @@
-# Архитектура ForgeDB v0.6.2
+# Архитектура ForgeDB v0.7.0
 
 ## Назначение
 
 ForgeDB — встраиваемый key-value storage engine с LSM-структурой и собственными persisted-форматами. Порядок приоритетов: корректность записи и восстановления, проверяемые ограничения ресурсов, совместимость файлов и только затем производительность.
+
+## Column Families v0.7.0
+
+`ColumnFamilies` управляет одним legacy default database root и зарегистрированными named child database roots. Каждая family — независимая LSM/WAL топология с собственными snapshots, read/write gates, MVCC sequence numbers и process lock. Это **не** multiple column families внутри одного физического WAL/SST/MANIFEST.
+
+Слой `column_families.rs` хранит реестр `CF_REGISTRY V1` (`FGCFREG1`, CRC32C, next_id, ID↔name) в `.forgedb-column-families/REGISTRY`. Создание: инициализация child DB → close/sync → полная запись временного registry → sync → atomic rename → sync directories → publication in-memory. Drop удаляет запись из registry только после close child, каталог оставляет orphan. Snapshot и transaction относятся к одному child DB; cross-family atomic batch не поддерживается.
+
+Default API `Database::open` по-прежнему читает/пишет только прежние файлы корневой базы. Миграции WAL V1/SSTable V1/MANIFEST V2 нет. Новый интерфейс и CF registry документированы в [ADR 0015](adr/0015-column-family-isolation.md) и [CF_REGISTRY V1](formats/CF_REGISTRY_V1.md).
 
 ## Состав workspace
 
