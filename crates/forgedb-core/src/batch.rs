@@ -218,7 +218,7 @@ fn ensure_supported_column_family(column_family: ColumnFamilyId) -> Result<()> {
     if column_family != ColumnFamilyId::DEFAULT {
         return Err(Error::invalid_argument(
             "column_family",
-            "до v0.7.0 поддерживается только default column family",
+            "legacy WriteBatch поддерживает только default ID; для именованных families используйте ColumnFamilies::write(id, batch)",
         ));
     }
     Ok(())
