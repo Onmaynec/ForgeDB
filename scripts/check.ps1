@@ -1,15 +1,17 @@
 $ErrorActionPreference = "Stop"
 
 function Invoke-Cargo {
-    & cargo @args
+    param([string[]]$CargoArgs)
+
+    & cargo @CargoArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "cargo $($args -join ' ') failed with code $LASTEXITCODE"
+        throw "cargo $($CargoArgs -join ' ') failed with code $LASTEXITCODE"
     }
 }
 
-Invoke-Cargo fmt --all --check
-Invoke-Cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-Invoke-Cargo test --locked --workspace --all-features
-Invoke-Cargo test --locked --workspace --doc
-Invoke-Cargo doc --locked --workspace --no-deps
-Invoke-Cargo build --locked --workspace --release
+Invoke-Cargo -CargoArgs @("fmt", "--all", "--check")
+Invoke-Cargo -CargoArgs @("clippy", "--locked", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings")
+Invoke-Cargo -CargoArgs @("test", "--locked", "--workspace", "--all-features")
+Invoke-Cargo -CargoArgs @("test", "--locked", "--workspace", "--doc")
+Invoke-Cargo -CargoArgs @("doc", "--locked", "--workspace", "--no-deps")
+Invoke-Cargo -CargoArgs @("build", "--locked", "--workspace", "--release")
