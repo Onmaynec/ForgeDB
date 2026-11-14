@@ -5,7 +5,9 @@ use std::sync::{Arc, Weak};
 use forgedb_core::{DatabaseId, Error, Limits, Result, SequenceNumber};
 use forgedb_fs::NativeFileSystem;
 use forgedb_manifest::ManifestState;
-use forgedb_sstable::{BlockCache, CacheStats, TableLookup, TableMeta, TableReader};
+use forgedb_sstable::{
+    BlockCache, CacheStats, TableHandlePool, TableHandleStats, TableLookup, TableMeta, TableReader,
+};
 
 use crate::table_scan::TableSnapshotLookup;
 
@@ -37,6 +39,7 @@ pub(crate) struct VersionSet {
     directory: PathBuf,
     levels: Vec<Vec<TableHandle>>,
     block_cache: Arc<BlockCache>,
+    handle_pool: Arc<TableHandlePool>,
 }
 
 impl VersionSet {
@@ -48,6 +51,7 @@ impl VersionSet {
         level_count: usize,
         max_file_size: u64,
         block_cache_size: usize,
+        table_cache_capacity: usize,
     ) -> Result<Self> {
         if level_count < 2 {
             return Err(Error::invalid_argument(
@@ -56,6 +60,7 @@ impl VersionSet {
             ));
         }
         let filesystem = NativeFileSystem;
+        let handle_pool = Arc::new(TableHandlePool::new(table_cache_capacity));
         let mut levels = (0..level_count).map(|_| Vec::new()).collect::<Vec<_>>();
         for metadata in &manifest.l0_files {
             let reader = TableReader::open(
@@ -65,7 +70,8 @@ impl VersionSet {
                 metadata,
                 limits,
                 max_file_size,
-            )?;
+            )?
+            .with_native_pool(Arc::clone(&handle_pool))?;
             levels[0].push(TableHandle {
                 metadata: metadata.clone(),
                 reader: Arc::new(reader),
@@ -90,7 +96,8 @@ impl VersionSet {
                 &leveled.table,
                 limits,
                 max_file_size,
-            )?;
+            )?
+            .with_native_pool(Arc::clone(&handle_pool))?;
             levels[level].push(TableHandle {
                 metadata: leveled.table.clone(),
                 reader: Arc::new(reader),
@@ -100,6 +107,7 @@ impl VersionSet {
             directory: directory.to_path_buf(),
             levels,
             block_cache: Arc::new(BlockCache::new(block_cache_size)),
+            handle_pool,
         };
         version.validate(limits)?;
         Ok(version)
@@ -118,7 +126,7 @@ impl VersionSet {
         })?;
         level_zero.push(TableHandle {
             metadata,
-            reader: Arc::new(reader),
+            reader: Arc::new(reader.with_native_pool(Arc::clone(&self.handle_pool))?),
         });
         next.validate(limits)?;
         Ok(next)
@@ -161,7 +169,7 @@ impl VersionSet {
             })?;
             files.push(TableHandle {
                 metadata,
-                reader: Arc::new(reader),
+                reader: Arc::new(reader.with_native_pool(Arc::clone(&self.handle_pool))?),
             });
             files.sort_by(|left, right| {
                 left.metadata
@@ -252,6 +260,10 @@ impl VersionSet {
         self.block_cache.stats()
     }
 
+    pub(crate) fn table_handle_stats(&self) -> Result<TableHandleStats> {
+        self.handle_pool.stats()
+    }
+
     pub(crate) fn is_live_file(&self, file_number: u64) -> bool {
         self.levels
             .iter()
@@ -260,6 +272,8 @@ impl VersionSet {
     }
 
     pub(crate) fn evict_cached_table(&self, file_number: u64) -> Result<()> {
+        // На Windows remove_file должен идти только ПОСЛЕ закрытия pooled FD.
+        self.handle_pool.evict_table(file_number)?;
         self.block_cache.evict_table(file_number)
     }
 
