@@ -251,9 +251,10 @@ impl VersionSet {
             {
                 continue;
             }
-            if let Some(sequence) = table
-                .reader
-                .latest_sequence_after_cached(user_key, after, &self.block_cache)?
+            if let Some(sequence) =
+                table
+                    .reader
+                    .latest_sequence_after_cached(user_key, after, &self.block_cache)?
             {
                 newest = Some(newest.map_or(sequence, |current| current.max(sequence)));
             }
@@ -272,9 +273,10 @@ impl VersionSet {
             {
                 continue;
             }
-            if let Some(sequence) = table
-                .reader
-                .latest_sequence_after_cached(user_key, after, &self.block_cache)?
+            if let Some(sequence) =
+                table
+                    .reader
+                    .latest_sequence_after_cached(user_key, after, &self.block_cache)?
             {
                 newest = Some(newest.map_or(sequence, |current| current.max(sequence)));
             }
