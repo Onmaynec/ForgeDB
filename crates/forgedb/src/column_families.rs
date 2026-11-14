@@ -603,6 +603,15 @@ mod tests {
             decode_registry(&damaged),
             Err(Error::Corruption { .. })
         ));
+        let mut future = bytes.clone();
+        future[8..12].copy_from_slice(&2_u32.to_le_bytes());
+        let end = future.len() - 4;
+        let checksum = crc32c(&future[..end]);
+        future[end..].copy_from_slice(&checksum.to_le_bytes());
+        assert!(matches!(
+            decode_registry(&future),
+            Err(Error::UnsupportedFormat { .. })
+        ));
         assert!(validate_name("../escape").is_err());
         assert!(validate_name("тест").is_err());
         Ok(())
