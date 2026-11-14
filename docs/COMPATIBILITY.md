@@ -2,13 +2,13 @@
 
 ## Версия библиотеки
 
-`v0.8.2` расширяет bounded SST read pool на streaming scan и compaction inputs поверх v0.8.1 без миграции persisted-файлов. Публичный API может изменяться до `v1.0.0`, но persisted-форматы меняются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
+`v1.0.0` — первый стабильный контракт локального Rust API и CLI. Все persisted WAL/SSTable/MANIFEST/CURRENT/IDENTITY/CF_REGISTRY форматы v0.9.0 остаются совместимы; физическая миграция не требуется. Новый LOGICAL_ARCHIVE V1 — отдельный пользовательский формат логического переноса, его не следует считать WAL или MANIFEST. Incompatible API/storage changes после 1.0 требуют явного SemVer major либо отдельно документированного compatibility/migration path.
 
 ## Поддерживаемый Rust
 
 Минимальная поддерживаемая версия: Rust 1.89. CI также проверяет текущий stable на Ubuntu и Windows.
 
-## Persisted-форматы v0.9.0
+## Persisted-форматы v1.0.0
 
 | Компонент | Writer | Reader | Неизвестная будущая версия |
 |---|---|---|---|
@@ -20,6 +20,8 @@
 | `CURRENT V1` | V1 | V1 | Отклоняется |
 
 Reader не пытается интерпретировать future version как текущий layout.
+
+LOGICAL_ARCHIVE V1 — отдельный переносимый формат: magic FGDBBK01, u32 version=1, framed family names и бинарные key/value, итоговая CRC32C. Restore отклоняет future version, повреждения, truncation, duplicate/unsorted keys. Он переносит только видимые логические данные; исходные numeric family IDs, file numbers, MVCC history не сохраняются, cross-family consistent snapshot отсутствует. Подробности: [LOGICAL_ARCHIVE_V1.md](formats/LOGICAL_ARCHIVE_V1.md).
 
 Оптимизации v0.9.0 затрагивают только runtime: два согласованных LRU индекса, объём копируемых данных при MVCC iterator merge и стратегию поиска SST кандидата для optimistic transaction validation. WAL V1, SSTable V1, MANIFEST V2, CURRENT/IDENTITY V1 и CF_REGISTRY V1 не меняются; существующие базы открываются без миграции. См. [ADR 0019](adr/0019-performance-engine.md).
 
@@ -86,4 +88,4 @@ Persisted integers имеют фиксированную ширину и little-
 
 ## Обратная совместимость API
 
-До v1.0 SemVer допускает несовместимые изменения minor-версии. Release notes обязаны перечислять изменения public API, persisted formats, migration requirements и durability semantics.
+Начиная с v1.0.0, breaking public API требует SemVer major и migration notes. Релизы minor/patch сохраняют документированные stable API guarantees. Для использования crate через Git tag, а не crates.io, см. [QUICKSTART.md](QUICKSTART.md) и Issue #27.
