@@ -1,27 +1,27 @@
-name: ForgeDB v0.9.0 Pre-release
+name: ForgeDB v1.0.0 Stable Release
 
 on:
   push:
     branches: [main]
-  pull_request:
-    types: [closed]
-    branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: release-v0.9.0
+  group: stable-release-v1.0.0
   cancel-in-progress: false
 
 jobs:
-  release:
+  validate:
+    name: Stable release validation
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && contains(github.event.head_commit.message, 'release: v0.9.0')) ||
-      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.title == 'release: v0.9.0')
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release: v1.0.0')))
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -29,56 +29,53 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Проверить метаданные выпуска
+      - name: Verify stable metadata
         shell: bash
         run: |
-          grep -Fqx 'version = "0.9.0"' Cargo.toml
+          grep -Fqx 'version = "1.0.0"' Cargo.toml
           test -s RELEASE_NOTES.md
-          test -s docs/releases/V0.9.0.md
-      - name: Проверить форматирование
+          test -s docs/releases/V1.0.0.md
+          test -s docs/formats/LOGICAL_ARCHIVE_V1.md
+          test -s docs/GA_READINESS.md
+      - name: Check formatting
         run: cargo fmt --all --check
-      - name: Выполнить Clippy
+      - name: Strict Clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      - name: Выполнить тесты
+      - name: Test workspace
         run: cargo test --locked --workspace --all-features
-      - name: Выполнить doctests
+      - name: Test Rustdoc
         run: cargo test --locked --workspace --doc
-      - name: Собрать release profile
+      - name: Generate API docs
+        run: cargo doc --locked --workspace --no-deps
+      - name: Release build
         run: cargo build --locked --workspace --release
-      - name: Проверить benchmark smoke
+      - name: Point lookup benchmark smoke
         run: cargo run --locked --release -p forgedb --example point_lookup_bench -- 256 1024
-      - name: Проверить Performance Engine benchmark smoke
+      - name: Performance Engine benchmark smoke
         run: cargo run --locked --release -p forgedb --example performance_bench -- 256 1024
-      - name: Проверить полный workload SST eviction (Linux)
+      - name: Full SST eviction benchmark
         run: cargo run --locked --release -p forgedb --example performance_bench -- 8192 32768
-      - name: Создать аннотированный tag
+      - name: Create or verify immutable annotated stable tag
         shell: bash
         run: |
-          if git rev-parse "v0.9.0" >/dev/null 2>&1; then
-            echo "Tag v0.9.0 уже существует"
+          existing=$(git rev-list -n 1 v1.0.0 2>/dev/null || true)
+          if [[ -n "$existing" ]]; then
+            if [[ "$existing" != "$GITHUB_SHA" ]]; then
+              echo "v1.0.0 tag points at $existing, expected $GITHUB_SHA"
+              exit 1
+            fi
+            echo "Annotated tag v1.0.0 already points at expected commit"
+            test "$(git cat-file -t refs/tags/v1.0.0)" = "tag"
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a v0.9.0 -m "ForgeDB v0.9.0 — Performance Engine"
-            git push origin v0.9.0
-          fi
-      - name: Создать GitHub Pre-release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          if gh release view v0.9.0 >/dev/null 2>&1; then
-            echo "Release v0.9.0 уже существует"
-          else
-            gh release create v0.9.0 \
-              --prerelease \
-              --title "ForgeDB v0.9.0 — Performance Engine" \
-              --notes-file RELEASE_NOTES.md
+            git tag -a v1.0.0 -m "ForgeDB v1.0.0 — Stable General Availability"
+            git push origin v1.0.0
           fi
 
-  cli-binaries:
-    name: CLI binary / ${{ matrix.os }}
-    needs: release
+  binaries:
+    name: Stable CLI / ${{ matrix.os }}
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
@@ -87,39 +84,134 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: v0.9.0
+          ref: v1.0.0
       - uses: dtolnay/rust-toolchain@stable
-      - name: Собрать CLI
+      - name: Build release CLI
         run: cargo build --locked --release -p forgedb-cli
-      - name: Упаковать Linux CLI и SHA256
+      - name: Linux binary end-to-end smoke
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          archive=forgedb-v0.9.0-linux-x86_64.tar.gz
-          tar -czf "$archive" -C target/release forgedb
-          sha256sum "$archive" > "$archive.sha256"
-      - name: Упаковать Windows CLI и SHA256
+          set -eu
+          exe=target/release/forgedb
+          "$exe" version | grep -Fx 'ForgeDB 1.0.0'
+          "$exe" help | grep -F 'forgedb doctor'
+          temp=$(mktemp -d)
+          trap 'rm -rf "$temp"' EXIT
+          "$exe" put "$temp/database" key value
+          "$exe" doctor "$temp/database" --deep
+          "$exe" export "$temp/database" "$temp/backup.fdbk"
+          "$exe" restore "$temp/backup.fdbk" "$temp/restored"
+          "$exe" get "$temp/restored" key | grep -Fx value
+      - name: Windows binary end-to-end smoke
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $archive = "forgedb-v0.9.0-windows-x86_64.zip"
+          $ErrorActionPreference = 'Stop'
+          $exe = "target/release/forgedb.exe"
+          $root = Join-Path $env:RUNNER_TEMP "forgedb-ga-$env:GITHUB_RUN_ID"
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          $db = Join-Path $root "database"
+          $backup = Join-Path $root "backup.fdbk"
+          $restored = Join-Path $root "restored"
+          try {
+            $version = & $exe version
+            if ($LASTEXITCODE -ne 0 -or $version -ne 'ForgeDB 1.0.0') { throw "CLI version failed" }
+            & $exe put $db key value
+            if ($LASTEXITCODE -ne 0) { throw "CLI put failed" }
+            & $exe doctor $db --deep
+            if ($LASTEXITCODE -ne 0) { throw "CLI doctor failed" }
+            & $exe export $db $backup
+            if ($LASTEXITCODE -ne 0) { throw "CLI export failed" }
+            & $exe restore $backup $restored
+            if ($LASTEXITCODE -ne 0) { throw "CLI restore failed" }
+            $value = & $exe get $restored key
+            if ($LASTEXITCODE -ne 0 -or $value -ne 'value') { throw "CLI restore readback failed" }
+          } finally {
+            Remove-Item -Path $root -Recurse -Force -ErrorAction SilentlyContinue
+          }
+      - name: Package Linux and SHA-256
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          archive=forgedb-v1.0.0-linux-x86_64.tar.gz
+          tar -czf "$archive" -C target/release forgedb
+          sha256sum "$archive" > "$archive.sha256"
+      - name: Package Windows and SHA-256
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = "forgedb-v1.0.0-windows-x86_64.zip"
           Compress-Archive -Path "target/release/forgedb.exe" -DestinationPath $archive
           $hash = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $archive" | Set-Content -Path "$archive.sha256" -Encoding ascii
-      - name: Загрузить готовые бинарники в GitHub Pre-release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forgedb-stable-${{ runner.os }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            forgedb-v1.0.0-linux-x86_64.tar.gz
+            forgedb-v1.0.0-linux-x86_64.tar.gz.sha256
+            forgedb-v1.0.0-windows-x86_64.zip
+            forgedb-v1.0.0-windows-x86_64.zip.sha256
+
+  publish:
+    name: Publish stable only after both platforms pass
+    needs: [validate, binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: v1.0.0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: forgedb-stable-*
+          merge-multiple: true
+          path: dist
+      - name: Verify full asset set and checksums before publication
+        shell: bash
+        run: |
+          set -eu
+          cd dist
+          test -s forgedb-v1.0.0-windows-x86_64.zip
+          test -s forgedb-v1.0.0-windows-x86_64.zip.sha256
+          test -s forgedb-v1.0.0-linux-x86_64.tar.gz
+          test -s forgedb-v1.0.0-linux-x86_64.tar.gz.sha256
+          sha256sum -c forgedb-v1.0.0-windows-x86_64.zip.sha256
+          sha256sum -c forgedb-v1.0.0-linux-x86_64.tar.gz.sha256
+          unzip -Z1 forgedb-v1.0.0-windows-x86_64.zip | grep -Fx 'forgedb.exe'
+          tar -tzf forgedb-v1.0.0-linux-x86_64.tar.gz | grep -Fx 'forgedb'
+      - name: Publish checked assets as a real stable GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            archive=forgedb-v0.9.0-windows-x86_64.zip
-          else
-            archive=forgedb-v0.9.0-linux-x86_64.tar.gz
+          set -eu
+          if ! gh release view v1.0.0 >/dev/null 2>&1; then
+            # Draft is NOT a public stable release while assets are uploaded.
+            gh release create v1.0.0 --draft \
+              --title "ForgeDB v1.0.0 — Stable General Availability" \
+              --notes-file RELEASE_NOTES.md
           fi
-          for asset in "$archive" "$archive.sha256"; do
-            if gh release view v0.9.0 --json assets --jq '.assets[].name' | grep -Fxq "$asset"; then
-              echo "Asset $asset уже опубликован"
-            else
-              gh release upload v0.9.0 "$asset"
+          for asset in \
+            forgedb-v1.0.0-windows-x86_64.zip \
+            forgedb-v1.0.0-windows-x86_64.zip.sha256 \
+            forgedb-v1.0.0-linux-x86_64.tar.gz \
+            forgedb-v1.0.0-linux-x86_64.tar.gz.sha256; do
+            if ! gh release view v1.0.0 --json assets --jq '.assets[].name' | grep -Fxq "$asset"; then
+              gh release upload v1.0.0 "dist/$asset"
             fi
           done
+          for asset in \
+            forgedb-v1.0.0-windows-x86_64.zip \
+            forgedb-v1.0.0-windows-x86_64.zip.sha256 \
+            forgedb-v1.0.0-linux-x86_64.tar.gz \
+            forgedb-v1.0.0-linux-x86_64.tar.gz.sha256; do
+            gh release view v1.0.0 --json assets --jq '.assets[].name' | grep -Fxq "$asset"
+          done
+          gh release edit v1.0.0 --draft=false --latest
+          test "$(gh release view v1.0.0 --json isDraft --jq '.isDraft')" = "false"
+          test "$(gh release view v1.0.0 --json isPrerelease --jq '.isPrerelease')" = "false"

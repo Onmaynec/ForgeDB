@@ -1,4 +1,4 @@
-# Контракт проверки ForgeDB v0.9.0
+# Контракт проверки ForgeDB v1.0.0 Stable
 
 Каждое изменение core, persisted-форматов или recovery обязано проходить GitHub Actions на Linux, Windows и минимально поддерживаемой версии Rust 1.89. Успешный compile не заменяет unit, model, integration и crash tests.
 
@@ -9,6 +9,7 @@ cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-features
 cargo test --locked --workspace --doc
+cargo doc --locked --workspace --no-deps
 cargo build --locked --workspace --release
 ```
 
@@ -20,6 +21,19 @@ cargo +1.89 test --locked --workspace --all-features
 ```
 
 Для локальной разработки есть `scripts/check.sh` и `scripts/check.ps1`.
+
+## Stable GA v1.0.0 — дополнительные обязательные проверки
+
+- `crates/forgedb-cli/tests/stable_ga_cli.rs`: `forgedb version` возвращает 1.0.0; `doctor --deep` действительно проверяет существующую базу read-only; `get`/`scan` на отсутствующем каталоге не создают пустую базу.
+- `export`/`restore`: три действующие families (в том числе цифровое имя), бинарный key с NUL/0xFF, value 128 KiB, удалённый key, проверка после reopen; попытка overwrite запрещена.
+- Архивы с повреждённой CRC, truncation или future version отклоняются; частично восстановленный destination не публикуется и временная папка не остаётся.
+- `crates/forgedb/tests/stable_range.rs`: L1+ binary range seek после forced compaction нескольких SST, проверка Included/Excluded/Unbounded bounds, старого snapshot, tombstone и reopen.
+- CRC32C Castagnoli: test vector `123456789 -> 0xE3069283`.
+- Release artifact smoke из **tag v1.0.0** на Windows/Linux: `version`, `put`, `doctor --deep`, `export`, `restore`, `get`. Проверка ZIP/TAR.GZ и их SHA-256 до публикации Stable.
+- CI должен пройти на точном feature/release/main commit, Linux/Windows stable и Rust 1.89. Rustdoc build обязателен.
+- В отличие от pre-release, stable GitHub Release сначала Draft, публичный статус допустим только после четырёх загруженных assets и зелёного release workflow.
+
+См. [GA_READINESS.md](GA_READINESS.md), [LOGICAL_ARCHIVE_V1.md](formats/LOGICAL_ARCHIVE_V1.md).
 
 ## Проверки именованных Column Families v0.7.0
 

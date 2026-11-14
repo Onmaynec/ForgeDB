@@ -1,4 +1,4 @@
-# Архитектура ForgeDB v0.9.0
+# Архитектура ForgeDB v1.0.0
 
 ## Назначение
 
@@ -51,6 +51,16 @@ Transaction conflict detection `VersionSet::latest_sequence_after` исполь�
 При streaming scan `VersionSet::files_for_scan()` выдаёт borrowed iterator, а не `files_in_read_order()` с клонированным `Vec<TableHandle>`. Фильтрация SST range выполняется перед созданием `SstEntryCursor`; `DbIterator` удерживает VersionSet lease как и прежде. Это снижает transient allocations, не превращая O(N) проверку диапазона в binary seek.
 
 Контракты/границы: [ADR 0019](adr/0019-performance-engine.md), [performance benchmark](PERFORMANCE_BENCHMARK.md). Нет изменений persisted WAL/SST/MANIFEST/CF_REGISTRY или глобальной FD-квоты.
+
+## Stable GA v1.0.0: binary-pruned SCAN и переносимые архивы
+
+Начиная с v1.0.0 `OwnedRange::pruning_bounds` отдаёт консервативные lower/upper user-key bounds. `VersionSet::files_for_scan` для L0 продолжает newest-first обход пересекающихся SST; для каждого непересекающегося L1+ использует `partition_point` по largest_user_key и `take_while` по smallest_user_key. Точные Included/Excluded semantics проверяет `OwnedRange::overlaps` до открытия cursor. Это O(log N + K) candidate planning для каждого L1+ уровня, без изменения владельца `VersionSet` или формата SSTable.
+
+Логический экспорт — часть CLI, а не физического storage engine. `archive.rs` последовательно читает видимые `ColumnFamilies` на отдельных MVCC snapshots, формирует LOGICAL_ARCHIVE V1, CRC32C checksummed поток записей, публикует временный файл через sync+hard_link. `restore` читает строго ограниченные records, проверяет ключи в возрастающем порядке и trailing checksum, записывает данные в **отдельный staging database directory**, закрывает WAL до публикации через rename. Независимость WAL разных families сохраняется — глобального mixed-family checkpoint нет.
+
+`doctor` — read-only пара `RecoveryPlan::inspect` и `verify`; поэтому не подменяет recovery plan автоматическим удалением неизвестных файлов.
+
+См. [ADR 0020](adr/0020-stable-ga-portable-archive.md), [archive format](formats/LOGICAL_ARCHIVE_V1.md), [GA readiness](GA_READINESS.md).
 
 ## Состав workspace
 

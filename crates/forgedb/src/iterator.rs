@@ -71,6 +71,21 @@ impl OwnedRange {
         }
     }
 
+    /// Консервативные границы для binary SST range planning.
+    /// Excluded bounds обрабатываются точным overlaps() после pruning;
+    /// здесь можно взять лишнюю пограничную таблицу, но не пропустить нужную.
+    pub(crate) fn pruning_bounds(&self) -> (Option<&[u8]>, Option<&[u8]>) {
+        let start = match &self.start {
+            Bound::Included(key) | Bound::Excluded(key) => Some(key.as_slice()),
+            Bound::Unbounded => None,
+        };
+        let end = match &self.end {
+            Bound::Included(key) | Bound::Excluded(key) => Some(key.as_slice()),
+            Bound::Unbounded => None,
+        };
+        (start, end)
+    }
+
     pub(crate) fn overlaps(&self, metadata: &TableMeta) -> bool {
         let ends_before_start = match &self.start {
             Bound::Included(start) => metadata.largest_user_key.as_slice() < start.as_slice(),

@@ -84,6 +84,11 @@
 | I-073 | MVCC merge не меняет snapshot visibility, приоритет tombstone или обнаружение corrupt source при пропуске value clone. | обеспечен v0.9.0 | `mvcc_merge_discards_large_invisible_values_without_losing_snapshot_semantics`, iterator unit tests |
 | I-074 | Conflict validation ищет максимальную committed sequence при перекрывающихся L0 и непересекающихся L1+ и не допускает stale transaction commit. | обеспечен v0.9.0 | `conflict_validation_binary_search_finds_versions_in_leveled_sst`, transaction regression suite |
 | I-075 | Streaming scan сохраняет L0-newest-first и L1+ порядок, границы диапазона и lifetime VersionSet без полного clone списка SST TableHandle. | обеспечен v0.9.0 | `narrow_range_scan_preserves_order_across_many_sst_without_handle_vector`, streaming cursor regression suite |
+| I-076 | L1+ SCAN planning использует binary range pruning, сохраняя точные Included/Excluded границы, snapshots и tombstones; L0 остаётся newest-first. | draft v1.0.0 | `leveled_binary_range_seek_respects_included_excluded_unbounded_and_snapshot` |
+| I-077 | CLI get, scan и doctor не создают отсутствующую базу; doctor не выполняет destructive cleanup. | draft v1.0.0 | `version_readonly_doctor_and_missing_get_never_create_database` |
+| I-078 | Логический архив включает видимые бинарные key/value из действующих families; restore сохраняет имена и отвергает CRC, truncated/future format без публикации partial target. | draft v1.0.0 | `export_restore_roundtrip_all_families_binary_and_large_values`; `restore_rejects_corruption_truncation_and_future_format_without_publishing`; CRC32C vector |
+| I-079 | Existing backup/target не перезаписывается; export временный файл синхронизируется до публикации, restore закрывается до rename. | draft v1.0.0 | `stable_ga_cli`; ADR 0020 |
+| I-080 | Stable GitHub Release публикуется только после Linux/Windows CLI smoke и проверки обоих архивов + SHA256; tag immutable и совпадает с main SHA. | draft v1.0.0 | `.github/workflows/release.yml`; release workflow и GitHub API assets |
 
 ## Правило изменения
 

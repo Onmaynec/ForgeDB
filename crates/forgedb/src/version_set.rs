@@ -310,16 +310,29 @@ impl VersionSet {
         self.block_cache.evict_table(file_number)
     }
 
-    /// Zero-allocation обход SST для публичного streaming scan.
-    /// Не клонирует Arc<TableReader> всех файлов при построении итератора:
-    /// сам DbIterator держит VersionSet lease и создаёт cursor только для
-    /// реально перекрывающих запрошенный range SST.
-    pub(crate) fn files_for_scan(&self) -> impl Iterator<Item = &TableHandle> {
+    /// Streaming scan: L0 остаётся newest-first с проверкой каждого overlapping
+    /// SST. Непересекающиеся L1+ используют binary seek по largest_user_key:
+    /// O(log N + K) вместо O(N) и не создают промежуточный Vec<TableHandle>.
+    ///
+    /// Bounds здесь консервативные (без вида Included/Excluded): вызывающий
+    /// код выполняет строгую проверку OwnedRange::overlaps для каждой SST.
+    pub(crate) fn files_for_scan<'a>(
+        &'a self,
+        lower: Option<&'a [u8]>,
+        upper: Option<&'a [u8]>,
+    ) -> impl Iterator<Item = &'a TableHandle> + 'a {
         self.levels
             .first()
             .into_iter()
             .flat_map(|level| level.iter().rev())
-            .chain(self.levels.iter().skip(1).flat_map(|level| level.iter()))
+            .chain(self.levels.iter().skip(1).flat_map(move |level| {
+                let first = lower.map_or(0, |key| {
+                    level.partition_point(|table| table.metadata.largest_user_key.as_slice() < key)
+                });
+                level[first..].iter().take_while(move |table| {
+                    upper.is_none_or(|end| table.metadata.smallest_user_key.as_slice() <= end)
+                })
+            }))
     }
 
     pub(crate) fn files_in_read_order(&self) -> Result<Vec<TableHandle>> {
