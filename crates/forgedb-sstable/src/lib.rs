@@ -9,8 +9,8 @@ pub use cache::{BlockCache, CacheStats};
 
 use std::cmp::Ordering;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::sync::{Arc, Mutex};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bloom::BloomFilter;
@@ -594,11 +594,7 @@ impl TableReader {
 
     /// Возвращает только валидированный физический блок по указанному offset.
     /// FD удерживается для Windows-safe retirement, а mutex сериализует seek/read.
-    fn read_checked_block(
-        &self,
-        handle: BlockHandle,
-        component: &'static str,
-    ) -> Result<Vec<u8>> {
+    fn read_checked_block(&self, handle: BlockHandle, component: &'static str) -> Result<Vec<u8>> {
         let mut reader = self.reader.lock().map_err(|_| Error::InternalInvariant {
             invariant: "I-SST-READER-MUTEX",
             reason: "mutex random-access SST reader poisoned".to_owned(),
@@ -1044,7 +1040,13 @@ fn read_checked_block_at<R: Read + Seek + ?Sized>(
         observed: handle.length,
     })?;
     let mut buffer = vec![0_u8; length];
-    read_exact_at(reader, path, handle.offset, &mut buffer, "read_sstable_block")?;
+    read_exact_at(
+        reader,
+        path,
+        handle.offset,
+        &mut buffer,
+        "read_sstable_block",
+    )?;
     let relative_handle = BlockHandle {
         offset: 0,
         length: handle.length,
