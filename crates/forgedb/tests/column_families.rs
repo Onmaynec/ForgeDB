@@ -11,10 +11,7 @@ fn temp_directory(name: &str) -> Result<PathBuf> {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "forgedb-cf-{name}-{}-{now}",
-        std::process::id()
-    ));
+    let path = std::env::temp_dir().join(format!("forgedb-cf-{name}-{}-{now}", std::process::id()));
     fs::create_dir_all(&path)
         .map_err(|source| Error::io("create_test_directory", Some(path.clone()), source))?;
     Ok(path)
@@ -34,7 +31,12 @@ fn isolated_families_persist_same_keys_through_flush_and_reopen() -> Result<()> 
     assert_ne!(users, sessions);
     assert_eq!(families.list()?.len(), 3);
 
-    families.put(ColumnFamilyId::DEFAULT, b"shared", b"default", WriteOptions::sync())?;
+    families.put(
+        ColumnFamilyId::DEFAULT,
+        b"shared",
+        b"default",
+        WriteOptions::sync(),
+    )?;
     families.put(users, b"shared", b"user", WriteOptions::sync())?;
     families.put(sessions, b"shared", b"session", WriteOptions::sync())?;
     let mut batch = WriteBatch::new();
@@ -45,20 +47,34 @@ fn isolated_families_persist_same_keys_through_flush_and_reopen() -> Result<()> 
     families.flush(users)?;
     families.flush(sessions)?;
     families.compact_range(users, None, None)?;
-    assert_eq!(families.get(ColumnFamilyId::DEFAULT, b"shared")?, Some(b"default".to_vec()));
+    assert_eq!(
+        families.get(ColumnFamilyId::DEFAULT, b"shared")?,
+        Some(b"default".to_vec())
+    );
     assert_eq!(families.get(users, b"shared")?, Some(b"user".to_vec()));
     assert_eq!(families.get(sessions, b"shared")?, None);
-    assert_eq!(families.get(sessions, b"another")?, Some(b"batch-value".to_vec()));
+    assert_eq!(
+        families.get(sessions, b"another")?,
+        Some(b"batch-value".to_vec())
+    );
     families.close()?;
     drop(families);
 
     let reopened = ColumnFamilies::open(&root, Options::default())?;
     assert_eq!(reopened.list()?.len(), 3);
-    assert_eq!(reopened.get(ColumnFamilyId::DEFAULT, b"shared")?, Some(b"default".to_vec()));
+    assert_eq!(
+        reopened.get(ColumnFamilyId::DEFAULT, b"shared")?,
+        Some(b"default".to_vec())
+    );
     assert_eq!(reopened.get(users, b"shared")?, Some(b"user".to_vec()));
     assert_eq!(reopened.get(sessions, b"shared")?, None);
-    assert_eq!(reopened.get(sessions, b"another")?, Some(b"batch-value".to_vec()));
-    let rows = reopened.scan(sessions, .., ReadOptions::default())?.collect::<Result<Vec<_>>>()?;
+    assert_eq!(
+        reopened.get(sessions, b"another")?,
+        Some(b"batch-value".to_vec())
+    );
+    let rows = reopened
+        .scan(sessions, .., ReadOptions::default())?
+        .collect::<Result<Vec<_>>>()?;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0], (b"another".to_vec(), b"batch-value".to_vec()));
     reopened.close()?;
@@ -84,11 +100,11 @@ fn transaction_snapshots_and_conflicts_are_scoped_to_one_family() -> Result<()> 
     assert_eq!(families.get(beta, b"same")?, Some(b"b2".to_vec()));
 
     let alpha_snapshot = families.snapshot(alpha)?;
-    assert!(families.get_with_options(
-        beta,
-        b"same",
-        ReadOptions::from_snapshot(&alpha_snapshot),
-    ).is_err());
+    assert!(
+        families
+            .get_with_options(beta, b"same", ReadOptions::from_snapshot(&alpha_snapshot),)
+            .is_err()
+    );
     drop(alpha_snapshot);
     families.close()?;
     drop(families);
@@ -180,7 +196,10 @@ fn readonly_rejects_mutations_and_missing_registered_family_is_corruption() -> R
     fs::rename(&child, &relocated)
         .map_err(|source| Error::io("rename_test_family", Some(child.clone()), source))?;
     let reopened = ColumnFamilies::open(&root, Options::default())?;
-    assert!(matches!(reopened.get(id, b"key"), Err(Error::Corruption { .. })));
+    assert!(matches!(
+        reopened.get(id, b"key"),
+        Err(Error::Corruption { .. })
+    ));
     assert!(!child.exists());
     reopened.close()?;
     drop(reopened);
