@@ -225,11 +225,11 @@ impl<'a> Cursor<'a> {
     }
 
     fn eat(&mut self, keyword: &str) -> bool {
-        if let Some(Token::Word(word)) = self.tokens.get(self.index) {
-            if word.eq_ignore_ascii_case(keyword) {
-                self.index += 1;
-                return true;
-            }
+        if let Some(Token::Word(word)) = self.tokens.get(self.index)
+            && word.eq_ignore_ascii_case(keyword)
+        {
+            self.index += 1;
+            return true;
         }
         false
     }
