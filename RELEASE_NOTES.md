@@ -1,76 +1,80 @@
-# ForgeDB v0.6.2 — Memory & Reliability
+# ForgeDB v0.7.0 — Column Families
 
 Статус: GitHub Pre-release.
 
-ForgeDB v0.6.2 уменьшает память, расходуемую при открытии и индексном чтении SSTable: физические SST-файлы больше не загружаются целиком в `TableReader::open`. Служебные блоки проверяются при открытии, data blocks читаются по запросу через random-access FileSystem с CRC32C. Прежние persisted-форматы и поведение транзакций сохраняются.
+ForgeDB v0.7.0 добавляет именованные Column Families с долговечным реестром имён/ID, изоляцией keyspaces, собственными LSM/WAL и удобным API. Старую default базу можно продолжить использовать без миграции. Новая функциональность доступна из Rust и CLI для Windows/Linux.
 
-## Что изменилось
+## Новое
 
-- `TableReader::open` проверяет размер из MANIFEST, фиксированные header/footer и checksummed index/filter/properties без создания `Vec<u8>` размером в SSTable.
-- Point-read data blocks загружаются отдельно по проверенным offsets. `get`, snapshot-aware `get_at_cached` и newest-sequence transaction conflict lookup используют тот же механизм.
-- Один открытый reader handle удерживается на lifetime `TableReader` и разделяется клонами под mutex; старые `VersionSet`/читатели сохраняют защиту от удаления SST во время compaction cleanup.
-- CRC32C, compression type и reserved trailer fields проверяются при чтении физического блока; ошибка не попадает в LRU decoded cache.
-- Benchmark `point_lookup_bench` дополнен throughput в ops/s и empirical p50/p95/p99 (ns) для cold/warm проходов. Ускорение относительно старых версий не заявляется без baseline на одинаковом оборудовании.
+### API Column Families
 
-## Как проверить
+`ColumnFamilies::open(path, Options)` открывает старую default DB и проверяет CF registry. Именованные families доступны через:
+
+- `list()`, `create(name)`, `drop_family(id)`, `close()`, `default_database()`;
+- `put/get/get_with_options/delete/write` по `ColumnFamilyId`;
+- `scan/snapshot/flush/compact_range/begin_transaction` в пределах одной family.
+
+Имена family: 1–64 ASCII символов `A-Za-z0-9_-`; `default` зарезервировано за ID 0. Созданный ID сохраняется после закрытия и перезапуска. `drop_family` логически удаляет family: старый каталог не удаляется и ID не переиспользуется.
+
+### Crash-safe CF Registry V1
+
+Отдельный `CF_REGISTRY V1` хранится в `.forgedb-column-families/REGISTRY`: magic/version, monotonic next ID, отсортированный ID↔name mapping, bounded count/lengths и CRC32C. Publication выполняется через запись/sync временного snapshot, atomic rename и sync directory. Сначала инициализируется child DB, только затем публикуется registry.
+
+Повреждённый registry, неизвестная версия или отсутствие зарегистрированного child каталога приводит к явной ошибке. Незарегистрированные/orphan директории не подключаются и не удаляются автоматически; symbolic links в reserved paths отклоняются.
+
+### Команды CLI
 
 ```bash
-cargo run --locked --release -p forgedb --example point_lookup_bench -- 8192 50000
+forgedb cf create ./data users
+forgedb cf list ./data
+forgedb cf put ./data 1 user42 Alice --sync
+forgedb cf get ./data 1 user42
+forgedb cf scan ./data 1
+forgedb cf delete ./data 1 user42 --sync
+forgedb cf drop ./data 1
 ```
 
-Результаты зависят от файловой системы, OS page cache, объёма набора данных, размеров SST, параметров кэша и планировщика. Небольшой benchmark smoke используется в CI только для проверки работоспособности, не как speed SLA.
+ID `1` в примере условный: используйте фактический ID из `cf create` или `cf list`. CLI доступен без установки Rust из assets этого release.
 
-## Совместимость и безопасность
+## Подтверждённая изоляция
 
-| Формат | Чтение | Запись |
-|---|---|---|
-| IDENTITY | V1 | V1 |
-| Internal Key | V1 | V1 |
-| WAL | V1 | V1 |
-| SSTable | V1 | V1 |
-| MANIFEST | V1/V2 | V2 |
-| CURRENT | V1 | V1 |
+Данные одноимённого user key в `default` и именованных families не пересекаются, включая delete/tombstones. Flush, leveled compaction и WAL recovery выполняются в независимых каталогах. Snapshot и optimistic transaction относятся к конкретной family. При закрытии facade синхронизируются открытые child databases и default root; повторный close идемпотентен.
 
-Изменений persisted layout и migration нет. Сохраняются WAL durability modes, optimistic snapshot isolation, write-write validation, reference-aware cleanup из v0.6.1 и поведение `close()` после sync errors.
+## Важные ограничения
 
-## Что пока не сделано
+- Это первая реализация **physical-isolation** Column Families, а не несколько CF внутри единого MANIFEST/SSTable. Каждый CF имеет свой WAL, MANIFEST, sequence-number timeline и lock.
+- **Нет атомарного WriteBatch или transaction между несколькими families.** Внутри выбранной family обычный `ColumnFamilies::write(id, WriteBatch)` и `begin_transaction(id)` используют прежние WAL/MVCC guarantees.
+- `WriteBatch::put_cf` с ненулевым ID пока намеренно отклоняется старым storage core. Для именованных families используйте `ColumnFamilies::write(id, обычный batch)`.
+- Нет глобального snapshot и serializable isolation между families. Каждая family использует свою конфигурацию памяти и кэш; общего RAM/FD лимита нет.
+- Drop не выполняет destructive cleanup; orphan каталоги сохраняются. Автоматическая cross-restart GC, unified WAL, фоновая compaction, FQL/SQL не добавлены.
+- `Database::open` остаётся API для **default** root, не перечисляет именованные families.
 
-- `Options::block_cache_size` ограничивает только decoded data-block cache, не весь RSS: index/Bloom/properties, временные I/O buffers, memtables и прочие расходы памяти учитываются отдельно.
-- `table_cache_capacity` пока не управляет количеством открытых SST file handles; активные SST readers удерживают физические дескрипторы, поэтому очень большие базы могут столкнуться с лимитом FD.
-- Проверка целостности data blocks выполняется при чтении или через `verify --deep`, а не полным сканированием каждого SST при open. Уже кэшированный decoded block не перечитывается с диска на каждом cache hit.
-- Автоматическая cross-restart очистка orphan SST, фоновые compaction workers, Column Families и serializable transactions не добавлены.
+## Совместимость persisted-файлов
+
+Для default и каждого child каталога не изменены: IDENTITY V1, Internal Key V1, WAL V1, SSTable V1, MANIFEST writer V2/reader V1–V2 и CURRENT V1. Добавлен **только новый отдельный** CF_REGISTRY V1, без миграции старых данных.
 
 ## Проверки
 
-Feature head `04bfd605b961d57447e3b9baed3b177228c60d8b`, [CI #43548913230](https://github.com/Onmaynec/ForgeDB/actions/runs/43548913230) — success:
+Feature PR [#33](https://github.com/Onmaynec/ForgeDB/pull/33), head `2f53fbaf72558093870275e1353d27b69f7c97fd`, [CI run #43552878243](https://github.com/Onmaynec/ForgeDB/actions/runs/43552878243):
 
-- Ubuntu stable: rustfmt, strict Clippy `-D warnings`, workspace tests, doctests, release build, benchmark smoke.
-- Windows stable: те же проверки.
-- Ubuntu Rust 1.89: strict Clippy и workspace tests.
+- Ubuntu stable: rustfmt, strict Clippy -D warnings, workspace tests, doctests, release build, benchmark smoke — success;
+- Windows stable: аналогичные проверки — success;
+- Rust 1.89: strict Clippy и workspace tests — success.
 
-Добавлены измерительный тест, подтверждающий отсутствие full-file SST reads при открытии, проверка чтения data block с кешированием без повторного I/O и fault injection повреждения данных во время random-access чтения. Release workflow отдельно повторяет Linux gate перед публикацией annotated tag.
+Новые тесты: same-key CF isolation, reopen/recovery, independent snapshots/transactions, drop/recreate ID, read-only, corrupted/future registry, missing registered child, crash orphan retention и CLI multi-process CRUD. Release workflow отдельно повторяет Linux gate до создания annotated tag.
 
-## Готовый CLI для Windows и Linux
+## Готовые CLI-бинарники
 
-В Assets релиза размещаются архивы x86-64 CLI с отдельными SHA-256 checksum:
+Для Windows и Linux x86-64 собираются ZIP/TAR.GZ архивы с отдельными SHA-256 файлами:
 
-- `forgedb-v0.6.2-windows-x86_64.zip` — `forgedb.exe`;
-- `forgedb-v0.6.2-linux-x86_64.tar.gz` — `forgedb`.
+- `forgedb-v0.7.0-windows-x86_64.zip` — `forgedb.exe`;
+- `forgedb-v0.7.0-linux-x86_64.tar.gz` — `forgedb`.
 
-Пример первого запуска после распаковки (Windows: `./forgedb.exe`):
-
-```bash
-./forgedb put ./data hello world
-./forgedb get ./data hello
-./forgedb scan ./data
-./forgedb verify ./data --deep
-```
-
-Для использования CLI не нужен Rust toolchain. Детали проверки архива: `docs/QUICKSTART.md`.
+Инструкция по распаковке и проверке checksum: `docs/QUICKSTART.md`.
 
 ## Документация
 
-- `docs/releases/V0.6.2.md`;
-- `docs/adr/0014-lazy-sst-readers.md`;
-- `docs/CACHE_AND_PERFORMANCE.md`;
-- `docs/READ_PATH.md`, `docs/OPTIONS.md`, `docs/INVARIANTS.md`.
+- `docs/releases/V0.7.0.md`;
+- `docs/formats/CF_REGISTRY_V1.md`;
+- `docs/adr/0015-column-family-isolation.md`;
+- `docs/ARCHITECTURE.md`, `docs/COMPATIBILITY.md`, `docs/VALIDATION.md`, `docs/INVARIANTS.md`.
