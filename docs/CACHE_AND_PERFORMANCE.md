@@ -73,6 +73,8 @@ Compaction input reader тоже использует этот pool, поэто�
 
 **Optimistic conflicts:** L0 сохраняет перебор с sequence cutoff, L1+ использует бинарный range lookup по строго непересекающимся SST. Максимальная committed sequence для ключа не пропускается по одним лишь global statistics: таблица пропускается только при `largest_sequence <= max(threshold, newest_found)`.
 
+**Streaming SCAN setup:** `VersionSet::files_for_scan` обходит L0 newest-first и L1+ через borrowed iterator, не выделяя массив копий `TableHandle` для всех live SST. При узком range курсоры открываются только для пересечённых таблиц. Проверка overlap по всем SST остаётся линейной и не объявляется binary range seek.
+
 Для отдельных измерений есть `performance_bench`; вводимые параметры, вывод (p50/p95/p99/ops/sec) и сравнение описаны в [PERFORMANCE_BENCHMARK.md](PERFORMANCE_BENCHMARK.md). CI smoke подтверждает работоспособность, но не является latency SLA и не доказывает ускорения при всех workloads.
 
 ## Range scan
