@@ -4,11 +4,11 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## Статус версий
 
-- текущий выпуск: **v0.9.0 — Performance Engine**, GitHub Pre-release;
-- предыдущая версия: **v0.8.2 — Streaming SST Handle Pool**;
-- следующие задачи: **#31 — управление SST file handles, #35 — unified Column Families**.
+- версия исходников: **v1.0.0 — Stable General Availability**, до завершения release gate;
+- последний опубликованный выпуск: **v0.9.0 — Performance Engine**, GitHub Pre-release;
+- оставшиеся задачи: **#31 — глобальные FD limits, #35 — mixed-family transactions, #27 — crates.io package name**.
 
-## Возможности v0.9.0
+## Возможности v1.0.0
 
 - WAL V1, atomic WriteBatch и durability modes;
 - SSTable V1 с checksums, blocks, index и Bloom filter;
@@ -41,6 +41,29 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 - best-effort reference-aware SST cleanup после успешной compaction (в рамках текущего open handle).
 - lazy random-access SST reader: header/footer и служебные blocks проверяются при открытии, data blocks читаются при запросе с CRC32C;
 - measurement throughput и read latency p50/p95/p99 в `point_lookup_bench`.
+
+## Stable GA v1.0.0 — перенос данных, диагностика и гарантии
+
+В v1.0.0 появился versioned переносимый логический архив с **CRC32C** и восстановлением **только в новый каталог**. `export` записывает действующие default/named Column Families, включая бинарные значения, `restore` проверяет формат, границы, порядок ключей, CRC и EOF до публикации staging-каталога. Каждый family snapshot согласован внутри себя, но **глобального cross-family атомарного snapshot нет**. При восстановлении имена families сохраняются, числовые ID могут меняться.
+
+```bash
+forgedb version
+forgedb doctor ./data --deep
+forgedb export ./data ./backup.fdbk
+forgedb restore ./backup.fdbk ./restored-data
+forgedb doctor ./restored-data --deep
+```
+
+`doctor` и `GET/SCAN` используют read-only путь и не создают каталог по ошибочному пути. Для SCAN на непересекающихся L1+ выбор SST теперь выполняется binary range seek — O(log N + K) кандидатов вместо полного O(N) просмотра. WAL/SSTable/MANIFEST/CF_REGISTRY layouts не меняются.
+
+**Стабильный выпуск не равен обещанию всех функций DBMS.** Нет process-wide FD лимита (#31), атомарных операций между families (#35), encryption/authentication, сетевого сервера. **Имя crates.io `forgedb` занято другим проектом** (#27), поэтому не утверждается, что данный crate доступен в registry. Для Rust используйте зависимость по Git tag:
+
+```toml
+[dependencies]
+forgedb = { git = "https://github.com/Onmaynec/ForgeDB.git", tag = "v1.0.0" }
+```
+
+Статус, приемочные критерии и риски: [GA_READINESS](docs/GA_READINESS.md), [релиз v1.0.0](docs/releases/V1.0.0.md), [архив V1](docs/formats/LOGICAL_ARCHIVE_V1.md), [ADR 0020](docs/adr/0020-stable-ga-portable-archive.md).
 
 ## Column Families (v0.7.0)
 
@@ -82,7 +105,7 @@ FQL — строгий командный язык над key-value базой (
 
 ## CLI без компиляции
 
-Для Windows x86-64 и Linux x86-64 опубликованы архивы с готовым CLI и SHA-256 checksum в [GitHub Releases](https://github.com/Onmaynec/ForgeDB/releases). Скачать и распаковать `forgedb-v0.9.0-windows-x86_64.zip` или `forgedb-v0.9.0-linux-x86_64.tar.gz`.
+Для Windows x86-64 и Linux x86-64 опубликованы архивы с готовым CLI и SHA-256 checksum в [GitHub Releases](https://github.com/Onmaynec/ForgeDB/releases). Скачать и распаковать `forgedb-v1.0.0-windows-x86_64.zip` или `forgedb-v1.0.0-linux-x86_64.tar.gz`.
 
 Пример первого запуска после распаковки (Linux; в PowerShell используйте `./forgedb.exe`):
 
@@ -287,7 +310,7 @@ cargo build --locked --workspace --release
 
 Основная CI matrix: Ubuntu stable, Windows stable и Rust 1.89.
 
-## Ограничения v0.9.0
+## Ограничения v1.0.0
 
 - isolation — snapshot isolation, не serializable;
 - обязательна write-write conflict detection, но full read-write validation пока отсутствует;
@@ -306,6 +329,10 @@ cargo build --locked --workspace --release
 
 ## Документация
 
+- [`docs/GA_READINESS.md`](docs/GA_READINESS.md);
+- [`docs/releases/V1.0.0.md`](docs/releases/V1.0.0.md);
+- [`docs/formats/LOGICAL_ARCHIVE_V1.md`](docs/formats/LOGICAL_ARCHIVE_V1.md);
+- [`docs/adr/0020-stable-ga-portable-archive.md`](docs/adr/0020-stable-ga-portable-archive.md);
 - [`docs/releases/V0.9.0.md`](docs/releases/V0.9.0.md);
 - [`docs/adr/0019-performance-engine.md`](docs/adr/0019-performance-engine.md);
 - [`docs/PERFORMANCE_BENCHMARK.md`](docs/PERFORMANCE_BENCHMARK.md);
