@@ -274,10 +274,15 @@ impl ColumnFamilies {
     /// Синхронизирует все открытые families перед освобождением корневого lock.
     /// При первой ошибке сохраняет состояние для retry.
     pub fn close(&self) -> Result<()> {
+        // The registry mutex serializes close with create/drop/open.
+        // Re-check while holding the lock so concurrent close remains idempotent.
+        let state = self.registry.lock().map_err(|_| Error::InternalInvariant {
+            invariant: "I-CF-REGISTRY-MUTEX",
+            reason: "column family registry mutex poisoned".to_owned(),
+        })?;
         if self.closed.load(Ordering::SeqCst) {
             return Ok(());
         }
-        let state = self.lock_registry()?;
         for child in state.opened.values() {
             child.close()?;
         }
@@ -332,10 +337,14 @@ impl ColumnFamilies {
     }
 
     fn lock_registry(&self) -> Result<MutexGuard<'_, RegistryState>> {
-        self.registry.lock().map_err(|_| Error::InternalInvariant {
+        let state = self.registry.lock().map_err(|_| Error::InternalInvariant {
             invariant: "I-CF-REGISTRY-MUTEX",
             reason: "column family registry mutex poisoned".to_owned(),
-        })
+        })?;
+        // An operation may have passed ensure_open before concurrent close
+        // obtained the mutex. Do not allow registry mutations after close.
+        self.ensure_open()?;
+        Ok(state)
     }
 }
 
