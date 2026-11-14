@@ -4,8 +4,8 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## Статус версий
 
-- версия исходников feature branch: **v0.8.0 — FQL & Interactive Shell** (проверяется до выпуска);
-- последний опубликованный выпуск: **v0.7.0 — Column Families**, GitHub Pre-release;
+- текущий выпуск: **v0.8.0 — FQL & Interactive Shell**, GitHub Pre-release;
+- предыдущая версия: **v0.7.0 — Column Families**;
 - следующие задачи: **#31 — управление SST file handles, #35 — unified Column Families**.
 
 ## Возможности v0.8.0
@@ -82,7 +82,7 @@ FQL — строгий командный язык над key-value базой (
 
 ## CLI без компиляции
 
-Для Windows x86-64 и Linux x86-64 опубликованы архивы с готовым CLI и SHA-256 checksum в [GitHub Releases](https://github.com/Onmaynec/ForgeDB/releases). Скачать и распаковать `forgedb-v0.7.0-windows-x86_64.zip` или `forgedb-v0.7.0-linux-x86_64.tar.gz`.
+Для Windows x86-64 и Linux x86-64 опубликованы архивы с готовым CLI и SHA-256 checksum в [GitHub Releases](https://github.com/Onmaynec/ForgeDB/releases). Скачать и распаковать `forgedb-v0.8.0-windows-x86_64.zip` или `forgedb-v0.8.0-linux-x86_64.tar.gz`.
 
 Пример первого запуска после распаковки (Linux; в PowerShell используйте `./forgedb.exe`):
 

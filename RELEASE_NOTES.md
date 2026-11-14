@@ -1,80 +1,87 @@
-# ForgeDB v0.7.0 — Column Families
+# ForgeDB v0.8.0 — FQL & Interactive Shell
 
 Статус: GitHub Pre-release.
 
-ForgeDB v0.7.0 добавляет именованные Column Families с долговечным реестром имён/ID, изоляцией keyspaces, собственными LSM/WAL и удобным API. Старую default базу можно продолжить использовать без миграции. Новая функциональность доступна из Rust и CLI для Windows/Linux.
+Версия 0.8.0 добавляет строгий командный язык FQL V1 и интерактивный shell для локальных баз ForgeDB. Запросы выполняются через существующий ColumnFamilies API, без нового storage engine и изменения on-disk форматов. Доступны готовые CLI для Windows и Linux x86-64.
 
-## Новое
+## FQL V1
 
-### API Column Families
+- Чтение и запись: GET key, PUT key value, DELETE key.
+- Диапазон: SCAN [FROM start] [TO end] [LIMIT number]. FROM включительно, TO исключительно.
+- Именованные хранилища: SHOW FAMILIES, CREATE FAMILY name, DROP FAMILY name|id, USE name|id.
+- Транзакции выбранной family: BEGIN, COMMIT, ROLLBACK.
+- Справка и выход: HELP, EXIT и QUIT.
 
-`ColumnFamilies::open(path, Options)` открывает старую default DB и проверяет CF registry. Именованные families доступны через:
+FQL допускает один statement на строку, при желании с завершающей точкой с запятой. Он **не является SQL**: нет SELECT, JOIN, реляционных таблиц и сетевого сервера.
 
-- `list()`, `create(name)`, `drop_family(id)`, `close()`, `default_database()`;
-- `put/get/get_with_options/delete/write` по `ColumnFamilyId`;
-- `scan/snapshot/flush/compact_range/begin_transaction` в пределах одной family.
+Quoted текст поддерживает пробелы и escape-последовательности; hex-литералы X'00ff' позволяют работать с бинарными ключами/значениями. Результат GET/SCAN записывается в обратимом quoted-формате с \xHH для непечатных байтов.
 
-Имена family: 1–64 ASCII символов `A-Za-z0-9_-`; `default` зарезервировано за ID 0. Созданный ID сохраняется после закрытия и перезапуска. `drop_family` логически удаляет family: старый каталог не удаляется и ID не переиспользуется.
+## Запуск
 
-### Crash-safe CF Registry V1
+Одноразовая команда:
 
-Отдельный `CF_REGISTRY V1` хранится в `.forgedb-column-families/REGISTRY`: magic/version, monotonic next ID, отсортированный ID↔name mapping, bounded count/lengths и CRC32C. Publication выполняется через запись/sync временного snapshot, atomic rename и sync directory. Сначала инициализируется child DB, только затем публикуется registry.
+    forgedb fql ./data "PUT key 'Hello FQL'"
+    forgedb fql ./data "GET key" --read-only
 
-Повреждённый registry, неизвестная версия или отсутствие зарегистрированного child каталога приводит к явной ошибке. Незарегистрированные/orphan директории не подключаются и не удаляются автоматически; symbolic links в reserved paths отклоняются.
+Интерактивный shell:
 
-### Команды CLI
+    forgedb shell ./data
 
-```bash
-forgedb cf create ./data users
-forgedb cf list ./data
-forgedb cf put ./data 1 user42 Alice --sync
-forgedb cf get ./data 1 user42
-forgedb cf scan ./data 1
-forgedb cf delete ./data 1 user42 --sync
-forgedb cf drop ./data 1
-```
+Файл сценария:
 
-ID `1` в примере условный: используйте фактический ID из `cf create` или `cf list`. CLI доступен без установки Rust из assets этого release.
+    forgedb shell ./data --file commands.fql
 
-## Подтверждённая изоляция
+Пример commands.fql:
 
-Данные одноимённого user key в `default` и именованных families не пересекаются, включая delete/tombstones. Flush, leveled compaction и WAL recovery выполняются в независимых каталогах. Snapshot и optimistic transaction относятся к конкретной family. При закрытии facade синхронизируются открытые child databases и default root; повторный close идемпотентен.
+    CREATE FAMILY users
+    USE users
+    BEGIN
+    PUT user42 'Alice'
+    GET user42
+    COMMIT
+    SCAN FROM user TO userz LIMIT 20
+    EXIT
 
-## Важные ограничения
+Shell поддерживает перенаправленный stdin; при работе с терминалом показывает название выбранной family.
 
-- Это первая реализация **physical-isolation** Column Families, а не несколько CF внутри единого MANIFEST/SSTable. Каждый CF имеет свой WAL, MANIFEST, sequence-number timeline и lock.
-- **Нет атомарного WriteBatch или transaction между несколькими families.** Внутри выбранной family обычный `ColumnFamilies::write(id, WriteBatch)` и `begin_transaction(id)` используют прежние WAL/MVCC guarantees.
-- `WriteBatch::put_cf` с ненулевым ID пока намеренно отклоняется старым storage core. Для именованных families используйте `ColumnFamilies::write(id, обычный batch)`.
-- Нет глобального snapshot и serializable isolation между families. Каждая family использует свою конфигурацию памяти и кэш; общего RAM/FD лимита нет.
-- Drop не выполняет destructive cleanup; orphan каталоги сохраняются. Автоматическая cross-restart GC, unified WAL, фоновая compaction, FQL/SQL не добавлены.
-- `Database::open` остаётся API для **default** root, не перечисляет именованные families.
+## Поведение при ошибках
 
-## Совместимость persisted-файлов
+- Входной statement полностью разбирается до выполнения: лишние команды, ошибочный escape, некорректный LIMIT и неверные аргументы не инициируют частичную мутацию.
+- Максимум 64 KiB на строку; чтение stdin/file ограничено до разбора. При oversized строке REPL дочитывает её до newline и может корректно обработать следующую команду. Максимум 512 токенов.
+- SCAN отдаёт не более 100 строк по умолчанию и не более 10000 с LIMIT; реализован streaming iterator без материализации всего результата.
+- Файловые скрипты прекращают работу на первой ошибке с номером строки и ненулевым exit code. REPL после ошибочной команды остаётся активным.
+- Незавершённая транзакция при ошибке script, EOF или EXIT откатывается. GET внутри BEGIN видит собственные buffered writes; COMMIT использует существующий optimistic snapshot isolation и WAL Sync.
+- SCAN, USE, CREATE/DROP FAMILY запрещены внутри BEGIN до поддержки корректного transactional range merge и cross-family semantics.
+- --read-only не создаёт хранилище и запрещает изменения.
 
-Для default и каждого child каталога не изменены: IDENTITY V1, Internal Key V1, WAL V1, SSTable V1, MANIFEST writer V2/reader V1–V2 и CURRENT V1. Добавлен **только новый отдельный** CF_REGISTRY V1, без миграции старых данных.
+**Важное ограничение:** скрипт целиком не атомарен. Записи из уже завершённых отдельных statements остаются durable, если позднее возникла ошибка. Для атомарной группы mutations используйте BEGIN–COMMIT **в одной** family.
+
+## Совместимость
+
+FQL реализован на уровне CLI. Форматы IDENTITY V1, Internal Key V1, WAL V1, SSTable V1, MANIFEST writer V2/reader V1+V2, CURRENT V1 и CF_REGISTRY V1 не изменяются. Миграции существующих баз v0.7.0 не требуется. Все прежние команды CLI сохраняются.
+
+Новых mixed-family atomic WAL batches, глобальных MVCC snapshots или serializable transactions нет (см. Issue #35). Управление количеством открытых SST handles остаётся задачей #31. SQL-синтаксис и серверные подключения не добавлены.
 
 ## Проверки
 
-Feature PR [#33](https://github.com/Onmaynec/ForgeDB/pull/33), head `2f53fbaf72558093870275e1353d27b69f7c97fd`, [CI run #43552878243](https://github.com/Onmaynec/ForgeDB/actions/runs/43552878243):
+Feature PR #37, head 0d86143159ed35b07eaa43e2a789a6d2acefd9db: CI #43555440756 завершён успешно на Ubuntu stable, Windows stable и Rust 1.89.
 
-- Ubuntu stable: rustfmt, strict Clippy -D warnings, workspace tests, doctests, release build, benchmark smoke — success;
-- Windows stable: аналогичные проверки — success;
-- Rust 1.89: strict Clippy и workspace tests — success.
+Проверены rustfmt, строгий Clippy с -D warnings, workspace tests, doctests, release build и benchmark smoke. Добавлены unit tests parser/lexer и integration CLI tests: quoted/binary data, one-shot query, stdin REPL, file scripts, fail-fast, rollback при EOF/error, read-only, Column Families scope, SCAN limits и oversized-line recovery.
 
-Новые тесты: same-key CF isolation, reopen/recovery, independent snapshots/transactions, drop/recreate ID, read-only, corrupted/future registry, missing registered child, crash orphan retention и CLI multi-process CRUD. Release workflow отдельно повторяет Linux gate до создания annotated tag.
+Release workflow повторяет Linux validation gate перед созданием аннотированного Git tag v0.8.0 и GitHub Pre-release.
 
-## Готовые CLI-бинарники
+## Windows / Linux CLI binaries
 
-Для Windows и Linux x86-64 собираются ZIP/TAR.GZ архивы с отдельными SHA-256 файлами:
+При выпуске в Assets публикуются два архива x86-64 и отдельные SHA-256 checksums:
 
-- `forgedb-v0.7.0-windows-x86_64.zip` — `forgedb.exe`;
-- `forgedb-v0.7.0-linux-x86_64.tar.gz` — `forgedb`.
+- forgedb-v0.8.0-windows-x86_64.zip — forgedb.exe;
+- forgedb-v0.8.0-linux-x86_64.tar.gz — forgedb.
 
-Инструкция по распаковке и проверке checksum: `docs/QUICKSTART.md`.
+Rust toolchain для запуска CLI не нужен. Подробности распаковки/проверки контрольных сумм — docs/QUICKSTART.md.
 
 ## Документация
 
-- `docs/releases/V0.7.0.md`;
-- `docs/formats/CF_REGISTRY_V1.md`;
-- `docs/adr/0015-column-family-isolation.md`;
-- `docs/ARCHITECTURE.md`, `docs/COMPATIBILITY.md`, `docs/VALIDATION.md`, `docs/INVARIANTS.md`.
+- docs/FQL.md — синтаксис и поведение выполнения;
+- docs/adr/0016-fql-cli.md — архитектурное решение;
+- docs/releases/V0.8.0.md — технические границы milestone;
+- docs/COMPATIBILITY.md, docs/VALIDATION.md, docs/INVARIANTS.md.
