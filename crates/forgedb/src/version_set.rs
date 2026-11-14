@@ -237,20 +237,48 @@ impl VersionSet {
     ) -> Result<Option<SequenceNumber>> {
         let mut newest: Option<SequenceNumber> = None;
         let threshold = after.map(SequenceNumber::get).unwrap_or(0);
-        for level in &self.levels {
-            for table in level {
-                if !table.metadata.may_contain_user_key(user_key)
-                    || table.metadata.largest_sequence.get() <= threshold
-                {
-                    continue;
-                }
-                if let Some(sequence) =
-                    table
-                        .reader
-                        .latest_sequence_after_cached(user_key, after, &self.block_cache)?
-                {
-                    newest = Some(newest.map_or(sequence, |current| current.max(sequence)));
-                }
+        let level_zero = self.levels.first().ok_or(Error::InternalInvariant {
+            invariant: "I-VERSIONSET-L0-PRESENT",
+            reason: "VersionSet не содержит L0".to_owned(),
+        })?;
+        // L0 ranges могут перекрываться: все релевантные таблицы проверяются.
+        // Больше не читаем SST, чей largest_sequence заведомо старше уже
+        // найденной версии ключа либо исходного threshold.
+        for table in level_zero.iter().rev() {
+            let cutoff = newest.map_or(threshold, |sequence| threshold.max(sequence.get()));
+            if !table.metadata.may_contain_user_key(user_key)
+                || table.metadata.largest_sequence.get() <= cutoff
+            {
+                continue;
+            }
+            if let Some(sequence) =
+                table
+                    .reader
+                    .latest_sequence_after_cached(user_key, after, &self.block_cache)?
+            {
+                newest = Some(newest.map_or(sequence, |current| current.max(sequence)));
+            }
+        }
+        // L1+ имеют непересекающиеся диапазоны (VersionSet::validate).
+        // partition_point вместо полного прохода по каждому SST файла уровня.
+        for level in self.levels.iter().skip(1) {
+            let index = level
+                .partition_point(|table| table.metadata.largest_user_key.as_slice() < user_key);
+            let Some(table) = level.get(index) else {
+                continue;
+            };
+            let cutoff = newest.map_or(threshold, |sequence| threshold.max(sequence.get()));
+            if !table.metadata.may_contain_user_key(user_key)
+                || table.metadata.largest_sequence.get() <= cutoff
+            {
+                continue;
+            }
+            if let Some(sequence) =
+                table
+                    .reader
+                    .latest_sequence_after_cached(user_key, after, &self.block_cache)?
+            {
+                newest = Some(newest.map_or(sequence, |current| current.max(sequence)));
             }
         }
         Ok(newest)
@@ -280,6 +308,18 @@ impl VersionSet {
         // На Windows remove_file должен идти только ПОСЛЕ закрытия pooled FD.
         self.handle_pool.evict_table(file_number)?;
         self.block_cache.evict_table(file_number)
+    }
+
+    /// Zero-allocation обход SST для публичного streaming scan.
+    /// Не клонирует Arc<TableReader> всех файлов при построении итератора:
+    /// сам DbIterator держит VersionSet lease и создаёт cursor только для
+    /// реально перекрывающих запрошенный range SST.
+    pub(crate) fn files_for_scan(&self) -> impl Iterator<Item = &TableHandle> {
+        self.levels
+            .first()
+            .into_iter()
+            .flat_map(|level| level.iter().rev())
+            .chain(self.levels.iter().skip(1).flat_map(|level| level.iter()))
     }
 
     pub(crate) fn files_in_read_order(&self) -> Result<Vec<TableHandle>> {

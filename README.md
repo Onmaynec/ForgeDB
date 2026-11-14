@@ -4,11 +4,11 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## Статус версий
 
-- текущий выпуск: **v0.8.2 — Streaming SST Handle Pool**, GitHub Pre-release;
-- предыдущая версия: **v0.8.1 — SST Handle Cache & Reliability**;
+- версия исходников: **v0.9.0 — Performance Engine** (feature branch, до релиза);
+- последний опубликованный выпуск: **v0.8.2 — Streaming SST Handle Pool**, GitHub Pre-release;
 - следующие задачи: **#31 — управление SST file handles, #35 — unified Column Families**.
 
-## Возможности v0.8.2
+## Возможности v0.9.0
 
 - WAL V1, atomic WriteBatch и durability modes;
 - SSTable V1 с checksums, blocks, index и Bloom filter;
@@ -144,6 +144,23 @@ println!("open {}/{}; evictions {}, reopens {}",
 
 Документы: [v0.8.2](docs/releases/V0.8.2.md), [ADR 0018](docs/adr/0018-streaming-sst-handle-leases.md).
 
+## Performance Engine v0.9.0
+
+Убраны три алгоритмических узких места без изменения persisted-форматов:
+
+- Native SST read handle LRU: при переполнении выбирает oldest File из ordered `BTreeSet` за O(log N) вместо полного O(N) просмотра всех открытых дескрипторов. При каждом hit индекс обновляется вместе с `BTreeMap` (тоже O(log N)).
+- `DbIterator`: больше не копирует value для простой проверки порядка source и для MVCC версий, заведомо невидимых на snapshot или скрытых новой версией.
+- `VersionSet::latest_sequence_after`: на непересекающихся L1+ выбирает файл бинарным поиском, а L0 newest-first пропускает SST с заведомо слишком старыми sequence numbers.
+- Streaming `scan` больше не создаёт временный список клонированных ссылок на все SST; обходит заимствованные handles и открывает cursor лишь для пересекающихся диапазонов.
+
+Новый воспроизводимый `performance_bench` показывает p50/p95/p99, ops/sec для холодных/прогретых GET, throughput SCAN и счётчики SST handles. В CI запускается короткий smoke. **Это алгоритмическое улучшение, не обещание гарантированного ускорения:** реальный эффект зависит от workload, размера кэша, конкуренции за mutex и среды.
+
+```bash
+cargo run --locked --release -p forgedb --example performance_bench -- 8192 32768
+```
+
+Подробно: [v0.9.0](docs/releases/V0.9.0.md), [ADR 0019](docs/adr/0019-performance-engine.md), [методика benchmark](docs/PERFORMANCE_BENCHMARK.md).
+
 ## Cache and Performance
 
 `Options::block_cache_size` ограничивает суммарный учитываемый объём **декодированных SST data blocks**; `0` отключает кеширование. `Database::cache_stats()` показывает hits, misses, evictions, bypasses и текущую residency кэша. SST reader использует Bloom filter и индекс, не материализуя всю таблицу при каждом point read или проверке конфликта транзакции.
@@ -270,7 +287,7 @@ cargo build --locked --workspace --release
 
 Основная CI matrix: Ubuntu stable, Windows stable и Rust 1.89.
 
-## Ограничения v0.8.2
+## Ограничения v0.9.0
 
 - isolation — snapshot isolation, не serializable;
 - обязательна write-write conflict detection, но full read-write validation пока отсутствует;
@@ -289,6 +306,9 @@ cargo build --locked --workspace --release
 
 ## Документация
 
+- [`docs/releases/V0.9.0.md`](docs/releases/V0.9.0.md);
+- [`docs/adr/0019-performance-engine.md`](docs/adr/0019-performance-engine.md);
+- [`docs/PERFORMANCE_BENCHMARK.md`](docs/PERFORMANCE_BENCHMARK.md);
 - [`docs/releases/V0.8.2.md`](docs/releases/V0.8.2.md);
 - [`docs/adr/0018-streaming-sst-handle-leases.md`](docs/adr/0018-streaming-sst-handle-leases.md);
 - [`docs/releases/V0.8.1.md`](docs/releases/V0.8.1.md);

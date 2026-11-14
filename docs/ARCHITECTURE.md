@@ -1,4 +1,4 @@
-# Архитектура ForgeDB v0.8.2
+# Архитектура ForgeDB v0.9.0
 
 ## Назначение
 
@@ -39,6 +39,18 @@ Reference-aware deletion использует `Weak<TableReader>` для ста�
 Compaction inputs теперь выполняют `read_entries_pooled` на основе cursor, а не `fs::read` всего SST: физические handles читают блоки через общий pool. Однако compaction merge по-прежнему материализует записи; `max_compaction_bytes` контролирует объём. Read-only deep verify и output SST builder живут отдельно.
 
 **Ресурсный контракт:** `table_cache_capacity` ограничивает resident File внутри одного SST read pool, но не кратковременные validation opens, SST writers, WAL/MANIFEST/LOCK или отдельные named child bases. См. [ADR 0018](adr/0018-streaming-sst-handle-leases.md). Issue #31 остаётся открытой.
+
+## Performance Engine v0.9.0
+
+Пул native SST File handles теперь содержит два согласованных индекса: `BTreeMap<file_number, CachedHandle>` и `BTreeSet<(access, file_number)>`. `with_file` обновляет обе структуры под общим mutex; eviction берёт `lru.iter().next()` вместо линейного обхода. Стоимость выбора victim O(log N), hit требует обновления индексного ключа O(log N). TTL отсутствует, физические readers всё ещё закрываются до Windows remove_file.
+
+В merge iterator `advance_source` проверяет строго возрастающий `InternalKey` без клонирования value. `consume_item` клонирует `TableEntry` только если запись первая видимая MVCC-версия данного user key; остальные записи валидируются и продвигаются без копирования value. Semantics tombstones и snapshot сохранены.
+
+Transaction conflict detection `VersionSet::latest_sequence_after` использует L0 newest-first с sequence pruning; на непересекающихся L1+ выполняет `partition_point` по `largest_user_key`, выбирая один кандидат. Предварительно `VersionSet::validate` подтверждает disjoint ranges L1+, поэтому переход корректен.
+
+При streaming scan `VersionSet::files_for_scan()` выдаёт borrowed iterator, а не `files_in_read_order()` с клонированным `Vec<TableHandle>`. Фильтрация SST range выполняется перед созданием `SstEntryCursor`; `DbIterator` удерживает VersionSet lease как и прежде. Это снижает transient allocations, не превращая O(N) проверку диапазона в binary seek.
+
+Контракты/границы: [ADR 0019](adr/0019-performance-engine.md), [performance benchmark](PERFORMANCE_BENCHMARK.md). Нет изменений persisted WAL/SST/MANIFEST/CF_REGISTRY или глобальной FD-квоты.
 
 ## Состав workspace
 

@@ -4,6 +4,23 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
+## [0.9.0] — 2026-11-14
+
+### Performance Engine
+
+- SST read handle LRU дополнен `BTreeSet<(last_access, file_number)>`; выбор File для eviction O(log N) вместо O(N) прохода по resident map. Hit/miss/retirement синхронно обновляют оба индекса. Сам hit получает дополнительные O(log N) действия по LRU и O(N) дополнительную память индекса.
+- `DbIterator::advance_source` копирует только `InternalKey`, а не `TableEntry` с value. `consume_item` не клонирует value у старых/невидимых MVCC версий, сохраняя проверку source ordering, snapshot visibility и tombstone.
+- `VersionSet::latest_sequence_after` выполняет newest-first L0 с sequence cutoff, binary search L1+ по дискретным key ranges вместо линейного перебора файлов каждого уровня.
+- Публичный streaming `scan` использует `VersionSet::files_for_scan()` с borrowed handles вместо O(N) выделения `Vec<TableHandle>` и клонирования ссылок на все SST. Пересечения range проверяются до открытия cursor; сам overlap-check пока O(N).
+- Добавлен `examples/performance_bench.rs` для cold/warm GET, streaming SCAN, p50/p95/p99, ops/sec и SST FD metrics, новый benchmark smoke включён в Ubuntu/Windows CI, а расширенный Linux workload с 8192 ключами и capacity=8 проверяет, что реальное eviction произошло.
+- Регрессии: LRU 2/3 SST с точными counters, leveled compaction+transaction conflicts, 128-KiB values и исторические snapshot версии.
+
+### Ограничения и совместимость
+
+- Big-O улучшения **не равны** доказанному ускорению для всех workloads. Ordered LRU добавляет O(N) памяти и O(log N) операции на hit; общий mutex не убран.
+- Persisted WAL/SSTable/MANIFEST/CF_REGISTRY и MVCC контракт не менялись. Общая FD квота процесса (#31) и атомарные mixed-family transactions (#35) пока отсутствуют.
+- CI benchmark smoke не заменяет воспроизводимые A/B прогоны; методика описана в `docs/PERFORMANCE_BENCHMARK.md`.
+
 ## [0.8.2] — 2026-11-14
 
 ### Streaming SST Handle Pool

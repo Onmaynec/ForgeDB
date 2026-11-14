@@ -259,10 +259,12 @@ impl DbIterator {
                 invariant: "I-MERGE-SOURCE-INDEX",
                 reason: "source index выходит за границы".to_owned(),
             })?;
-        let current = source
+        // Проверка порядка требует только internal key. Раньше здесь
+        // клонировали TableEntry целиком, включая потенциально огромный value.
+        let current_key = source
             .cursor
             .current()
-            .cloned()
+            .map(|entry| entry.internal_key.clone())
             .ok_or(Error::InternalInvariant {
                 invariant: "I-MERGE-SOURCE-POSITION",
                 reason: "advance вызван для завершённого source".to_owned(),
@@ -270,23 +272,24 @@ impl DbIterator {
         if source
             .previous
             .as_ref()
-            .is_some_and(|previous| previous >= &current.internal_key)
+            .is_some_and(|previous| previous >= &current_key)
         {
             return Err(Error::corruption(
                 "merge iterator source",
                 "source internal keys не строго возрастают",
             ));
         }
-        source.previous = Some(current.internal_key);
+        source.previous = Some(current_key);
         source.cursor.advance()
     }
 
-    fn consume_item(&mut self, item: HeapItem) -> Result<TableEntry> {
+    fn consume_item(&mut self, item: HeapItem, retain_value: bool) -> Result<Option<TableEntry>> {
+        // В невидимых MVCC версиях и уже скрытых записях не копируем value:
+        // валидируем heap key через ссылку и сразу двигаем cursor дальше.
         let entry = self
             .sources
             .get(item.source_index)
             .and_then(|source| source.cursor.current())
-            .cloned()
             .ok_or(Error::InternalInvariant {
                 invariant: "I-MERGE-SOURCE-POSITION",
                 reason: "heap ссылается на завершённый source".to_owned(),
@@ -297,9 +300,10 @@ impl DbIterator {
                 reason: "heap key не совпадает с source cursor".to_owned(),
             });
         }
+        let visible_entry = retain_value.then(|| entry.clone());
         self.advance_source(item.source_index)?;
         self.queue_current(item.source_index)?;
-        Ok(entry)
+        Ok(visible_entry)
     }
 }
 
@@ -316,9 +320,10 @@ impl Iterator for DbIterator {
             let first = self.heap.pop()?;
             let user_key = first.key.user_key().to_vec();
             let mut visible: Option<TableEntry> = None;
-            match self.consume_item(first) {
-                Ok(entry) if entry.internal_key.sequence() <= snapshot => visible = Some(entry),
-                Ok(_) => {}
+            let first_visible = first.key.sequence() <= snapshot;
+            match self.consume_item(first, first_visible) {
+                Ok(Some(entry)) => visible = Some(entry),
+                Ok(None) => {}
                 Err(error) => {
                     self.failed = true;
                     return Some(Err(error));
@@ -337,11 +342,10 @@ impl Iterator for DbIterator {
                         reason: "heap изменился между peek и pop".to_owned(),
                     }));
                 };
-                match self.consume_item(item) {
-                    Ok(entry) if visible.is_none() && entry.internal_key.sequence() <= snapshot => {
-                        visible = Some(entry);
-                    }
-                    Ok(_) => {}
+                let retain_value = visible.is_none() && item.key.sequence() <= snapshot;
+                match self.consume_item(item, retain_value) {
+                    Ok(Some(entry)) => visible = Some(entry),
+                    Ok(None) => {}
                     Err(error) => {
                         self.failed = true;
                         return Some(Err(error));

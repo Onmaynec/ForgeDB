@@ -8,7 +8,7 @@
 
 Минимальная поддерживаемая версия: Rust 1.89. CI также проверяет текущий stable на Ubuntu и Windows.
 
-## Persisted-форматы v0.8.2
+## Persisted-форматы v0.9.0
 
 | Компонент | Writer | Reader | Неизвестная будущая версия |
 |---|---|---|---|
@@ -20,6 +20,8 @@
 | `CURRENT V1` | V1 | V1 | Отклоняется |
 
 Reader не пытается интерпретировать future version как текущий layout.
+
+Оптимизации v0.9.0 затрагивают только runtime: два согласованных LRU индекса, объём копируемых данных при MVCC iterator merge и стратегию поиска SST кандидата для optimistic transaction validation. WAL V1, SSTable V1, MANIFEST V2, CURRENT/IDENTITY V1 и CF_REGISTRY V1 не меняются; существующие базы открываются без миграции. См. [ADR 0019](adr/0019-performance-engine.md).
 
 Streaming pool v0.8.2 не изменяет physical SST header/footer/index/filter/properties или CRC codec: только способ чтения очередного data block через переоткрываемый FD. Обратная совместимость WAL/SST/MANIFEST/CF_REGISTRY сохраняется, миграции не нужны. Детали: [ADR 0018](adr/0018-streaming-sst-handle-leases.md).
 
