@@ -31,9 +31,10 @@ pub struct Options {
     pub bloom_bits_per_key: u16,
     /// Максимальный объём resident block cache в байтах.
     pub block_cache_size: usize,
-    /// Максимальное число одновременно resident native SST handles для point lookup
-    /// внутри одной Database. Не охватывает WAL/MANIFEST, streaming cursor,
-    /// compaction input/output или другие именованные Column Families.
+    /// Максимум resident SST handles в общем LRU GET, streaming scan и
+    /// compaction input одного Database. Не глобальная FD квота процесса:
+    /// начальная metadata validation, SST writes, WAL/MANIFEST/LOCK и другие
+    /// именованные Column Families в budget не входят.
     pub table_cache_capacity: usize,
     /// Число уровней LSM.
     pub level_count: usize,
