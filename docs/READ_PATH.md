@@ -34,7 +34,7 @@ Range scan не загружает все SSTables целиком, но memtable
 
 В v0.6.0 обычный point read проверяет Bloom filter и SSTable index, затем декодирует только data blocks, которые могут содержать искомый user key. Поиск продолжается между блоками, если версии ключа занимают несколько физических blocks. Непересекающиеся L1+ ranges выбираются бинарным поиском.
 
-Декодированный block может сохраняться в bounded LRU-кэше; предел задаёт `block_cache_size` (0 отключает кэш). `cache_stats()` возвращает hits/misses/evictions, bypasses и учтённые resident bytes. Eager физический `TableReader.bytes` пока существует отдельно от этого бюджета; range scan использует независимый streaming cursor и удерживает поколение VersionSet.
+Декодированный block может сохраняться в bounded LRU-кэше; предел задаёт `block_cache_size` (0 отключает кэш). `cache_stats()` возвращает hits/misses/evictions, bypasses и учтённые resident bytes. С v0.6.2 физический `TableReader` удерживает random-access handle, но не буферизует весь SSTable: header/footer/index/filter/properties проверяются при открытии, данные — по запросу с CRC32C. Range scan использует отдельный streaming cursor и удерживает поколение VersionSet. Счётчик cached bytes не ограничивает память index/filter, временные buffers или число открытых файлов.
 
 Подробно: [CACHE_AND_PERFORMANCE.md](CACHE_AND_PERFORMANCE.md).
 
