@@ -198,6 +198,9 @@ impl TableHandlePool {
         if state.opened.remove(&file_number).is_some() {
             state.evictions = state.evictions.saturating_add(1);
         }
+        // ID retired и больше никогда не будет повторно использоваться:
+        // не накапливаем бесконечный seen set при частых compactions.
+        state.seen.remove(&file_number);
         Ok(())
     }
 }
