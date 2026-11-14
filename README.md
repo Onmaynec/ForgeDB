@@ -4,8 +4,8 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## Статус версий
 
-- версия исходников: **v1.0.0 — Stable General Availability**, до завершения release gate;
-- последний опубликованный выпуск: **v0.9.0 — Performance Engine**, GitHub Pre-release;
+- текущий стабильный выпуск: **v1.0.0 — Stable General Availability**, GitHub Release;
+- предыдущая версия: **v0.9.0 — Performance Engine**, GitHub Pre-release;
 - оставшиеся задачи: **#31 — глобальные FD limits, #35 — mixed-family transactions, #27 — crates.io package name**.
 
 ## Возможности v1.0.0
