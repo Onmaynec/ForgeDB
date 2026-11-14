@@ -109,6 +109,7 @@ impl TableHandlePool {
     ) -> Result<T> {
         let mut state = self.lock()?;
         let number = metadata.file_number;
+        let was_open = state.opened.contains_key(&number);
         if let Some(existing) = state.opened.get(&number) {
             if existing.path != path {
                 return Err(Error::InternalInvariant {
@@ -175,9 +176,7 @@ impl TableHandlePool {
 
         // Счётчик hit учитывает только повторное использование уже открытого FD.
         // A successful first open is miss, not hit.
-        if let Some(entry) = state.opened.get(&number)
-            && entry.access != state.clock
-        {
+        if was_open {
             state.hits = state.hits.saturating_add(1);
         }
         let access = state.tick();
