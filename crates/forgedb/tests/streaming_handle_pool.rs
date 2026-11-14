@@ -68,7 +68,10 @@ fn scan_many_sst_with_capacity_one_and_reopen_preserves_order_and_bytes() -> Res
     assert_eq!(observed.len(), 480);
     assert!(observed.windows(2).all(|pair| pair[0] < pair[1]));
     let stats = database.table_handle_stats()?;
-    assert!(stats.misses > 0, "later data blocks must use pooled handles");
+    assert!(
+        stats.misses > 0,
+        "later data blocks must use pooled handles"
+    );
     assert!(stats.evictions > 0);
     assert!(stats.reopens > 0);
     assert_eq!(stats.open_handles, 1);
@@ -78,7 +81,13 @@ fn scan_many_sst_with_capacity_one_and_reopen_preserves_order_and_bytes() -> Res
     drop(database);
     let reopened = Database::open(&directory, options())?;
     assert_eq!(reopened.table_handle_stats()?.open_handles, 0);
-    assert_eq!(reopened.scan(.., ReadOptions::default())?.collect::<Result<Vec<_>>>()?.len(), 480);
+    assert_eq!(
+        reopened
+            .scan(.., ReadOptions::default())?
+            .collect::<Result<Vec<_>>>()?
+            .len(),
+        480
+    );
     reopened.close()?;
     drop(reopened);
     fs::remove_dir_all(&directory)
@@ -147,7 +156,10 @@ fn compaction_inputs_use_bounded_pool_and_cleanup_preserves_old_scan() -> Result
     let before = database.table_handle_stats()?;
     database.compact_range(None, None)?;
     let after = database.table_handle_stats()?;
-    assert!(after.misses > before.misses, "compaction must consume pooled input blocks");
+    assert!(
+        after.misses > before.misses,
+        "compaction must consume pooled input blocks"
+    );
     assert!(after.open_handles <= 1);
 
     let first_cleanup = database.cleanup_obsolete_sstables()?;
