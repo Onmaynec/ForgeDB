@@ -229,11 +229,55 @@ fn run_fql_shell(mut arguments: impl Iterator<Item = String>) -> Result<()> {
     result.and(closing)
 }
 
-fn execute_fql_script(reader: impl BufRead, session: &mut fql::Session) -> Result<()> {
+/// Читает не более 64 KiB на строку, дочитывая oversized statement до newline.
+/// Содержимое oversized строки не сохраняется и не выполняется даже в REPL.
+fn read_bounded_fql_line(reader: &mut impl BufRead, line: &mut String) -> Result<usize> {
+    line.clear();
+    let mut bytes = Vec::new();
+    let mut total = 0_usize;
+    let mut oversized = false;
+    loop {
+        let chunk = reader
+            .fill_buf()
+            .map_err(|source| Error::io("read_fql_input", None, source))?;
+        if chunk.is_empty() {
+            break;
+        }
+        let newline = chunk.iter().position(|byte| *byte == b'\n');
+        let length = newline.map_or(chunk.len(), |index| index + 1);
+        total = total.saturating_add(length);
+        if !oversized && bytes.len().saturating_add(length) <= fql::MAX_STATEMENT_BYTES {
+            bytes.extend_from_slice(&chunk[..length]);
+        } else {
+            oversized = true;
+        }
+        reader.consume(length);
+        if newline.is_some() {
+            break;
+        }
+    }
+    if oversized {
+        return Err(Error::ResourceLimit {
+            resource: "fql_statement_bytes",
+            limit: u64::try_from(fql::MAX_STATEMENT_BYTES).unwrap_or(u64::MAX),
+            observed: u64::try_from(total).unwrap_or(u64::MAX),
+        });
+    }
+    *line = String::from_utf8(bytes)
+        .map_err(|_| Error::invalid_argument("fql", "входная строка не UTF-8"))?;
+    Ok(total)
+}
+
+fn execute_fql_script(mut reader: impl BufRead, session: &mut fql::Session) -> Result<()> {
     let mut stdout = io::stdout().lock();
-    for (index, next) in reader.lines().enumerate() {
-        let line = next.map_err(|source| Error::io("read_fql_script", None, source))?;
+    let mut index = 0_usize;
+    loop {
+        index = index.saturating_add(1);
+        let mut line = String::new();
         let result = (|| {
+            if read_bounded_fql_line(&mut reader, &mut line)? == 0 {
+                return Ok(fql::Flow::Exit);
+            }
             if let Some(statement) = fql::parse(&line)? {
                 session.execute(statement, &mut stdout)
             } else {
@@ -244,12 +288,11 @@ fn execute_fql_script(reader: impl BufRead, session: &mut fql::Session) -> Resul
             Ok(fql::Flow::Continue) => {}
             Ok(fql::Flow::Exit) => return Ok(()),
             Err(error) => {
-                eprintln!("FQL: строка {}: {error}", index + 1);
+                eprintln!("FQL: строка {index}: {error}");
                 return Err(error);
             }
         }
     }
-    Ok(())
 }
 
 fn execute_fql_repl(session: &mut fql::Session) -> Result<()> {
@@ -267,13 +310,12 @@ fn execute_fql_repl(session: &mut fql::Session) -> Result<()> {
                 .map_err(|source| Error::io("write_fql_prompt", None, source))?;
         }
         let mut line = String::new();
-        let read = input
-            .read_line(&mut line)
-            .map_err(|source| Error::io("read_fql_stdin", None, source))?;
-        if read == 0 {
+        let read = read_bounded_fql_line(&mut input, &mut line);
+        if matches!(read, Ok(0)) {
             return Ok(());
         }
         let result = (|| {
+            read?;
             if let Some(statement) = fql::parse(&line)? {
                 session.execute(statement, &mut stdout)
             } else {
