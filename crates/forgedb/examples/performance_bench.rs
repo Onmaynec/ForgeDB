@@ -32,7 +32,7 @@ fn main() -> Result<()> {
     let options = Options {
         data_block_size: 1024,
         block_cache_size: 0, // измеряем физический SST path, не hits decoded-block cache
-        table_cache_capacity: 64,
+        table_cache_capacity: 8,
         l0_compaction_trigger: 128,
         l0_slowdown_trigger: 129,
         l0_stop_trigger: 130,
@@ -72,7 +72,7 @@ fn main() -> Result<()> {
     }
     let handles = database.table_handle_stats()?;
     println!(
-        "configuration: keys={keys} reads_pass={reads} value_bytes=256 block_cache_bytes=0 table_cache_capacity=64"
+        "configuration: keys={keys} reads_pass={reads} value_bytes=256 block_cache_bytes=0 table_cache_capacity=8"
     );
     println!(
         "setup: elapsed_ms={:.3}",
