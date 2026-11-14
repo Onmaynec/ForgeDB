@@ -36,7 +36,7 @@ println!("hits={}, misses={}, evictions={}", stats.hits, stats.misses, stats.evi
 
 `CacheStats` также содержит `bypasses`, `resident_blocks`, `resident_bytes`, `capacity_bytes`. Счётчики относятся только к данному открытому экземпляру. Они не являются метриками disk reads, throughput или общего RSS.
 
-**Текущая граница учёта памяти:** `TableReader::open` по-прежнему заранее загружает физические SSTable bytes и метаданные reader в память. `block_cache_size` НЕ ограничивает этот исходный буфер и не является лимитом всего использования RAM. Накладные расходы коллекций и временных concurrent reads тоже не входят в `resident_bytes`. `Options::table_cache_capacity` остаётся зарезервированной опцией; полноценный lazy file reader/table cache пока не реализован.
+**Граница v0.6.2:** `TableReader::open` НЕ загружает физические bytes SSTable целиком. При открытии выполняются bounded random-access чтения header, footer, index, Bloom filter и properties; data blocks читаются по требованию и снова проверяются CRC32C. Память index/filter, временные блоки, concurrent reads, memtables и range iterators не входят в `CacheStats::resident_bytes`. `block_cache_size` по-прежнему ограничивает только декодированный кэш — **не общий RSS**. Каждый живой `TableReader` удерживает file handle; `table_cache_capacity` пока зарезервирован и не ограничивает число открытых SST handles. Этот релиз не предоставляет полноценный total-RSS/FD budget.
 
 ## Range scan
 
@@ -69,7 +69,7 @@ cargo run --locked --release -p forgedb --example point_lookup_bench -- 8192 500
 
 Аргументы: число ключей и число point reads за проход. Временная база создаётся с согласованным набором ключей. Программа выполняет подготовку, cold и warm проходы, проверяет наличие каждого прочитанного ключа и выводит длительности и cache counters.
 
-Сравнение проводят на одинаковом железе, Rust toolchain, объёме данных, cache budget и наборе запросов. Числа из одного запуска не являются гарантированным ускорением, а кэш ОС может влиять на cold/warm сравнение. Необходимые профили: cache disabled, small cache с eviction, warm-cache, read-after-flush, transaction conflict after SST flush. CI выполняет короткий smoke-run без числового порога производительности.
+Сравнение проводят на одинаковом железе, Rust toolchain, объёме данных, cache budget и наборе запросов. Числа из одного запуска не являются гарантированным ускорением, а кэш ОС может влиять на cold/warm сравнение. Необходимые профили: cache disabled, small cache с eviction, warm-cache, read-after-flush, transaction conflict after SST flush. С v0.6.2 benchmark также выводит read throughput (ops/s) и p50/p95/p99 в наносекундах для каждого прохода. Измеряется время вызовов `get`, а не чистая задержка диска; на результаты влияют scheduler, OS page cache, allocator и размер выборки. CI выполняет короткий smoke-run без числового порога производительности.
 
 ## Протоколы и диагностика
 
