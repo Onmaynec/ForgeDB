@@ -58,6 +58,9 @@ fn isolated_families_persist_same_keys_through_flush_and_reopen() -> Result<()> 
         Some(b"batch-value".to_vec())
     );
     families.close()?;
+    families.close()?;
+    assert!(matches!(families.list(), Err(Error::Closed)));
+    assert!(matches!(families.create("late"), Err(Error::Closed)));
     drop(families);
 
     let reopened = ColumnFamilies::open(&root, Options::default())?;
