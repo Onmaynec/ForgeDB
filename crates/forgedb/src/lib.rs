@@ -1,7 +1,7 @@
-//! Публичный API ForgeDB v0.6.1.
+//! Публичный API ForgeDB v0.6.2.
 //!
 //! WAL/LSM storage core с snapshot isolation, индексными SST reads, bounded
-//! decoded-block cache, безопасной очисткой retired SST и повторяемым close.
+//! decoded-block cache, lazy SST readers, безопасной очисткой retired SST и повторяемым close.
 //! Persisted WAL/SSTable/MANIFEST форматы в v0.6.1 не меняются.
 
 mod database_v3_fixed {
