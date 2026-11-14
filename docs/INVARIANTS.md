@@ -74,6 +74,9 @@
 | I-063 | Один FQL statement полностью проверен парсером до любого изменения данных, недопустимый хвост не исполняется. | обеспечен v0.8.0 | `fql_one_shot_checks_syntax_before_creating_database`, FQL parser unit tests |
 | I-064 | EOF/EXIT/ошибка script не фиксирует открытый BEGIN, в REPL ошибка не применяет некорректную команду. | обеспечен v0.8.0 | `failed_script_rolls_back_open_transaction_and_stops_before_commit`, `repl_continues_after_invalid_statement_but_does_not_apply_it` |
 | I-065 | FQL transaction и SCAN ограничены одной Column Family; read-only CLI не создаёт/изменяет persistent state. | обеспечен v0.8.0 | `changing_families_during_transaction_is_rejected_and_not_applied`, `scan_limit_is_respected_and_read_only_refuses_mutations` |
+| I-066 | В point-read native SST pool одновременно resident не более table_cache_capacity файлов; при eviction повторное чтение проверяет SST identity и checksum. | draft v0.8.1 | `point_read_budget_one_evicts_and_reopens_without_losing_values`, `native_handle_cache_reopens_with_bounded_fd_and_rechecks_header` |
+| I-067 | Наличие pooled OS FD не разрешает premature SST deletion; при Windows cleanup дескриптор закрывается до удаления после освобождения всех TableReader references. | draft v0.8.1 | `pinned_scan_survives_compaction_and_retirement_evicts_windows_handles` |
+| I-068 | Snapshot-aware point reads и transaction conflict detection сохраняются после LRU evictions и reopen. | draft v0.8.1 | `transaction_conflicts_and_snapshot_reads_survive_fd_eviction` |
 
 ## Правило изменения
 

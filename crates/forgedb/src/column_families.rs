@@ -15,7 +15,7 @@ use forgedb_fs::{FileSystem, NativeFileSystem};
 
 use crate::{
     ColumnFamilyId, Database, DbIterator, Error, Options, ReadOptions, Result, Snapshot,
-    Transaction, WriteBatch, WriteOptions,
+    TableHandleStats, Transaction, WriteBatch, WriteOptions,
 };
 
 const REGISTRY_DIRECTORY: &str = ".forgedb-column-families";
@@ -259,6 +259,11 @@ impl ColumnFamilies {
     /// Flush только выбранной family.
     pub fn flush(&self, id: ColumnFamilyId) -> Result<()> {
         self.resolve(id)?.flush()
+    }
+
+    /// Метрики point-read SST handles конкретной family, не глобальная FD квота.
+    pub fn table_handle_stats(&self, id: ColumnFamilyId) -> Result<TableHandleStats> {
+        self.resolve(id)?.table_handle_stats()
     }
 
     /// Leveled compaction выбранной family.

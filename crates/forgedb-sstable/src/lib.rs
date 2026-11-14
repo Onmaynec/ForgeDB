@@ -4,8 +4,10 @@
 mod bloom;
 mod cache;
 mod checksum;
+mod handle_pool;
 
 pub use cache::{BlockCache, CacheStats};
+pub use handle_pool::{TableHandlePool, TableHandleStats};
 
 use std::cmp::Ordering;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -321,11 +323,13 @@ struct TableProperties {
     creation_unix_ms: u64,
 }
 
-/// Индексный SSTable reader: держит handle открытым, но не загружает весь SST в RAM.
+/// Индексный SSTable reader: физический handle может выселяться из LRU.
 #[derive(Clone)]
 pub struct TableReader {
     path: PathBuf,
-    reader: Arc<Mutex<Box<dyn RandomAccessReader>>>,
+    reader: Arc<Mutex<Option<Box<dyn RandomAccessReader>>>>,
+    pool: Option<Arc<TableHandlePool>>,
+    identity: DatabaseId,
     file_size: u64,
     meta: TableMeta,
     index: Vec<IndexEntry>,
@@ -459,13 +463,30 @@ impl TableReader {
 
         Ok(Self {
             path,
-            reader: Arc::new(Mutex::new(Box::new(reader))),
+            reader: Arc::new(Mutex::new(Some(Box::new(reader)))),
+            pool: None,
+            identity: expected_database_id,
             file_size: physical_size,
             meta: expected_meta.clone(),
             index,
             filter,
             limits: *limits,
         })
+    }
+
+    /// Переводит reader в native pooled режим после полной SST metadata validation.
+    /// Initial File закрывается; инициализация/снятие FD не меняет owner lifetime
+    /// TableReader, поэтому reference-aware cleanup не начинает удалять чужие SST.
+    pub fn with_native_pool(mut self, pool: Arc<TableHandlePool>) -> Result<Self> {
+        {
+            let mut reader = self.reader.lock().map_err(|_| Error::InternalInvariant {
+                invariant: "I-SST-READER-MUTEX",
+                reason: "mutex random-access SST reader poisoned".to_owned(),
+            })?;
+            *reader = None;
+        }
+        self.pool = Some(pool);
+        Ok(self)
     }
 
     /// Возвращает point lookup для default column family.
@@ -592,19 +613,35 @@ impl TableReader {
         })
     }
 
-    /// Возвращает только валидированный физический блок по указанному offset.
-    /// FD удерживается для Windows-safe retirement, а mutex сериализует seek/read.
+    /// Читает проверенный блок; pooled/native mode не держит FD на каждый SST.
+    /// Reference-aware cleanup зависит от lifetime TableReader, а не OS File.
     fn read_checked_block(&self, handle: BlockHandle, component: &'static str) -> Result<Vec<u8>> {
-        let mut reader = self.reader.lock().map_err(|_| Error::InternalInvariant {
-            invariant: "I-SST-READER-MUTEX",
-            reason: "mutex random-access SST reader poisoned".to_owned(),
-        })?;
         let footer_offset = self
             .file_size
             .checked_sub(u64::try_from(SST_FOOTER_SIZE).unwrap_or(u64::MAX))
             .ok_or_else(|| Error::corruption(component, "файл слишком мал"))?;
+        if let Some(pool) = &self.pool {
+            return pool.with_file(&self.path, self.identity, &self.meta, |file| {
+                read_checked_block_at(
+                    file,
+                    &self.path,
+                    handle,
+                    self.file_size,
+                    footer_offset,
+                    component,
+                )
+            });
+        }
+        let mut reader = self.reader.lock().map_err(|_| Error::InternalInvariant {
+            invariant: "I-SST-READER-MUTEX",
+            reason: "mutex random-access SST reader poisoned".to_owned(),
+        })?;
+        let file = reader.as_mut().ok_or(Error::InternalInvariant {
+            invariant: "I-SST-UNPOOLED-READER",
+            reason: "unpooled reader потерял исходный file handle".to_owned(),
+        })?;
         read_checked_block_at(
-            reader.as_mut(),
+            file.as_mut(),
             &self.path,
             handle,
             self.file_size,
@@ -2227,6 +2264,84 @@ mod tests {
             TableLookup::Value(b"one".to_vec())
         );
         drop(reader);
+        fs::remove_dir_all(&directory)
+            .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
+        Ok(())
+    }
+
+    #[test]
+    fn native_handle_cache_reopens_with_bounded_fd_and_rechecks_header() -> Result<()> {
+        let directory = temporary_directory("handle-cache-corruption")?;
+        let limits = Limits::default();
+        let identity = DatabaseId::random();
+        let pool = Arc::new(TableHandlePool::new(1));
+        let mut metadata = Vec::new();
+        for number in [101_u64, 102_u64] {
+            metadata.push(build_table(
+                &NativeFileSystem,
+                TableBuildRequest::new(
+                    &directory,
+                    &directory.join("TEMP"),
+                    identity,
+                    number,
+                    &entries(&limits)?,
+                    &limits,
+                    TableBuildOptions {
+                        data_block_size: 1024,
+                        restart_interval: 2,
+                        bloom_bits_per_key: 10,
+                    },
+                ),
+            )?);
+        }
+        let first = TableReader::open(
+            &NativeFileSystem,
+            &directory,
+            identity,
+            &metadata[0],
+            &limits,
+            16 * 1024 * 1024,
+        )?
+        .with_native_pool(Arc::clone(&pool))?;
+        let second = TableReader::open(
+            &NativeFileSystem,
+            &directory,
+            identity,
+            &metadata[1],
+            &limits,
+            16 * 1024 * 1024,
+        )?
+        .with_native_pool(Arc::clone(&pool))?;
+
+        assert_eq!(pool.stats()?.open_handles, 0);
+        assert_eq!(first.get(b"alpha")?, TableLookup::Value(b"one".to_vec()));
+        assert_eq!(second.get(b"alpha")?, TableLookup::Value(b"one".to_vec()));
+        assert_eq!(first.get(b"alpha")?, TableLookup::Value(b"one".to_vec()));
+        let stats = pool.stats()?;
+        assert_eq!(stats.capacity, 1);
+        assert_eq!(stats.open_handles, 1);
+        assert!(stats.evictions >= 2);
+        assert!(stats.reopens >= 1);
+
+        // После eviction файл физически заменён тем же размером.
+        // Header checksum/file identity должна обнаружить подмену при reopen.
+        let file = directory.join(sst_file_name(metadata[0].file_number));
+        let original = fs::read(&file)
+            .map_err(|source| Error::io("read_test_sst", Some(file.clone()), source))?;
+        assert_eq!(second.get(b"alpha")?, TableLookup::Value(b"one".to_vec()));
+        let mut broken = original.clone();
+        broken[0] ^= 0xff;
+        fs::write(&file, &broken)
+            .map_err(|source| Error::io("corrupt_test_sst", Some(file.clone()), source))?;
+        assert!(matches!(first.get(b"alpha"), Err(Error::Corruption { .. })));
+        assert!(pool.stats()?.open_handles <= 1);
+
+        fs::write(&file, original)
+            .map_err(|source| Error::io("restore_test_sst", Some(file), source))?;
+        assert_eq!(first.get(b"alpha")?, TableLookup::Value(b"one".to_vec()));
+        drop(first);
+        drop(second);
+        drop(pool);
         fs::remove_dir_all(&directory)
             .map_err(|source| Error::io("remove_test_directory", Some(directory), source))?;
         Ok(())

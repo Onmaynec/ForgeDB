@@ -1,4 +1,4 @@
-# Контракт проверки ForgeDB v0.8.0
+# Контракт проверки ForgeDB v0.8.1
 
 Каждое изменение core, persisted-форматов или recovery обязано проходить GitHub Actions на Linux, Windows и минимально поддерживаемой версии Rust 1.89. Успешный compile не заменяет unit, model, integration и crash tests.
 
@@ -46,6 +46,16 @@ cargo +1.89 test --locked --workspace --all-features
 - `--read-only` запрещает write/DDL и не создаёт базу.
 - SCAN streaming limit/bounds; запрет SCAN и USE/CREATE/DROP при active transaction.
 - CI Ubuntu/Windows stable и Rust 1.89, strict Clippy -D warnings, форматирование, workspace tests, doctests и release build.
+
+## Проверки SST handle-cache v0.8.1
+
+- Capacity 1: два SST, отдельные point GET, LRU evict и reopen первого; open_handles не превышает 1.
+- Переоткрытие DB после flush/recovery сохраняет значения, новый pool начинает с 0 resident FDs.
+- Unit: header повреждён после eviction, последующий reopen отклоняет corruption; после восстановления того же SST чтение повторно работает.
+- Старый streaming iterator удерживает `VersionSet`/TableReader при compaction; cleanup откладывает физическое удаление до release reference и на Windows закрывает pooled handle перед remove_file.
+- MVCC snapshot и write-write optimistic transaction conflict не меняются после FD eviction.
+- Возможное понижение throughput при mutex contention не скрывается, бенчмарк smoke не является сравнительным proof ускорения.
+- Отдельные scan cursor, WAL, compaction, named CF FDs не объявляются частью process-wide бюджетирования; Issue #31 остаётся открытой.
 
 ## Обязательные направления тестирования
 

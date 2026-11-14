@@ -1,4 +1,4 @@
-//! Публичный API ForgeDB v0.8.0.
+//! Публичный API ForgeDB v0.8.1.
 //!
 //! WAL/LSM storage core с snapshot isolation, индексными SST reads, bounded
 //! decoded-block cache, lazy SST readers, безопасной очисткой retired SST и повторяемым close.
@@ -34,7 +34,7 @@ pub use forgedb_core::{
     BatchOperation, ColumnFamilyId, DatabaseId, Error, InternalKey, InternalKeyCodec,
     InternalKeyComparator, Limits, Result, SequenceNumber, ValueType, WriteBatch,
 };
-pub use forgedb_sstable::CacheStats;
+pub use forgedb_sstable::{CacheStats, TableHandleStats};
 pub use inventory::FileInventory;
 pub use iterator::DbIterator;
 pub use obsolete::CleanupReport;

@@ -55,7 +55,7 @@ impl RecoveryPlan {
             &limits,
             options.level_count,
             options.max_compaction_bytes,
-            0, // recovery inspection не читает point blocks и не заполняет cache
+            (0, options.table_cache_capacity), // recovery inspection не заполняет block cache
         )?;
         let live_numbers = version
             .files_in_read_order()?
