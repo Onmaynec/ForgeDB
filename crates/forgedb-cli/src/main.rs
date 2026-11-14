@@ -1,5 +1,8 @@
-use std::io::Write;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::path::PathBuf;
+
+mod fql;
 
 use forgedb::{
     ColumnFamilies, ColumnFamilyId, Database, Error, FileInventory, Options, ReadOptions,
@@ -54,6 +57,8 @@ fn run() -> Result<()> {
         }
         "transaction" | "tx" => run_transaction_command(arguments),
         "cf" => run_column_family_command(arguments),
+        "fql" => run_fql_once(arguments),
+        "shell" => run_fql_shell(arguments),
         "scan" => {
             let path = required(&mut arguments, "path")?;
             let start = arguments.next().map(String::into_bytes);
@@ -152,6 +157,184 @@ fn run() -> Result<()> {
             Ok(())
         }
         _ => Err(Error::invalid_argument("command", usage())),
+    }
+}
+
+fn run_fql_once(mut arguments: impl Iterator<Item = String>) -> Result<()> {
+    let path = required(&mut arguments, "path")?;
+    let statement_text = required(&mut arguments, "statement")?;
+    let readonly = match arguments.next().as_deref() {
+        None => false,
+        Some("--read-only") => true,
+        Some(_) => return Err(Error::invalid_argument("fql_option", usage())),
+    };
+    ensure_no_extra(arguments)?;
+    // Parse the entire statement before opening/creating the database.
+    let statement = fql::parse(&statement_text)?
+        .ok_or_else(|| Error::invalid_argument("fql", "пустой statement"))?;
+    let database = ColumnFamilies::open(
+        path,
+        Options {
+            create_if_missing: !readonly,
+            read_only: readonly,
+            ..Options::default()
+        },
+    )?;
+    let mut session = fql::Session::new(database, readonly);
+    let result = session.execute(statement, &mut io::stdout().lock());
+    let closing = session.close();
+    result.and(closing)
+}
+
+fn run_fql_shell(mut arguments: impl Iterator<Item = String>) -> Result<()> {
+    let path = required(&mut arguments, "path")?;
+    let mut readonly = false;
+    let mut script: Option<PathBuf> = None;
+    while let Some(option) = arguments.next() {
+        match option.as_str() {
+            "--read-only" if !readonly => readonly = true,
+            "--file" if script.is_none() => {
+                script = Some(PathBuf::from(required(&mut arguments, "script_file")?));
+            }
+            _ => return Err(Error::invalid_argument("shell_option", usage())),
+        }
+    }
+
+    // Check script path before initializing an empty database.
+    let file = if let Some(path) = script.as_ref() {
+        Some(
+            File::open(path)
+                .map_err(|source| Error::io("open_fql_script", Some(path.clone()), source))?,
+        )
+    } else {
+        None
+    };
+
+    let database = ColumnFamilies::open(
+        path,
+        Options {
+            read_only: readonly,
+            create_if_missing: !readonly,
+            ..Options::default()
+        },
+    )?;
+    let mut session = fql::Session::new(database, readonly);
+    let result = if let Some(file) = file {
+        execute_fql_script(BufReader::new(file), &mut session)
+    } else {
+        execute_fql_repl(&mut session)
+    };
+    // Close also performs rollback of a pending BEGIN on errors, EOF and EXIT.
+    let closing = session.close();
+    result.and(closing)
+}
+
+/// Читает не более 64 KiB на строку, дочитывая oversized statement до newline.
+/// Содержимое oversized строки не сохраняется и не выполняется даже в REPL.
+fn read_bounded_fql_line(reader: &mut impl BufRead, line: &mut String) -> Result<usize> {
+    line.clear();
+    let mut bytes = Vec::new();
+    let mut total = 0_usize;
+    let mut oversized = false;
+    loop {
+        let chunk = reader
+            .fill_buf()
+            .map_err(|source| Error::io("read_fql_input", None, source))?;
+        if chunk.is_empty() {
+            break;
+        }
+        let newline = chunk.iter().position(|byte| *byte == b'\n');
+        let length = newline.map_or(chunk.len(), |index| index + 1);
+        total = total.saturating_add(length);
+        if !oversized && bytes.len().saturating_add(length) <= fql::MAX_STATEMENT_BYTES {
+            bytes.extend_from_slice(&chunk[..length]);
+        } else {
+            oversized = true;
+        }
+        reader.consume(length);
+        if newline.is_some() {
+            break;
+        }
+    }
+    if oversized {
+        return Err(Error::ResourceLimit {
+            resource: "fql_statement_bytes",
+            limit: u64::try_from(fql::MAX_STATEMENT_BYTES).unwrap_or(u64::MAX),
+            observed: u64::try_from(total).unwrap_or(u64::MAX),
+        });
+    }
+    *line = String::from_utf8(bytes)
+        .map_err(|_| Error::invalid_argument("fql", "входная строка не UTF-8"))?;
+    Ok(total)
+}
+
+fn execute_fql_script(mut reader: impl BufRead, session: &mut fql::Session) -> Result<()> {
+    let mut stdout = io::stdout().lock();
+    let mut index = 0_usize;
+    loop {
+        index = index.saturating_add(1);
+        let mut line = String::new();
+        let result = (|| {
+            if read_bounded_fql_line(&mut reader, &mut line)? == 0 {
+                return Ok(fql::Flow::Exit);
+            }
+            if let Some(statement) = fql::parse(&line)? {
+                session.execute(statement, &mut stdout)
+            } else {
+                Ok(fql::Flow::Continue)
+            }
+        })();
+        match result {
+            Ok(fql::Flow::Continue) => {}
+            Ok(fql::Flow::Exit) => return Ok(()),
+            Err(error) => {
+                eprintln!("FQL: строка {index}: {error}");
+                return Err(error);
+            }
+        }
+    }
+}
+
+fn execute_fql_repl(session: &mut fql::Session) -> Result<()> {
+    let interactive = io::stdin().is_terminal();
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    let mut stdout = io::stdout().lock();
+    if interactive {
+        eprintln!("ForgeDB FQL v0.8.0. HELP — список команд, EXIT — выход.");
+    }
+    loop {
+        if interactive {
+            write!(io::stderr(), "forgedb[{}]> ", session.active_name()?)
+                .and_then(|()| io::stderr().flush())
+                .map_err(|source| Error::io("write_fql_prompt", None, source))?;
+        }
+        let mut line = String::new();
+        let read = read_bounded_fql_line(&mut input, &mut line);
+        if matches!(&read, Ok(0)) {
+            return Ok(());
+        }
+        let result = (|| {
+            read?;
+            if let Some(statement) = fql::parse(&line)? {
+                session.execute(statement, &mut stdout)
+            } else {
+                Ok(fql::Flow::Continue)
+            }
+        })();
+        match result {
+            Ok(fql::Flow::Continue) => {
+                stdout
+                    .flush()
+                    .map_err(|source| Error::io("flush_fql_stdout", None, source))?;
+            }
+            Ok(fql::Flow::Exit) => return Ok(()),
+            Err(error) => {
+                eprintln!("FQL: {error}");
+                // In interactive mode a failed statement is NOT retried or committed.
+                // Existing BEGIN remains active until explicit ROLLBACK/COMMIT.
+            }
+        }
     }
 }
 
@@ -374,6 +557,8 @@ fn usage() -> String {
         "Использование:",
         "  forgedb put <каталог> <ключ> <значение> [--sync|--no-sync|--disable-wal]",
         "  forgedb get <каталог> <ключ>",
+        "  forgedb fql <каталог> \"<одна FQL команда>\" [--read-only]",
+        "  forgedb shell <каталог> [--read-only] [--file <script.fql>]",
         "  forgedb cf list <каталог>",
         "  forgedb cf create <каталог> <имя>",
         "  forgedb cf drop <каталог> <id>",
@@ -389,7 +574,7 @@ fn usage() -> String {
         "  forgedb inspect recovery-plan <каталог>",
         "  forgedb verify <каталог> [--deep]",
         "",
-        "CLI v0.7.0 принимает текстовые ключи/значения как UTF-8; library API остаётся binary-safe.",
+        "CLI v0.8.0: FQL поддерживает binary literals, транзакции и отдельные Column Families.",
         "Transaction commit запрещает --disable-wal и использует optimistic snapshot isolation.",
     ]
     .join("\n")

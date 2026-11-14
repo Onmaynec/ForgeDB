@@ -71,6 +71,9 @@
 | I-060 | Удалённые/неопознанные CF directories не подключаются и не удаляются по догадке; числовой ID не переиспользуется. | обеспечен v0.7.0 | `drop_is_logical_and_name_reuse_cannot_recover_old_data`, `orphan_directory_from_crash_is_not_reused_or_cleaned` |
 | I-061 | Snapshot/transaction не смешивает состояния разных named CF, а read-only/open error не создаёт новую живую family. | обеспечен v0.7.0 | `transaction_snapshots_and_conflicts_are_scoped_to_one_family`, `readonly_rejects_mutations_and_missing_registered_family_is_corruption` |
 | I-062 | Операции с CF registry и закрытие facade сериализованы; symlink/missing orphan path не превращается в live family. | обеспечен v0.7.0 | `column_families.rs` registry mutex + symlink metadata; integration reopen/drop/orphan tests |
+| I-063 | Один FQL statement полностью проверен парсером до любого изменения данных, недопустимый хвост не исполняется. | draft v0.8.0 | `fql_one_shot_checks_syntax_before_creating_database`, FQL parser unit tests |
+| I-064 | EOF/EXIT/ошибка script не фиксирует открытый BEGIN, в REPL ошибка не применяет некорректную команду. | draft v0.8.0 | `failed_script_rolls_back_open_transaction_and_stops_before_commit`, `repl_continues_after_invalid_statement_but_does_not_apply_it` |
+| I-065 | FQL transaction и SCAN ограничены одной Column Family; read-only CLI не создаёт/изменяет persistent state. | draft v0.8.0 | `changing_families_during_transaction_is_rejected_and_not_applied`, `scan_limit_is_respected_and_read_only_refuses_mutations` |
 
 ## Правило изменения
 

@@ -4,6 +4,24 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
+## [0.8.0] — 2026-11-14
+
+### FQL V1 / CLI shell
+
+- Добавлен FQL V1 с bounded lexer/parser/AST и поддержкой `SHOW FAMILIES`, `CREATE/DROP FAMILY`, `USE`, `PUT/GET/DELETE`, `SCAN FROM/TO/LIMIT`, `BEGIN/COMMIT/ROLLBACK`, `HELP/EXIT`.
+- Добавлены команды `forgedb fql <db> "<statement>" [--read-only]` и `forgedb shell <db> [--read-only] [--file <script.fql>]`, а также shell с stdin.
+- Поддержаны quoted binary literals (включая `\\xHH` и `X'HEX'`), обратимый текстовый вывод GET/SCAN.
+- Parser проверяет весь statement до выполнения: ≤64 KiB и ≤512 токенов, максимум 10 000 результатов SCAN (100 по умолчанию).
+- Shell после ошибки продолжает работу; script останавливается на первой ошибке. При EXIT/EOF/error незавершённый BEGIN откатывается. Existing optimistic transaction commit использует WAL Sync.
+- Добавлены CLI integration tests на reopen, CF isolation, binary values, invalid commands, read-only, scan bounds, rollback и REPL.
+
+### Границы
+
+- FQL — не SQL; нет SELECT/JOIN или сетевого интерфейса.
+- Скрипт целиком не является одной транзакцией; committed statements до ошибки остаются durable.
+- Нет межсемейного атомарного COMMIT, нет транзакционного SCAN до реализации own-writes range merge.
+- Persisted WAL V1/SSTable V1/MANIFEST V2/CURRENT V1/CF_REGISTRY V1 остаются без изменений.
+
 ## [0.7.0] — 2026-11-14
 
 ### Column Families
