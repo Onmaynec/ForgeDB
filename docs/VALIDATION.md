@@ -1,4 +1,4 @@
-# Контракт проверки ForgeDB v0.7.0
+# Контракт проверки ForgeDB v0.8.0
 
 Каждое изменение core, persisted-форматов или recovery обязано проходить GitHub Actions на Linux, Windows и минимально поддерживаемой версии Rust 1.89. Успешный compile не заменяет unit, model, integration и crash tests.
 
@@ -34,6 +34,18 @@ cargo +1.89 test --locked --workspace --all-features
 - CLI выполняет create/list/get/put/delete/drop в отдельных процессах, с reopen и проверкой числовых ID.
 - `create/drop/open` сериализованы с `close()` одним registry mutex; операции после закрытия возвращают `Closed`.
 - Symlink в reserved registry/CF path отклоняется; dangling orphan ID не переиспользуется.
+
+## Проверки FQL V1 / shell v0.8.0
+
+- Parser/lexer: неверное число аргументов, лишние statements в строке, invalid quoted/hex escapes, некорректный scan range, повторение FROM/TO/LIMIT, oversized statement/tokens.
+- Statement parse завершён до открытия БД в one-shot FQL; ошибочная команда не создаёт empty database и не применяет частичный write.
+- Binary bytes и quoted whitespace проходят `PUT`→`GET` с обратимым escaping.
+- `shell --file`: семейства, BEGIN→own-write GET→ROLLBACK/COMMIT, reopen; ненулевой exit на строке ошибки, следующие команды не выполняются.
+- `shell` из stdin: после parser failure сессия продолжает работу, ранее правильные записи доступны.
+- EOF/EXIT/file error: незавершённые writes откатываются.
+- `--read-only` запрещает write/DDL и не создаёт базу.
+- SCAN streaming limit/bounds; запрет SCAN и USE/CREATE/DROP при active transaction.
+- CI Ubuntu/Windows stable и Rust 1.89, strict Clippy -D warnings, форматирование, workspace tests, doctests и release build.
 
 ## Обязательные направления тестирования
 
