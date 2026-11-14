@@ -4,11 +4,11 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## Статус версий
 
-- текущий выпуск: **v0.7.0 — Column Families**, GitHub Pre-release;
-- предыдущая версия: **v0.6.2 — Memory & Reliability**;
-- дальнейший milestone: **v0.8.0 — FQL и интерактивный shell**.
+- версия исходников feature branch: **v0.8.0 — FQL & Interactive Shell** (проверяется до выпуска);
+- последний опубликованный выпуск: **v0.7.0 — Column Families**, GitHub Pre-release;
+- следующие задачи: **#31 — управление SST file handles, #35 — unified Column Families**.
 
-## Возможности v0.7.0
+## Возможности v0.8.0
 
 - WAL V1, atomic WriteBatch и durability modes;
 - SSTable V1 с checksums, blocks, index и Bloom filter;
@@ -64,6 +64,21 @@ fn main() -> Result<()> {
 Подробнее: [v0.7.0](docs/releases/V0.7.0.md), [CF_REGISTRY V1](docs/formats/CF_REGISTRY_V1.md) и [ADR 0015](docs/adr/0015-column-family-isolation.md).
 
 В CLI v0.7.0 доступны `forgedb cf create ./data users`, `forgedb cf list ./data`, `forgedb cf put ./data 1 key value`, `forgedb cf get ./data 1 key` и `cf scan/delete/drop`. Для named CF `cf list` возвращает числовые ID.
+
+## FQL V1 и интерактивный shell (v0.8.0)
+
+FQL — строгий командный язык над key-value базой (это **не SQL**). Он поддерживает `GET`, `PUT`, `DELETE`, `SCAN`, управление Column Families и `BEGIN/COMMIT/ROLLBACK` внутри выбранной family.
+
+```powershell
+.\forgedb.exe fql .\data "PUT account 'Alice Smith'"
+.\forgedb.exe fql .\data "GET account" --read-only
+.\forgedb.exe shell .\data
+.\forgedb.exe shell .\data --file .\queries.fql
+```
+
+У FQL одна команда на строку, допустима завершающая точка с запятой. Значения могут содержать бинарные bytes (quoted escapes, `X'HEX'`). `SCAN` возвращает максимум 100 строк по умолчанию, 10 000 по явному LIMIT. В shell при ошибке интерпретатор продолжает работу, в файле останавливается на первой ошибке; незавершённый BEGIN при выходе откатывается. **Файл скрипта не атомарен целиком**, ранее зафиксированные строки остаются durable.
+
+Руководство: [FQL V1](docs/FQL.md), [ADR 0016](docs/adr/0016-fql-cli.md), [v0.8.0](docs/releases/V0.8.0.md).
 
 ## CLI без компиляции
 
@@ -231,7 +246,7 @@ cargo build --locked --workspace --release
 
 Основная CI matrix: Ubuntu stable, Windows stable и Rust 1.89.
 
-## Ограничения v0.7.0
+## Ограничения v0.8.0
 
 - isolation — snapshot isolation, не serializable;
 - обязательна write-write conflict detection, но full read-write validation пока отсутствует;
@@ -250,6 +265,9 @@ cargo build --locked --workspace --release
 
 ## Документация
 
+- [`docs/FQL.md`](docs/FQL.md);
+- [`docs/adr/0016-fql-cli.md`](docs/adr/0016-fql-cli.md);
+- [`docs/releases/V0.8.0.md`](docs/releases/V0.8.0.md);
 - [`docs/releases/V0.7.0.md`](docs/releases/V0.7.0.md);
 - [`docs/formats/CF_REGISTRY_V1.md`](docs/formats/CF_REGISTRY_V1.md);
 - [`docs/adr/0015-column-family-isolation.md`](docs/adr/0015-column-family-isolation.md);
