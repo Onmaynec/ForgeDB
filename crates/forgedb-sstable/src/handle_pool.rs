@@ -177,7 +177,6 @@ impl TableHandlePool {
                     access,
                 },
             );
-            state.lru.insert((access, number));
         }
 
         // Счётчик hit учитывает только повторное использование уже открытого FD.
@@ -191,7 +190,7 @@ impl TableHandlePool {
             invariant: "I-SST-HANDLE-LRU",
             reason: "открытый reader отсутствует в pool".to_owned(),
         })?.access;
-        if !state.lru.remove(&(previous, number)) {
+        if was_open && !state.lru.remove(&(previous, number)) {
             return Err(Error::InternalInvariant {
                 invariant: "I-SST-HANDLE-LRU",
                 reason: "resident handle отсутствует в LRU индексе".to_owned(),
