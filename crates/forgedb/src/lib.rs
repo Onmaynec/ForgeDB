@@ -1,14 +1,16 @@
-//! Публичный API ForgeDB v0.6.2.
+//! Публичный API ForgeDB v0.7.0.
 //!
 //! WAL/LSM storage core с snapshot isolation, индексными SST reads, bounded
 //! decoded-block cache, lazy SST readers, безопасной очисткой retired SST и повторяемым close.
-//! Persisted WAL/SSTable/MANIFEST форматы в v0.6.1 не меняются.
+//! Default persisted WAL/SSTable/MANIFEST форматы не меняются. Каждая именованная
+//! Column Family имеет собственный локальный WAL/LSM и registry V1.
 
 mod database_v3_fixed {
     include!("database_v3_fixed.rs");
     include!("database_streaming_wrapper.rs");
     include!("compaction.rs");
 }
+mod column_families;
 mod entry_cursor;
 mod inventory;
 mod iterator;
@@ -25,6 +27,7 @@ mod verify;
 mod version_set;
 mod write_options;
 
+pub use column_families::{ColumnFamilies, ColumnFamilyInfo};
 pub use database_v3_fixed::StreamingDatabase as Database;
 pub use forgedb_core::{
     BatchOperation, ColumnFamilyId, DatabaseId, Error, InternalKey, InternalKeyCodec,

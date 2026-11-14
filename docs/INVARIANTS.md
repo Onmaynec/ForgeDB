@@ -7,7 +7,7 @@
 - **частично** — обеспечена безопасная часть инварианта, но lifecycle ещё неполон;
 - **запланирован** — feature нельзя заявлять до указанного milestone.
 
-| ID | Инвариант | Статус v0.6.0 | Доказательство |
+| ID | Инвариант | Статус | Доказательство |
 |---|---|---|---|
 | I-001 | Один каталог базы одновременно открыт не более чем одним процессом ForgeDB. | обеспечен | native lock tests; lock удерживается до close/drop/process exit |
 | I-002 | Номер persisted-файла не переиспользуется. | draft v0.4.0 | `next_file_number`; MANIFEST validation; flush reservation; compaction reservation edit до output creation |
@@ -66,6 +66,11 @@
 | I-055 | Публичный write при memtable limit либо полностью коммитит batch после одного flush/retry, либо не публикует его. | обеспечен v0.6.1 | `stability_v061` automatic flush and oversized atomic batch tests; CI 42880868115 |
 | I-056 | После compaction физически удаляются только доказанно retired SST без живых TableReader. | обеспечен v0.6.1 | `manual_compaction_reclaims_unpinned_retired_sst_automatically`; active scan regression; CI 42880868115 |
 | I-057 | SSTable open не материализует физические data blocks; random-access reads проверяют BlockHandle, trailer и CRC32C до возврата данных. | обеспечен v0.6.2 | `lazy_open_does_not_read_entire_sstable_and_cache_hits_avoid_io`, `lazy_data_block_checksum_is_verified_when_read_after_open`; CI 43548913230 |
+| I-058 | Legacy default DB не мигрирует, а одноимённые user keys именованных CF изолированы самостоятельными WAL/LSM directories. | draft v0.7.0 | `isolated_families_persist_same_keys_through_flush_and_reopen`; CI feature gate |
+| I-059 | Active CF registry содержит только проверенные уникальные ID/names и публикуется после durable child initialization. | draft v0.7.0 | registry CRC32C/malformed rejection; `corrupted_registry_fails_closed_without_silent_reset` |
+| I-060 | Удалённые/неопознанные CF directories не подключаются и не удаляются по догадке; числовой ID не переиспользуется. | draft v0.7.0 | `drop_is_logical_and_name_reuse_cannot_recover_old_data`, `orphan_directory_from_crash_is_not_reused_or_cleaned` |
+| I-061 | Snapshot/transaction не смешивает состояния разных named CF, а read-only/open error не создаёт новую живую family. | draft v0.7.0 | `transaction_snapshots_and_conflicts_are_scoped_to_one_family`, `readonly_rejects_mutations_and_missing_registered_family_is_corruption` |
+| I-062 | Операции с CF registry и закрытие facade сериализованы; symlink/missing orphan path не превращается в live family. | draft v0.7.0 | `column_families.rs` registry mutex + symlink metadata; integration reopen/drop/orphan tests |
 
 ## Правило изменения
 

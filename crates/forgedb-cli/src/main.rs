@@ -2,8 +2,8 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use forgedb::{
-    Database, Error, FileInventory, Options, ReadOptions, RecoveryPlan, Result, VerifyOptions,
-    WriteOptions,
+    ColumnFamilies, ColumnFamilyId, Database, Error, FileInventory, Options, ReadOptions,
+    RecoveryPlan, Result, VerifyOptions, WriteOptions,
 };
 
 fn main() {
@@ -53,6 +53,7 @@ fn run() -> Result<()> {
             database.close()
         }
         "transaction" | "tx" => run_transaction_command(arguments),
+        "cf" => run_column_family_command(arguments),
         "scan" => {
             let path = required(&mut arguments, "path")?;
             let start = arguments.next().map(String::into_bytes);
@@ -152,6 +153,95 @@ fn run() -> Result<()> {
         }
         _ => Err(Error::invalid_argument("command", usage())),
     }
+}
+
+fn run_column_family_command(mut arguments: impl Iterator<Item = String>) -> Result<()> {
+    let subcommand = required(&mut arguments, "cf_command")?;
+    let path = required(&mut arguments, "path")?;
+    let readonly = matches!(subcommand.as_str(), "list" | "get" | "scan");
+    let options = Options {
+        create_if_missing: !readonly,
+        read_only: readonly,
+        ..Options::default()
+    };
+    let families = ColumnFamilies::open(PathBuf::from(path), options)?;
+
+    match subcommand.as_str() {
+        "list" => {
+            ensure_no_extra(arguments)?;
+            for family in families.list()? {
+                println!("{}\t{}", family.id.get(), family.name);
+            }
+        }
+        "create" => {
+            let name = required(&mut arguments, "name")?;
+            ensure_no_extra(arguments)?;
+            let id = families.create(&name)?;
+            println!("{}", id.get());
+        }
+        "drop" => {
+            let id = parse_column_family_id(&mut arguments)?;
+            ensure_no_extra(arguments)?;
+            families.drop_family(id)?;
+        }
+        "put" => {
+            let id = parse_column_family_id(&mut arguments)?;
+            let key = required(&mut arguments, "key")?;
+            let value = required(&mut arguments, "value")?;
+            let write_options = parse_write_options(arguments.next().as_deref())?;
+            ensure_no_extra(arguments)?;
+            families.put(id, key.as_bytes(), value.as_bytes(), write_options)?;
+        }
+        "delete" => {
+            let id = parse_column_family_id(&mut arguments)?;
+            let key = required(&mut arguments, "key")?;
+            let write_options = parse_write_options(arguments.next().as_deref())?;
+            ensure_no_extra(arguments)?;
+            families.delete(id, key.as_bytes(), write_options)?;
+        }
+        "get" => {
+            let id = parse_column_family_id(&mut arguments)?;
+            let key = required(&mut arguments, "key")?;
+            ensure_no_extra(arguments)?;
+            if let Some(value) = families.get(id, key.as_bytes())? {
+                write_bytes_line(&value)?;
+            }
+        }
+        "scan" => {
+            let id = parse_column_family_id(&mut arguments)?;
+            let start = arguments.next().map(String::into_bytes);
+            let end = arguments.next().map(String::into_bytes);
+            ensure_no_extra(arguments)?;
+            let iterator = match (start, end) {
+                (None, None) => families.scan(id, .., ReadOptions::default())?,
+                (Some(start), None) => families.scan(id, start.., ReadOptions::default())?,
+                (None, Some(end)) => families.scan(id, ..end, ReadOptions::default())?,
+                (Some(start), Some(end)) => {
+                    families.scan(id, start..end, ReadOptions::default())?
+                }
+            };
+            let mut stdout = std::io::stdout().lock();
+            for row in iterator {
+                let (key, value) = row?;
+                stdout
+                    .write_all(&key)
+                    .and_then(|_| stdout.write_all(b"\t"))
+                    .and_then(|_| stdout.write_all(&value))
+                    .and_then(|_| stdout.write_all(b"\n"))
+                    .map_err(|source| Error::io("write_stdout", None, source))?;
+            }
+        }
+        _ => return Err(Error::invalid_argument("cf_command", usage())),
+    }
+    families.close()
+}
+
+fn parse_column_family_id(arguments: &mut impl Iterator<Item = String>) -> Result<ColumnFamilyId> {
+    let raw = required(arguments, "column_family_id")?;
+    let id = raw.parse::<u32>().map_err(|_| {
+        Error::invalid_argument("column_family_id", "ожидается числовой ID из 'cf list'")
+    })?;
+    Ok(ColumnFamilyId::new(id))
 }
 
 fn run_transaction_command(mut arguments: impl Iterator<Item = String>) -> Result<()> {
@@ -284,6 +374,13 @@ fn usage() -> String {
         "Использование:",
         "  forgedb put <каталог> <ключ> <значение> [--sync|--no-sync|--disable-wal]",
         "  forgedb get <каталог> <ключ>",
+        "  forgedb cf list <каталог>",
+        "  forgedb cf create <каталог> <имя>",
+        "  forgedb cf drop <каталог> <id>",
+        "  forgedb cf put <каталог> <id> <ключ> <значение> [--sync|--no-sync|--disable-wal]",
+        "  forgedb cf get <каталог> <id> <ключ>",
+        "  forgedb cf delete <каталог> <id> <ключ> [--sync|--no-sync|--disable-wal]",
+        "  forgedb cf scan <каталог> <id> [start] [end-exclusive]",
         "  forgedb delete <каталог> <ключ> [--sync|--no-sync|--disable-wal]",
         "  forgedb transaction <каталог> [--sync|--no-sync] [--put <ключ> <значение>] [--delete <ключ>] [--get <ключ>] [--rollback] ...",
         "  forgedb scan <каталог> [start] [end-exclusive]",
@@ -292,7 +389,7 @@ fn usage() -> String {
         "  forgedb inspect recovery-plan <каталог>",
         "  forgedb verify <каталог> [--deep]",
         "",
-        "CLI v0.5.0 принимает текстовые ключи/значения как UTF-8; library API остаётся binary-safe.",
+        "CLI v0.7.0 принимает текстовые ключи/значения как UTF-8; library API остаётся binary-safe.",
         "Transaction commit запрещает --disable-wal и использует optimistic snapshot isolation.",
     ]
     .join("\n")

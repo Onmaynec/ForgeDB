@@ -4,11 +4,11 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 
 ## Статус версий
 
-- текущий выпуск: **v0.6.2 — Memory & Reliability**, GitHub Pre-release;
-- предыдущая версия: **v0.6.1 — Stability and Recovery**;
-- следующий milestone: **v0.7.0 — Column Families**.
+- версия исходников feature branch: **v0.7.0 — Column Families** (проверяется до выпуска);
+- последний опубликованный выпуск: **v0.6.2 — Memory & Reliability**, GitHub Pre-release;
+- дальнейший milestone: **v0.8.0 — FQL и интерактивный shell**.
 
-## Возможности v0.6.2
+## Возможности v0.7.0
 
 - WAL V1, atomic WriteBatch и durability modes;
 - SSTable V1 с checksums, blocks, index и Bloom filter;
@@ -41,6 +41,29 @@ ForgeDB — встраиваемый key-value storage engine на Rust. Про�
 - best-effort reference-aware SST cleanup после успешной compaction (в рамках текущего open handle).
 - lazy random-access SST reader: header/footer и служебные blocks проверяются при открытии, data blocks читаются при запросе с CRC32C;
 - measurement throughput и read latency p50/p95/p99 в `point_lookup_bench`.
+
+## Column Families (v0.7.0)
+
+Добавлен новый публичный фасад `ColumnFamilies` для именованных хранилищ с отдельными WAL/LSM каталогами. Default остаётся в корне старой базы, поэтому данные v0.6.2 доступны без миграции.
+
+```rust
+use forgedb::{ColumnFamilies, ColumnFamilyId, Options, Result, WriteOptions};
+
+fn main() -> Result<()> {
+    let database = ColumnFamilies::open("./data", Options::default())?;
+    let users = database.create("users")?;
+    database.put(users, b"42", b"Alice", WriteOptions::sync())?;
+    assert_eq!(database.get(users, b"42")?, Some(b"Alice".to_vec()));
+    assert_eq!(database.get(ColumnFamilyId::DEFAULT, b"42")?, None);
+    database.close()
+}
+```
+
+`list()` возвращает зарегистрированные ID для следующих открытий. `drop_family(id)` логически удаляет family, но не уничтожает физические файлы без отдельного безопасного reaper. `write(id, batch)` и `begin_transaction(id)` атомарны **только внутри одной family**. У каждой family отдельная WAL sequence timeline; глобальных mixed-family atomic batches и snapshots нет. В legacy `WriteBatch::put_cf` ненулевой ID пока отклоняется намеренно — этот API не реализует общий WAL. Для записей используйте `ColumnFamilies::write(id, обычный WriteBatch)`.
+
+Подробнее: [v0.7.0](docs/releases/V0.7.0.md), [CF_REGISTRY V1](docs/formats/CF_REGISTRY_V1.md) и [ADR 0015](docs/adr/0015-column-family-isolation.md).
+
+В CLI v0.7.0 доступны `forgedb cf create ./data users`, `forgedb cf list ./data`, `forgedb cf put ./data 1 key value`, `forgedb cf get ./data 1 key` и `cf scan/delete/drop`. Для named CF `cf list` возвращает числовые ID.
 
 ## CLI без компиляции
 
@@ -208,7 +231,7 @@ cargo build --locked --workspace --release
 
 Основная CI matrix: Ubuntu stable, Windows stable и Rust 1.89.
 
-## Ограничения v0.6.2
+## Ограничения v0.7.0
 
 - isolation — snapshot isolation, не serializable;
 - обязательна write-write conflict detection, но full read-write validation пока отсутствует;
@@ -226,6 +249,10 @@ cargo build --locked --workspace --release
 - normal recovery не удаляет произвольные orphan/unknown files.
 
 ## Документация
+
+- [`docs/releases/V0.7.0.md`](docs/releases/V0.7.0.md);
+- [`docs/formats/CF_REGISTRY_V1.md`](docs/formats/CF_REGISTRY_V1.md);
+- [`docs/adr/0015-column-family-isolation.md`](docs/adr/0015-column-family-isolation.md);
 
 - [`docs/CACHE_AND_PERFORMANCE.md`](docs/CACHE_AND_PERFORMANCE.md);
 - [`docs/OPTIONS.md`](docs/OPTIONS.md);

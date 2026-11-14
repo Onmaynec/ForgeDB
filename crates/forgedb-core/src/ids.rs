@@ -144,7 +144,7 @@ impl fmt::Debug for DatabaseId {
 pub struct ColumnFamilyId(u32);
 
 impl ColumnFamilyId {
-    /// Default и единственная поддерживаемая column family ранних milestone.
+    /// Default family с ID 0 в совместимом API.
     pub const DEFAULT: Self = Self(0);
 
     /// Создаёт идентификатор column family.
