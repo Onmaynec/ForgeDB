@@ -72,12 +72,13 @@ fn scan_many_sst_with_capacity_one_and_reopen_preserves_order_and_bytes() -> Res
     assert!(stats.evictions > 0);
     assert!(stats.reopens > 0);
     assert_eq!(stats.open_handles, 1);
+    drop(iterator);
 
     database.close()?;
     drop(database);
     let reopened = Database::open(&directory, options())?;
     assert_eq!(reopened.table_handle_stats()?.open_handles, 0);
-    assert_eq!(reopened.scan(.., ReadOptions::default())?.count(), 480);
+    assert_eq!(reopened.scan(.., ReadOptions::default())?.collect::<Result<Vec<_>>>()?.len(), 480);
     reopened.close()?;
     drop(reopened);
     fs::remove_dir_all(&directory)
@@ -126,6 +127,7 @@ fn concurrent_get_and_streaming_scans_share_one_fd_budget() -> Result<()> {
     assert!(stats.evictions > 0);
     assert!(stats.reopens > 0);
     assert!(stats.open_handles <= 1);
+    drop(iterator);
 
     database.close()?;
     drop(database);
