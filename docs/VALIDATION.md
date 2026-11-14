@@ -1,4 +1,4 @@
-# Контракт проверки ForgeDB v0.6.2
+# Контракт проверки ForgeDB v0.7.0
 
 Каждое изменение core, persisted-форматов или recovery обязано проходить GitHub Actions на Linux, Windows и минимально поддерживаемой версии Rust 1.89. Успешный compile не заменяет unit, model, integration и crash tests.
 
@@ -20,6 +20,17 @@ cargo +1.89 test --locked --workspace --all-features
 ```
 
 Для локальной разработки есть `scripts/check.sh` и `scripts/check.ps1`.
+
+## Проверки именованных Column Families v0.7.0
+
+- Совместимый default DB: старый root остаётся доступным без миграции.
+- Один user key в двух именованных и default family имеет независимые значения/удаления.
+- Flush/compaction/reopen не меняют изоляцию и names registry.
+- Optimistic transactions, snapshots, snapshot mismatch и conflicts проверяются внутри отдельной family.
+- Registry checksum damage/future version/malformed name и missing registered directory должны давать ошибку, а не silently созданную пустую базу.
+- `drop_family` не переиспользует ID и не удаляет физический каталог без подтверждения.
+- Read-only не создаёт реестр, подкаталоги или WAL и запрещает create/drop/write.
+- Partial create orphan directory не может стать active family и не уничтожается автоматически.
 
 ## Обязательные направления тестирования
 
