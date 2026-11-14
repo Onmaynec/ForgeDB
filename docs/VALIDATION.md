@@ -1,4 +1,4 @@
-# Контракт проверки ForgeDB v0.8.1
+# Контракт проверки ForgeDB v0.8.2
 
 Каждое изменение core, persisted-форматов или recovery обязано проходить GitHub Actions на Linux, Windows и минимально поддерживаемой версии Rust 1.89. Успешный compile не заменяет unit, model, integration и crash tests.
 
@@ -56,6 +56,15 @@ cargo +1.89 test --locked --workspace --all-features
 - MVCC snapshot и write-write optimistic transaction conflict не меняются после FD eviction.
 - Возможное понижение throughput при mutex contention не скрывается, бенчмарк smoke не является сравнительным proof ускорения.
 - Отдельные scan cursor, WAL, compaction, named CF FDs не объявляются частью process-wide бюджетирования; Issue #31 остаётся открытой.
+
+## Проверки общего SST read pool v0.8.2
+
+- 48 L0 SST по 10 ключей (несколько data blocks на файл), `table_cache_capacity=1`. Streaming iterator корректно возвращает 480 ключей и bytes в порядке сортировки, счётчик resident handles никогда не превышает capacity.
+- Повторный GET к SST, уже вытесненному в ходе scan, принудительно проверяет `reopens`. Повторное открытие базы возвращает прежние 480 записей без миграции.
+- Четыре concurrent GET threads и streaming scan: pool не превышает 1 resident handle; все результаты и snapshot semantics сохраняются.
+- Compaction input использует тот же pool. Пока старый iterator жив, cleanup deferred; после release удаление retired SST проходит, orphan отсутствуют, всё читается.
+- Дополнительный `#[ignore]` stress с 1024 SST выполняется вручную и **не считается пройденным** при обычном CI.
+- Ограничение измеряется только для resident SST read pool: кратковременные init validation Files, writes, WAL/MANIFEST/LOCK, deep verification и sibling child databases вне cap. Нельзя выдавать это за process-wide FD limit.
 
 ## Обязательные направления тестирования
 

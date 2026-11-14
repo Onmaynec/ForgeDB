@@ -89,13 +89,15 @@ impl Database {
         let mut entries = Vec::<forgedb_sstable::TableEntry>::new();
         let mut resident_bytes = 0_u64;
         for (_, table) in &plan.inputs {
-            let table_entries = table_scan::read_entries(
+            let pool = self.lock_state()?.version.handle_pool();
+            let table_entries = table_scan::read_entries_pooled(
                 table.path(),
                 self.identity,
                 table.metadata(),
                 limits,
                 self.options.max_compaction_bytes,
                 self.options.verify_checksums,
+                pool,
             )?;
             for entry in table_entries {
                 resident_bytes = resident_bytes

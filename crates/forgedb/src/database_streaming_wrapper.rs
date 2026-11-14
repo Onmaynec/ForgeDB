@@ -81,7 +81,8 @@ impl StreamingDatabase {
         crate::Transaction::begin(self)
     }
 
-    /// Создаёт forward iterator; SSTable sources держат index и один data block.
+    /// Создаёт forward iterator; SSTable sources держат index и один data block,
+    /// а native FD следующего блока берут из общего LRU вместо собственного File.
     pub fn scan<R>(&self, range: R, read_options: ReadOptions) -> Result<DbIterator>
     where
         R: RangeBounds<Vec<u8>>,
@@ -120,13 +121,14 @@ impl StreamingDatabase {
             if !owned_range.overlaps(table.metadata()) {
                 continue;
             }
-            let cursor = crate::sst_entry_cursor::SstEntryCursor::open(
+            let cursor = crate::sst_entry_cursor::SstEntryCursor::open_pooled(
                 table.path(),
                 self.inner.identity,
                 table.metadata(),
                 &limits,
                 self.inner.options.max_compaction_bytes,
                 read_options.verify_checksums,
+                version.handle_pool(),
             )?;
             sources.push((priority, Box::new(cursor)));
             priority = priority.checked_add(1).ok_or(Error::ResourceLimit {
@@ -175,7 +177,8 @@ impl StreamingDatabase {
         self.inner.cache_stats()
     }
 
-    /// Отдельные point-read SST FD metrics: не учитывать WAL/scan/compaction.
+    /// Resident SST FD metrics для GET/scan/compaction inputs этого Database.
+    /// WAL/MANIFEST/LOCK, temporary validation/outputs и другие CF вне pool.
     pub fn table_handle_stats(&self) -> Result<forgedb_sstable::TableHandleStats> {
         self.inner.table_handle_stats()
     }

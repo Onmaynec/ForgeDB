@@ -77,6 +77,9 @@
 | I-066 | В point-read native SST pool одновременно resident не более table_cache_capacity файлов; при eviction повторное чтение проверяет SST identity и checksum. | обеспечен v0.8.1 | `point_read_budget_one_evicts_and_reopens_without_losing_values`, `native_handle_cache_reopens_with_bounded_fd_and_rechecks_header` |
 | I-067 | Наличие pooled OS FD не разрешает premature SST deletion; при Windows cleanup дескриптор закрывается до удаления после освобождения всех TableReader references. | обеспечен v0.8.1 | `pinned_scan_survives_compaction_and_retirement_evicts_windows_handles` |
 | I-068 | Snapshot-aware point reads и transaction conflict detection сохраняются после LRU evictions и reopen. | обеспечен v0.8.1 | `transaction_conflicts_and_snapshot_reads_survive_fd_eviction` |
+| I-069 | Streaming SST cursor после проверки metadata/первого блока не хранит отдельный долгоживущий File; все последующие blocks используют общий resident handle LRU. | draft v0.8.2 | `scan_many_sst_with_capacity_one_and_reopen_preserves_order_and_bytes`; `concurrent_get_and_streaming_scans_share_one_fd_budget` |
+| I-070 | Compaction inputs используют тот же SST read pool, но старый iterator по-прежнему удерживает VersionSet и защищает физические SST от premature deletion. | draft v0.8.2 | `compaction_inputs_use_bounded_pool_and_cleanup_preserves_old_scan` |
+| I-071 | LRU budget ограничивает resident SST read pool одного Database, не кратковременные init/metadata открытые File и не все дескрипторы процесса. | draft v0.8.2 | `table_handle_stats()`, streaming pool regression suite, ADR 0018 |
 
 ## Правило изменения
 

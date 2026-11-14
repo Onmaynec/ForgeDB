@@ -1,4 +1,4 @@
-//! Bounded native SST read-handle cache (point lookup, не streaming cursors).
+//! Bounded native SST read-handle cache for point and streaming reads.
 //!
 //! Один mutex удерживается на время seek/read: это осознанный обмен
 //! параллелизма на строгий лимит открытых handles без oversubscription.
@@ -15,11 +15,11 @@ use forgedb_fs::{FileSystem, NativeFileSystem};
 
 use crate::{SST_HEADER_SIZE, TableMeta, decode_header, read_exact_at};
 
-/// Диагностика только point-read SST handle pool текущей базы.
-/// WAL/MANIFEST, compaction и streaming cursors сюда не входят.
+/// Диагностика resident SST handles (point GET, streaming scan, compaction inputs).
+/// Metadata validation, SST writes, WAL/MANIFEST/LOCK и другие DB вне счётчика.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct TableHandleStats {
-    /// Конфигурационный максимум одновременно хранимых point-read handles.
+    /// Конфигурационный максимум resident SST handles этого Database.
     pub capacity: usize,
     /// Текущее число open handles внутри LRU.
     pub open_handles: usize,
@@ -58,7 +58,7 @@ impl PoolState {
     }
 }
 
-/// Кэш native point-read файлов, использующий общую mutex-границу.
+/// Кэш native SST-файлов для GET/streaming reads, использующий общую mutex-границу.
 /// Не кэширует декодированные blocks; этим занимается отдельный BlockCache.
 #[derive(Debug)]
 pub struct TableHandlePool {
@@ -100,7 +100,7 @@ impl TableHandlePool {
     ///
     /// Serialized read гарантирует, что во время callback pooled File не
     /// выселится/не будет удалён другим потоком.
-    pub(crate) fn with_file<T>(
+    pub fn with_file<T>(
         &self,
         path: &Path,
         identity: DatabaseId,
@@ -198,6 +198,9 @@ impl TableHandlePool {
         if state.opened.remove(&file_number).is_some() {
             state.evictions = state.evictions.saturating_add(1);
         }
+        // ID retired и больше никогда не будет повторно использоваться:
+        // не накапливаем бесконечный seen set при частых compactions.
+        state.seen.remove(&file_number);
         Ok(())
     }
 }
