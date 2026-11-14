@@ -8,7 +8,8 @@ mod checksum;
 pub use cache::{BlockCache, CacheStats};
 
 use std::cmp::Ordering;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::sync::{Arc, Mutex};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -18,7 +19,7 @@ use forgedb_core::{
     ColumnFamilyId, DatabaseId, Error, InternalKey, InternalKeyCodec, Limits, Result,
     SequenceNumber, ValueType,
 };
-use forgedb_fs::{FileSystem, WritableFile};
+use forgedb_fs::{FileSystem, RandomAccessReader, WritableFile};
 
 pub const SST_HEADER_SIZE: usize = 64;
 pub const SST_FOOTER_SIZE: usize = 64;
@@ -320,15 +321,28 @@ struct TableProperties {
     creation_unix_ms: u64,
 }
 
-/// Полностью проверенный SSTable reader. В v0.2.0 файл bounded-загружается в память при open.
-#[derive(Clone, Debug)]
+/// Индексный SSTable reader: держит handle открытым, но не загружает весь SST в RAM.
+#[derive(Clone)]
 pub struct TableReader {
     path: PathBuf,
-    bytes: Vec<u8>,
+    reader: Arc<Mutex<Box<dyn RandomAccessReader>>>,
+    file_size: u64,
     meta: TableMeta,
     index: Vec<IndexEntry>,
     filter: BloomFilter,
     limits: Limits,
+}
+
+impl std::fmt::Debug for TableReader {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TableReader")
+            .field("path", &self.path)
+            .field("file_size", &self.file_size)
+            .field("index_entries", &self.index.len())
+            .field("meta", &self.meta)
+            .finish_non_exhaustive()
+    }
 }
 
 impl TableReader {
@@ -360,24 +374,22 @@ impl TableReader {
                 observed: physical_size,
             });
         }
-        let capacity = usize::try_from(physical_size).map_err(|_| Error::ResourceLimit {
-            resource: "sstable_file_size",
-            limit: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
-            observed: physical_size,
-        })?;
-        let mut bytes = Vec::with_capacity(capacity);
-        let mut reader = filesystem.open_sequential(&path)?;
-        reader
-            .read_to_end(&mut bytes)
-            .map_err(|source| Error::io("read_sstable", Some(path.clone()), source))?;
-        if bytes.len() != capacity {
-            return Err(Error::corruption(
-                "SSTable",
-                "число прочитанных байтов не совпадает с file_size",
-            ));
-        }
-
-        let header = decode_header(&bytes, expected_database_id, expected_meta.file_number)?;
+        // Bounded random-access reads: validate the fixed header/footer and metadata
+        // blocks without materializing the physical SSTable.
+        let mut reader = filesystem.open_random_access(&path)?;
+        let mut header_bytes = [0_u8; SST_HEADER_SIZE];
+        read_exact_at(
+            &mut reader,
+            &path,
+            0,
+            &mut header_bytes,
+            "read_sstable_header",
+        )?;
+        let header = decode_header(
+            &header_bytes,
+            expected_database_id,
+            expected_meta.file_number,
+        )?;
         if header.smallest_sequence != expected_meta.smallest_sequence
             || header.largest_sequence != expected_meta.largest_sequence
         {
@@ -389,21 +401,45 @@ impl TableReader {
         let footer_offset = physical_size
             .checked_sub(u64::try_from(SST_FOOTER_SIZE).unwrap_or(u64::MAX))
             .ok_or_else(|| Error::corruption("SSTable footer", "файл слишком мал"))?;
-        let footer_start = usize::try_from(footer_offset).map_err(|_| Error::ResourceLimit {
-            resource: "sstable_footer_offset",
-            limit: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
-            observed: footer_offset,
-        })?;
-        let footer = bytes
-            .get(footer_start..)
-            .ok_or_else(|| Error::corruption("SSTable footer", "footer отсутствует"))?;
+        let mut footer_bytes = [0_u8; SST_FOOTER_SIZE];
+        read_exact_at(
+            &mut reader,
+            &path,
+            footer_offset,
+            &mut footer_bytes,
+            "read_sstable_footer",
+        )?;
         let (filter_handle, index_handle, properties_handle) =
-            decode_footer(footer, physical_size, footer_offset)?;
+            decode_footer(&footer_bytes, physical_size, footer_offset)?;
         ensure_non_overlapping(&[filter_handle, index_handle, properties_handle])?;
 
-        let filter_payload = read_block(&bytes, filter_handle, "SSTable filter block")?;
-        let index_payload = read_block(&bytes, index_handle, "SSTable index block")?;
-        let properties_payload = read_block(&bytes, properties_handle, "SSTable properties block")?;
+        let filter_bytes = read_checked_block_at(
+            &mut reader,
+            &path,
+            filter_handle,
+            physical_size,
+            footer_offset,
+            "SSTable filter block",
+        )?;
+        let index_bytes = read_checked_block_at(
+            &mut reader,
+            &path,
+            index_handle,
+            physical_size,
+            footer_offset,
+            "SSTable index block",
+        )?;
+        let properties_bytes = read_checked_block_at(
+            &mut reader,
+            &path,
+            properties_handle,
+            physical_size,
+            footer_offset,
+            "SSTable properties block",
+        )?;
+        let filter_payload = filter_bytes.as_slice();
+        let index_payload = index_bytes.as_slice();
+        let properties_payload = properties_bytes.as_slice();
         let filter = BloomFilter::decode(filter_payload, limits.max_batch_size)?;
         let index = decode_index(index_payload, limits, physical_size, footer_offset)?;
         if index.is_empty() {
@@ -423,7 +459,8 @@ impl TableReader {
 
         Ok(Self {
             path,
-            bytes,
+            reader: Arc::new(Mutex::new(Box::new(reader))),
+            file_size: physical_size,
             meta: expected_meta.clone(),
             index,
             filter,
@@ -445,8 +482,8 @@ impl TableReader {
         let Some(candidate) = candidate else {
             return Ok(TableLookup::Missing);
         };
-        let payload = read_block(&self.bytes, candidate.handle, "SSTable data block")?;
-        for entry in decode_data_block(payload, &self.limits)? {
+        let payload = self.read_checked_block(candidate.handle, "SSTable data block")?;
+        for entry in decode_data_block(&payload, &self.limits)? {
             match entry.internal_key.user_key().cmp(user_key) {
                 Ordering::Less => continue,
                 Ordering::Greater => return Ok(TableLookup::Missing),
@@ -550,9 +587,34 @@ impl TableReader {
             })?
             .handle;
         cache.get_or_decode(self.meta.file_number, index, || {
-            let payload = read_block(&self.bytes, handle, "SSTable data block")?;
-            decode_data_block(payload, &self.limits)
+            let payload = self.read_checked_block(handle, "SSTable data block")?;
+            decode_data_block(&payload, &self.limits)
         })
+    }
+
+    /// Возвращает только валидированный физический блок по указанному offset.
+    /// FD удерживается для Windows-safe retirement, а mutex сериализует seek/read.
+    fn read_checked_block(
+        &self,
+        handle: BlockHandle,
+        component: &'static str,
+    ) -> Result<Vec<u8>> {
+        let mut reader = self.reader.lock().map_err(|_| Error::InternalInvariant {
+            invariant: "I-SST-READER-MUTEX",
+            reason: "mutex random-access SST reader poisoned".to_owned(),
+        })?;
+        let footer_offset = self
+            .file_size
+            .checked_sub(u64::try_from(SST_FOOTER_SIZE).unwrap_or(u64::MAX))
+            .ok_or_else(|| Error::corruption(component, "файл слишком мал"))?;
+        read_checked_block_at(
+            reader.as_mut(),
+            &self.path,
+            handle,
+            self.file_size,
+            footer_offset,
+            component,
+        )
     }
 
     #[must_use]
@@ -945,6 +1007,49 @@ fn write_block<W: WritableFile>(
         observed: u64::MAX,
     })?;
     Ok(handle)
+}
+
+/// Полное чтение проверенного диапазона. Не допускает короткий read и silently
+/// truncated files. Работает с FileSystem reader, не выполняя native I/O в обход
+/// предоставленной реализации.
+fn read_exact_at<R: Read + Seek + ?Sized>(
+    reader: &mut R,
+    path: &Path,
+    offset: u64,
+    output: &mut [u8],
+    operation: &'static str,
+) -> Result<()> {
+    reader
+        .seek(SeekFrom::Start(offset))
+        .map_err(|source| Error::io(operation, Some(path.to_path_buf()), source))?;
+    reader
+        .read_exact(output)
+        .map_err(|source| Error::io(operation, Some(path.to_path_buf()), source))
+}
+
+/// Сначала проверяет физические границы блока, затем CRC32C/trailer. В памяти
+/// одновременно удерживается только один выбранный блок, а не весь SSTable.
+fn read_checked_block_at<R: Read + Seek + ?Sized>(
+    reader: &mut R,
+    path: &Path,
+    handle: BlockHandle,
+    file_size: u64,
+    footer_offset: u64,
+    component: &'static str,
+) -> Result<Vec<u8>> {
+    handle.validate(file_size, footer_offset, component)?;
+    let length = usize::try_from(handle.length).map_err(|_| Error::ResourceLimit {
+        resource: "sstable_block_length",
+        limit: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
+        observed: handle.length,
+    })?;
+    let mut buffer = vec![0_u8; length];
+    read_exact_at(reader, path, handle.offset, &mut buffer, "read_sstable_block")?;
+    let relative_handle = BlockHandle {
+        offset: 0,
+        length: handle.length,
+    };
+    read_block(&buffer, relative_handle, component).map(<[u8]>::to_vec)
 }
 
 fn read_block<'a>(
