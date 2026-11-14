@@ -1,4 +1,4 @@
-# Архитектура ForgeDB v0.6.1
+# Архитектура ForgeDB v0.6.2
 
 ## Назначение
 
@@ -20,7 +20,7 @@ ForgeDB — встраиваемый key-value storage engine с LSM-струк�
 
 ## Runtime
 
-Публичный `Database` экспортирует `StreamingDatabase`. Пока используется композиция исходников `database_v3_fixed.rs`, `database_streaming_wrapper.rs` и `compaction.rs` через `include!`. Это действующая реализация v0.6.1; объединение модулей — отдельный рефакторинг, не условие чтения persisted-форматов.
+Публичный `Database` экспортирует `StreamingDatabase`. Пока используется композиция исходников `database_v3_fixed.rs`, `database_streaming_wrapper.rs` и `compaction.rs` через `include!`. Это действующая реализация v0.6.2; объединение модулей — отдельный рефакторинг, не условие чтения persisted-форматов.
 
 Внутреннее состояние хранит:
 
@@ -47,7 +47,7 @@ ForgeDB — встраиваемый key-value storage engine с LSM-струк�
 
 ## Cache and indexed point lookup
 
-`VersionSet` использует проверенный SSTable index/Bloom filter для snapshot-aware point reads и optimistic conflict validation. `BlockCache` держит только bounded декодированные data blocks; физический `TableReader` пока eagerly загружает SST bytes. Публичный `cache_stats()` показывает hits/misses/evictions. Range scan не пользуется point cache и удерживает `Arc<VersionSet>` до завершения.
+`VersionSet` использует проверенный SSTable index/Bloom filter для snapshot-aware point reads и optimistic conflict validation. `BlockCache` держит bounded декодированные data blocks; физический `TableReader` в v0.6.2 хранит открытый random-access file handle и проверенные header/footer/index/filter/properties, не загружая весь SST. Data blocks читаются по offsets с проверкой CRC32C. Файл остаётся закреплённым на lifetime reader, поэтому process-local reaper ждёт всех readers (в том числе старых snapshot iterators). Публичный `cache_stats()` показывает hits/misses/evictions для декодированных blocks. Range scan использует отдельный block-at-a-time cursor.
 
 Подробности: [CACHE_AND_PERFORMANCE.md](CACHE_AND_PERFORMANCE.md).
 
@@ -71,7 +71,7 @@ TEMP/                 временные файлы сборки
 
 Reader отклоняет неизвестные future versions. Writable open старого MANIFEST V1 публикует новый V2 через crash-safe замену CURRENT, без изменения V1 in-place. Подробности: [COMPATIBILITY.md](COMPATIBILITY.md).
 
-## Границы v0.6.1
+## Границы v0.6.2
 
 - один public write gate и эксклюзивный process lock; shared read-only opens не поддерживаются;
 - optimistic transactions предоставляют snapshot isolation, но не serializable isolation;
