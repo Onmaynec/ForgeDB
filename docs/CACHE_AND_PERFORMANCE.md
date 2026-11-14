@@ -1,4 +1,4 @@
-# Cache and Performance — ForgeDB v0.9.0
+# Cache and Performance — ForgeDB v1.0.0
 
 ## Назначение
 
@@ -76,6 +76,12 @@ Compaction input reader тоже использует этот pool, поэто�
 **Streaming SCAN setup:** `VersionSet::files_for_scan` обходит L0 newest-first и L1+ через borrowed iterator, не выделяя массив копий `TableHandle` для всех live SST. При узком range курсоры открываются только для пересечённых таблиц. Проверка overlap по всем SST остаётся линейной и не объявляется binary range seek.
 
 Для отдельных измерений есть `performance_bench`; вводимые параметры, вывод (p50/p95/p99/ops/sec) и сравнение описаны в [PERFORMANCE_BENCHMARK.md](PERFORMANCE_BENCHMARK.md). CI smoke подтверждает работоспособность, но не является latency SLA и не доказывает ускорения при всех workloads.
+
+## Binary SST range planning (v1.0.0)
+
+При `SCAN` диапазонные границы теперь используются **до** открытия readers. На L0 файл может перекрываться с соседними, поэтому L0 по-прежнему проверяется в newest-first порядке. На отсортированных непересекающихся уровнях L1+ `partition_point` находит первый кандидат с `largest_user_key >= lower`, затем итератор заканчивается, когда `smallest_user_key > upper`. Это O(log N + K) вместо O(N) candidate selection для L1+, без массива копий всех SST.
+
+Для excluded bounds индексный pruning консервативен: может взять лишнюю пограничную SST, но не пропускает нужную. Точная `OwnedRange::overlaps` проверка и merge snapshot/tombstone logic остаются обязательными. Улучшенная сложность не означает доказанное снижение p99 на любом workload.
 
 ## Range scan
 
