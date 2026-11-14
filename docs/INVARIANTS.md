@@ -65,6 +65,7 @@
 | I-054 | Ошибка sync при close не переводит базу в Closed и не освобождает WAL/MANIFEST writers и native LOCK. | обеспечен v0.6.1 | deterministic WAL/MANIFEST sync injection, retry, reopen test; CI 42880868115 |
 | I-055 | Публичный write при memtable limit либо полностью коммитит batch после одного flush/retry, либо не публикует его. | обеспечен v0.6.1 | `stability_v061` automatic flush and oversized atomic batch tests; CI 42880868115 |
 | I-056 | После compaction физически удаляются только доказанно retired SST без живых TableReader. | обеспечен v0.6.1 | `manual_compaction_reclaims_unpinned_retired_sst_automatically`; active scan regression; CI 42880868115 |
+| I-057 | SSTable open не материализует физические data blocks; random-access reads проверяют BlockHandle, trailer и CRC32C до возврата данных. | draft v0.6.2 | instrumented random-access bytes-read test; checksum-at-read injection |
 
 ## Правило изменения
 
