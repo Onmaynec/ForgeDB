@@ -4,6 +4,22 @@
 
 До v1.0 публичный API может меняться между minor-версиями. Persisted-форматы всё равно изменяются только через явную новую версию, ADR, compatibility tests и документированную migration policy.
 
+## [0.6.2] — 2026-11-14
+
+### Изменено
+
+- `TableReader::open` использует `FileSystem::open_random_access` и проверяет fixed header/footer, index, Bloom filter, properties без загрузки всего SSTable в RAM.
+- Data blocks читаются по проверенным BlockHandle offsets только по запросу, с CRC32C/trailer validation; существующие `get`, snapshot-aware indexed reads и transaction conflict detection сохраняются.
+- Reader удерживает открытый file handle на время жизни `TableReader`, включая reader references старых `VersionSet`. Это необходимо для безопасной отложенной очистки SST при работе итераторов на Windows.
+- `point_lookup_bench` дополнен throughput (ops/sec) и latencies p50/p95/p99 для cold/warm проходов без claims об ускорении.
+
+### Тесты и ограничения
+
+- Добавлен instrumented FileSystem тест на отсутствие full-file read при open и повторное cached чтение без disk I/O.
+- Persisted WAL V1, SSTable V1, MANIFEST writer V2/reader V1-V2 и CURRENT V1 неизменны.
+- `block_cache_size` ограничивает только decoded cache, а не index/filter, concurrent reads и весь RSS.
+- Открытые file handles пока не ограничиваются `table_cache_capacity`; cross-restart garbage collection и background compaction остаются дальнейшей работой.
+
 ## [0.6.1] — 2026-11-10
 
 ### Исправлено
