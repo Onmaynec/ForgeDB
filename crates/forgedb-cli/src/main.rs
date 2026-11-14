@@ -202,9 +202,10 @@ fn run_fql_shell(mut arguments: impl Iterator<Item = String>) -> Result<()> {
 
     // Check script path before initializing an empty database.
     let file = if let Some(path) = script.as_ref() {
-        Some(File::open(path).map_err(|source| {
-            Error::io("open_fql_script", Some(path.clone()), source)
-        })?)
+        Some(
+            File::open(path)
+                .map_err(|source| Error::io("open_fql_script", Some(path.clone()), source))?,
+        )
     } else {
         None
     };
@@ -228,10 +229,7 @@ fn run_fql_shell(mut arguments: impl Iterator<Item = String>) -> Result<()> {
     result.and(closing)
 }
 
-fn execute_fql_script(
-    reader: impl BufRead,
-    session: &mut fql::Session,
-) -> Result<()> {
+fn execute_fql_script(reader: impl BufRead, session: &mut fql::Session) -> Result<()> {
     let mut stdout = io::stdout().lock();
     for (index, next) in reader.lines().enumerate() {
         let line = next.map_err(|source| Error::io("read_fql_script", None, source))?;
