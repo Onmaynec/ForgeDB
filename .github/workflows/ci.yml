@@ -28,6 +28,9 @@ jobs:
       - run: cargo build --locked --workspace --release
       - run: cargo run --locked --release -p forgedb --example point_lookup_bench -- 256 1024
       - run: cargo run --locked --release -p forgedb --example performance_bench -- 256 1024
+      - name: Full SST eviction benchmark (Linux, metrics only)
+        if: runner.os == 'Linux'
+        run: cargo run --locked --release -p forgedb --example performance_bench -- 8192 32768
 
   msrv:
     name: ubuntu / Rust 1.89
