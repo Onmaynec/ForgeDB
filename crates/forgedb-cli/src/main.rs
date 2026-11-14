@@ -393,7 +393,7 @@ fn execute_fql_repl(session: &mut fql::Session) -> Result<()> {
     let mut input = stdin.lock();
     let mut stdout = io::stdout().lock();
     if interactive {
-        eprintln!("ForgeDB FQL v0.8.0. HELP — список команд, EXIT — выход.");
+        eprintln!("ForgeDB FQL v1.0.0. HELP — список команд, EXIT — выход.");
     }
     loop {
         if interactive {
